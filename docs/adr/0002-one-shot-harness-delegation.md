@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-24
+- **Amended:** 2026-09-05
 
 ## Context
 
@@ -28,9 +29,10 @@ their discovered capabilities for that invocation. Pre-created named targets
 are not required. Resolution must not silently fall back to another harness,
 model, or effort level.
 
-MCP is the primary harness-facing integration and the CLI exposes the same core
-contract for debugging and automation. Southbound adapters use the strongest
-machine-readable native interface available for each installed harness.
+The self-describing CLI is the universal integration surface and an optional
+MCP server projects the same core contract into MCP tools, as decided in
+ADR-0006. Southbound adapters use the strongest machine-readable native
+interface available for each installed harness.
 
 The outcome can contain returned content and artifacts as well as observed
 effects, including modifications made directly to files in a Git workspace.
@@ -41,8 +43,9 @@ effects, including modifications made directly to files in a Git workspace.
   concepts.
 - Automatic capability-based delegate selection and persistent target objects
   are not required by the core primitive.
-- Persistent target sessions, resume, streaming, approvals, OCR, vision, and
-  computer use are optional capabilities layered over the same target model.
+- Persistent delegate sessions, resume, approvals, OCR, vision, and computer
+  use are optional capabilities layered over the same delegate and route
+  model. Streaming itself is core, see ADR-0005.
 - The bridge must distinguish returned data from observed external effects.
 - Streaming progress, timeout, cancellation, the requested selector, the
   resolved route, and terminal status belong to the invocation contract.
@@ -54,3 +57,11 @@ effects, including modifications made directly to files in a Git workspace.
 - How workspace changes are captured and represented in the outcome.
 - How interactive permission and user-input requests return to the orchestrator.
 - Whether invocation state survives termination of the orchestrator process.
+
+## Amendments
+
+- 2026-09-05: The original text called MCP the primary harness-facing
+  integration. ADR-0006 decided the opposite: the CLI is the universal surface
+  and MCP is an optional projection. The decision text now reflects ADR-0006.
+  The term "target" was replaced by "delegate" and "route" to match
+  `CONTEXT.md` and ADR-0004, which rejects pre-created target objects.

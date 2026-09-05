@@ -22,9 +22,14 @@ It does not become the caller's workflow orchestrator.
   Code or Codex CLI.
 - **Adapter:** A reviewed bridge implementation that translates one bridge
   operation to one qualified harness contract.
+- **Provider:** The model vendor whose model a selector names, such as
+  Anthropic, OpenAI, or Google. A provider is not a harness; one provider's
+  model may be reachable through several installed harnesses.
 - **Delegation selector:** The caller's ad-hoc description of the desired
-  delegate, such as harness family, model, effort, and required capabilities.
-  It is not a pre-created named object.
+  delegate: provider, model, effort, optional harness family, and optional
+  required capabilities. It is not a pre-created named object.
+- **Delegate:** The harness route chosen for one invocation. The term replaces
+  "target" used in early drafts.
 - **Resolved route:** The concrete adapter, executable, harness version,
   authenticated native context, and model selection chosen for one invocation.
 - **Invocation:** One asynchronous, bounded delegation from an orchestrator to
@@ -76,8 +81,54 @@ It does not become the caller's workflow orchestrator.
   ownership of the final verdict unless a separate workflow-root capability is
   explicitly designed and selected.
 
+## Process and security boundary invariants
+
+These invariants were carried over from the retired RFC-0001. They describe the
+bridge's own boundary, not a sandbox around the harness.
+
+- Routes resolve only to reviewed adapters and the executables they qualify.
+  The bridge never turns an arbitrary executable, URL, or shell fragment into a
+  route.
+- Harness processes are launched with argument arrays and a resolved absolute
+  executable path, never through a shell string built from caller input.
+  Symlinked executables are normal for harness installations and are allowed.
+- Credentials never appear in argv, invocation input, events, outcomes, logs,
+  or repository files. The harness's native authenticated session is the
+  credential boundary.
+- Cancellation and timeout terminate the whole harness process tree. A
+  cancelled or timed-out invocation cannot leave a running descendant.
+- A missing adapter, unqualified harness version, or unavailable route is a
+  failed resolution, never a fallback.
+- Malformed or incomplete harness output yields a failed or degraded outcome,
+  never a completed one. Incomplete results are always distinguishable from
+  success.
+- A harness's self-reported identity is evidence, not proof, of the runtime
+  model. Outcomes state the strongest evidence level actually observed.
+- Untrusted harness output is data. The bridge never interprets it as a new
+  instruction, operation, or credential.
+- Every contract surface is versioned: requests, events, outcomes, and the
+  describe output.
+
 ## Terms awaiting decisions
 
 The precise meanings of execution profile, capability, content part, artifact,
 route resolution, follow-up, stream retention, and runtime identity remain open
 until the invocation contract is resolved.
+
+Further decisions are tracked as ADR issues in the M0 milestone:
+
+- Invocation state machine, status fields, and error taxonomy.
+- Effort normalization and the rule for routes that do not support effort.
+- Execution profile levels, per-harness mapping, and handling of interactive
+  permission requests in headless mode.
+- Broker lifecycle: autostart, single instance, idle shutdown, version
+  mismatch, socket permissions, and behavior when the caller or broker dies.
+- Effect observation mechanism, non-Git workspaces, size limits, and the
+  policy for concurrent invocations in the same working directory.
+- Retention and privacy of events and outcomes.
+- Cancellation and timeout semantics including Windows equivalents.
+- Environment policy for harness processes.
+- Whether retries and idempotency keys exist as separate identities from the
+  invocation.
+- Whether non-harness capability providers, such as OCR or vision services,
+  are in scope at all.
