@@ -48,6 +48,23 @@ It does not become the caller's workflow orchestrator.
   working directory and may leave effects there. It is not a transaction or an
   isolation boundary.
 - **Workflow:** Caller-owned coordination of one or more invocations.
+- **Interaction strategy:** Explicit handling of native approvals and input:
+  `orchestrator`, `deny`, or `unattended`.
+- **Requested policy:** Permissions the caller asks the selected route to use.
+- **Assurance:** The execution boundary actually provided by a route:
+  `none`, `native`, or future `isolated`.
+- **Evidence status:** Whether an identity or observation is `unverified`,
+  `inferred`, `reported`, or `verified`.
+- **Tombstone:** Minimal retention metadata left after an invocation payload is
+  evicted.
+- **Continuation:** A future linked invocation that resumes a native session;
+  it is not an active-turn operation.
+- **Steering:** A future operation that sends direction into an active native
+  invocation.
+- **Caller correlation ID:** Optional caller-owned metadata used to search or
+  group invocations.
+- **Idempotency key:** Optional caller-owned key that deduplicates an equivalent
+  start request without changing invocation identity.
 
 ## Resolved invariants
 
@@ -110,26 +127,15 @@ harness.
 
 ## Terms awaiting decisions
 
-The precise meanings of execution profile, capability, content part, artifact,
-route resolution, follow-up, stream retention, and runtime identity remain open
-until the invocation contract is resolved.
+The initial contract and broker behavior are resolved. Remaining design work is
+explicitly limited to:
 
-Further decisions are tracked as ADR issues in the M0 milestone:
+- Windows Named Pipes, Job Objects, packaging, and process-tree qualification.
+- Non-Git effect observation that can attribute changes without a repository.
+- A genuinely isolated assurance level rather than native permission mapping.
+- Active-turn steering and linked continuation semantics.
+- Additional non-harness capability providers such as OCR and vision.
 
-- Invocation state machine, status fields, and error taxonomy.
-- Effort normalization and the rule for routes that do not support effort.
-- Execution profile levels, per-harness mapping, and handling of interactive
-  permission requests in headless mode.
-- Broker lifecycle: autostart, single instance, idle shutdown, version
-  mismatch, socket permissions, and behavior when the caller or broker dies.
-- Effect observation mechanism, non-Git workspaces, size limits, and the
-  policy for concurrent invocations in the same working directory.
-- Retention and privacy of events and outcomes.
-- Cancellation mechanics: grace period before a hard kill, Windows equivalent
-  of process-group termination, and reporting of partial effects. That the
-  whole process tree terminates is already an invariant above.
-- Environment policy for harness processes.
-- Whether retries and idempotency keys exist as separate identities from the
-  invocation.
-- Whether non-harness capability providers, such as OCR or vision services,
-  are in scope at all.
+The current operation list, state machine, evidence rules, and retention
+behavior are documented in [`docs/contract.md`](docs/contract.md). New changes
+should update the relevant ADR and contract together.

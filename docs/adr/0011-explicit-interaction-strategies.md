@@ -26,6 +26,12 @@ Every invocation selects one of three interaction strategies:
 The broker never displays a hidden prompt and never converts one strategy into
 another silently.
 
+The currently qualified routes expose these strategies:
+
+- Claude Code: `orchestrator`, `deny`, and `unattended`.
+- Codex: `deny` and `unattended`; orchestrator-mediated input is not qualified.
+- Fake fixtures: all three, for lifecycle and contract tests.
+
 ## Consequences
 
 - `invocation.respond` is distinct from free-form `invocation.send`.

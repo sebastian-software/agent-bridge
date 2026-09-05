@@ -1,4 +1,7 @@
-# TanStack AI harness spike
+# TanStack AI harness spike (archived)
+
+> Archived reference spike. Package versions and results are frozen; this
+> directory is not part of the agent-bridge CI or runtime.
 
 This isolated package evaluates whether TanStack AI can implement the harness
 adapter layer of agent-bridge without becoming the bridge's broker or public

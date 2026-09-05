@@ -24,11 +24,11 @@ not represent Claude effort independently from the selected model.
 
 ## Decision
 
-The MVP integrates each initial harness through its richest supported native
+The MVP integrates each initial harness through its qualified installed CLI
 interface:
 
-- Claude Code through the official Claude Agent SDK; and
-- Codex through Codex app-server.
+- Claude Code through `claude -p --output-format stream-json`; and
+- Codex through `codex exec --json`.
 
 TanStack AI is not a required MVP runtime dependency and does not define the
 bridge's public operations, event, content, persistence, or lifecycle contract.
@@ -41,10 +41,14 @@ same bridge adapter qualification suite.
 
 ## Consequences
 
-- The bridge retains control over live input, approvals, process supervision,
-  runtime identity, terminal outcomes, and workspace-effect filtering.
+- The bridge retains control over process supervision, runtime identity,
+  terminal outcomes, and workspace-effect filtering. Claude's stream-json
+  control requests can pause for orchestrator responses; Codex currently uses
+  qualified deny/unattended modes.
 - Claude and Codex adapters have different native protocols behind one
   normalized bridge contract.
+- Official SDK and app-server integrations remain future options where they
+  unlock capabilities that the CLI contracts cannot expose.
 - The MVP accepts more adapter implementation work in exchange for access to
   capabilities hidden by TanStack's current `chat()` harness abstraction.
 - AG-UI compatibility may be exposed as an extension or projection later but
