@@ -10,9 +10,19 @@ const PROBE_TIMEOUT_MS = 2_500;
 
 export interface AdapterModelManifest {
   readonly model: string;
+  readonly canonicalModel?: string;
+  readonly aliases?: readonly string[];
   readonly efforts: readonly string[];
   readonly capabilities: readonly string[];
   readonly interactionStrategies: readonly InteractionStrategy[];
+}
+
+export interface AdapterQualificationManifest {
+  readonly qualificationId: string;
+  readonly testedAt: string;
+  readonly harnessVersion: string;
+  readonly testSuite: string;
+  readonly testCommit: string;
 }
 
 export interface AdapterManifest {
@@ -25,6 +35,7 @@ export interface AdapterManifest {
   readonly qualifiedVersionRange: string;
   readonly authenticationMode: string;
   readonly models: readonly AdapterModelManifest[];
+  readonly qualification: AdapterQualificationManifest;
   readonly qualificationClaim: string;
   readonly policySupport?: Readonly<Record<string, readonly string[]>>;
 }
@@ -33,6 +44,22 @@ export interface DiscoveryProbe {
   readonly findExecutable?: (command: string) => Promise<string | undefined>;
   readonly readVersion?: (executable: string, args: readonly string[]) => Promise<string | undefined>;
   readonly checkAuthentication?: (executable: string, args: readonly string[]) => Promise<boolean>;
+}
+
+interface ExpandedModelManifest extends AdapterModelManifest {
+  readonly requestModel: string;
+  readonly canonicalModel: string;
+}
+
+function expandedModels(manifest: AdapterManifest): readonly ExpandedModelManifest[] {
+  return manifest.models.flatMap((model) => {
+    const canonicalModel = model.canonicalModel ?? model.model;
+    return [...new Set([model.model, ...(model.aliases ?? [])])].map((requestModel) => ({
+      ...model,
+      requestModel,
+      canonicalModel,
+    }));
+  });
 }
 
 export interface ParsedVersion {
@@ -131,13 +158,15 @@ export async function discoverManifestRoutes(
   options?: { readonly executable?: string; readonly probe?: DiscoveryProbe },
 ): Promise<readonly RouteDescriptor[]> {
   const probe = options?.probe ?? {};
+  const models = expandedModels(manifest);
   const executable = options?.executable ?? (await (probe.findExecutable ?? findExecutable)(manifest.command));
   if (executable === undefined || !(await isExecutable(executable))) {
-    return manifest.models.map((model) => ({
-      routeId: `${manifest.id}:${model.model}`,
+    return models.map((model) => ({
+      routeId: `${manifest.id}:${model.requestModel}`,
       ...(executable === undefined ? {} : { executable }),
       provider: manifest.provider,
-      model: model.model,
+      model: model.requestModel,
+      canonicalModel: model.canonicalModel,
       efforts: model.efforts,
       via: manifest.via,
       adapter: manifest.id,
@@ -157,11 +186,12 @@ export async function discoverManifestRoutes(
   const versionOutput = await (probe.readVersion ?? readVersion)(executable, manifest.versionArgs);
   const version = parseVersion(versionOutput);
   if (version === undefined || !satisfiesVersionRange(version, manifest.qualifiedVersionRange)) {
-    return manifest.models.map((model) => ({
-      routeId: `${manifest.id}:${model.model}`,
+    return models.map((model) => ({
+      routeId: `${manifest.id}:${model.requestModel}`,
       executable,
       provider: manifest.provider,
-      model: model.model,
+      model: model.requestModel,
+      canonicalModel: model.canonicalModel,
       efforts: model.efforts,
       via: manifest.via,
       adapter: manifest.id,
@@ -181,11 +211,12 @@ export async function discoverManifestRoutes(
   }
 
   const authenticated = await (probe.checkAuthentication ?? checkAuthentication)(executable, manifest.authArgs);
-  return manifest.models.map((model) => ({
-    routeId: `${manifest.id}:${model.model}`,
+  return models.map((model) => ({
+    routeId: `${manifest.id}:${model.requestModel}`,
     executable,
     provider: manifest.provider,
-    model: model.model,
+    model: model.requestModel,
+    canonicalModel: model.canonicalModel,
     efforts: model.efforts,
     via: manifest.via,
     adapter: manifest.id,
@@ -198,9 +229,9 @@ export async function discoverManifestRoutes(
     readiness: authenticated ? "ready" : "unavailable",
     qualification: [
       {
-        qualificationId: `${manifest.id}-semver-${manifest.qualifiedVersionRange}`,
-        testedAt: new Date().toISOString(),
-        claim: `${manifest.qualificationClaim} Observed version ${version.value} satisfies ${manifest.qualifiedVersionRange}.`,
+        qualificationId: manifest.qualification.qualificationId,
+        testedAt: manifest.qualification.testedAt,
+        claim: `${manifest.qualificationClaim} Qualification suite ${manifest.qualification.testSuite} at ${manifest.qualification.testCommit} exercised native model ${model.canonicalModel} with harness ${manifest.qualification.harnessVersion} within ${manifest.qualifiedVersionRange}. Observed version ${version.value} satisfies ${manifest.qualifiedVersionRange}.`,
       },
     ],
     ...(manifest.policySupport === undefined ? {} : { policySupport: manifest.policySupport }),

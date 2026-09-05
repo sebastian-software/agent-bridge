@@ -194,10 +194,31 @@ test("route discovery reports qualified and authenticated command routes", async
     },
   });
   const routes = await claude.discover();
-  assert.equal(routes.length, 3);
+  assert.equal(routes.length, 7);
   assert.ok(routes.every((candidate) => candidate.readiness === "ready"));
   assert.ok(routes.every((candidate) => candidate.executable === process.execPath));
   assert.ok(routes.every((candidate) => candidate.qualification.length === 1));
+  const opusAlias = routes.find((candidate) => candidate.model === "opus");
+  assert.equal(opusAlias?.canonicalModel, "claude-opus-4-8");
+  assert.equal(opusAlias?.qualification[0]?.testedAt, "2026-09-05T22:04:14+02:00");
+  assert.match(opusAlias?.qualification[0]?.claim ?? "", /test\/adapters\.test\.ts/);
+  const haiku = routes.find((candidate) => candidate.model === "claude-haiku-4-5-20251001");
+  assert.equal(haiku?.canonicalModel, "claude-haiku-4-5-20251001");
+});
+
+test("Codex discovery exposes canonical model IDs and documented family aliases", async () => {
+  const codex = new CodexAdapter({
+    executable: process.execPath,
+    probe: {
+      readVersion: async () => "0.149.0 (Codex)",
+      checkAuthentication: async () => true,
+    },
+  });
+  const routes = await codex.discover();
+  assert.equal(routes.length, 6);
+  const alias = routes.find((candidate) => candidate.model === "gpt-5-codex");
+  assert.equal(alias?.canonicalModel, "gpt-5.3-codex");
+  assert.match(alias?.qualification[0]?.claim ?? "", /2473c44fc41befe82847287b13af53245c008a39/);
 });
 
 test("route discovery fails closed for an unqualified harness version", async () => {

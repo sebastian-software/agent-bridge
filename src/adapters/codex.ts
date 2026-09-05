@@ -13,12 +13,24 @@ const MANIFEST = {
   authArgs: ["login", "status"],
   qualifiedVersionRange: ">=0.149.0 <1.0.0",
   authenticationMode: "codex-native",
-  models: ["gpt-5.5", "gpt-5.3-codex", "codex-mini-latest"].map((model) => ({
-    model,
+  models: [
+    { model: "gpt-5.5", aliases: ["gpt-5"] },
+    { model: "gpt-5.3-codex", aliases: ["gpt-5-codex"] },
+    { model: "codex-mini-latest", aliases: ["codex-mini"] },
+  ].map((model) => ({
+    ...model,
+    canonicalModel: model.model,
     efforts: ["low", "medium", "high", "max"],
     capabilities: ["core.input.text", "core.output.text", "core.streaming.events"],
     interactionStrategies: ["deny", "unattended"] as const,
   })),
+  qualification: {
+    qualificationId: "codex-cli-v0-jsonl",
+    testedAt: "2026-09-05T22:04:14+02:00",
+    harnessVersion: "0.149.0",
+    testSuite: "test/adapters.test.ts",
+    testCommit: "2473c44fc41befe82847287b13af53245c008a39",
+  },
   qualificationClaim: "Codex CLI exec JSONL contract with native model, sandbox, approval, and workspace mapping.",
   policySupport: {
     filesystem: ["read-only", "workspace-write"],
