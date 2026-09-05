@@ -27,7 +27,9 @@ export function defaultCatalogPath(): string {
 }
 
 function object(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
 }
 
 function stringArray(value: unknown): readonly string[] | undefined {
@@ -38,39 +40,73 @@ function parseCatalog(value: unknown, path: string): UserModelCatalog {
   const root = object(value);
   const adapters = root?.adapters === undefined ? undefined : object(root.adapters);
   if (root === undefined || (root.adapters !== undefined && adapters === undefined)) {
-    throw new BridgeError({ code: "invalid_request", message: `Model catalog ${path} must contain an adapters object.`, retryable: false });
+    throw new BridgeError({
+      code: "invalid_request",
+      message: `Model catalog ${path} must contain an adapters object.`,
+      retryable: false,
+    });
   }
   const parsedAdapters: Record<string, UserAdapterCatalog> = {};
   for (const [adapterId, rawAdapter] of Object.entries(adapters ?? {})) {
     const adapter = object(rawAdapter);
     if (adapter === undefined) {
-      throw new BridgeError({ code: "invalid_request", message: `Model catalog adapter ${adapterId} must be an object.`, retryable: false });
+      throw new BridgeError({
+        code: "invalid_request",
+        message: `Model catalog adapter ${adapterId} must be an object.`,
+        retryable: false,
+      });
     }
     const aliases = adapter.aliases === undefined ? undefined : object(adapter.aliases);
-    if (adapter.aliases !== undefined && (aliases === undefined || !Object.values(aliases).every((value) => typeof value === "string" && value !== ""))) {
-      throw new BridgeError({ code: "invalid_request", message: `Model catalog aliases for ${adapterId} must map strings to strings.`, retryable: false });
+    if (
+      adapter.aliases !== undefined &&
+      (aliases === undefined || !Object.values(aliases).every((value) => typeof value === "string" && value !== ""))
+    ) {
+      throw new BridgeError({
+        code: "invalid_request",
+        message: `Model catalog aliases for ${adapterId} must map strings to strings.`,
+        retryable: false,
+      });
     }
     const modelsSource = adapter.models === undefined ? undefined : object(adapter.models);
     if (adapter.models !== undefined && modelsSource === undefined) {
-      throw new BridgeError({ code: "invalid_request", message: `Model catalog models for ${adapterId} must be an object.`, retryable: false });
+      throw new BridgeError({
+        code: "invalid_request",
+        message: `Model catalog models for ${adapterId} must be an object.`,
+        retryable: false,
+      });
     }
     const models: Record<string, UserModelDefinition> = {};
     for (const [modelId, rawModel] of Object.entries(modelsSource ?? {})) {
       const model = object(rawModel);
       if (model === undefined || typeof model.nativeModel !== "string" || model.nativeModel === "") {
-        throw new BridgeError({ code: "invalid_request", message: `Model catalog entry ${adapterId}/${modelId} needs nativeModel.`, retryable: false });
+        throw new BridgeError({
+          code: "invalid_request",
+          message: `Model catalog entry ${adapterId}/${modelId} needs nativeModel.`,
+          retryable: false,
+        });
       }
       const efforts = model.efforts === undefined ? undefined : stringArray(model.efforts);
       const capabilities = model.capabilities === undefined ? undefined : stringArray(model.capabilities);
-      const interactionStrategies = model.interactionStrategies === undefined ? undefined : stringArray(model.interactionStrategies);
-      if ((model.efforts !== undefined && efforts === undefined) || (model.capabilities !== undefined && capabilities === undefined) || (model.interactionStrategies !== undefined && interactionStrategies === undefined)) {
-        throw new BridgeError({ code: "invalid_request", message: `Model catalog entry ${adapterId}/${modelId} contains an invalid list.`, retryable: false });
+      const interactionStrategies =
+        model.interactionStrategies === undefined ? undefined : stringArray(model.interactionStrategies);
+      if (
+        (model.efforts !== undefined && efforts === undefined) ||
+        (model.capabilities !== undefined && capabilities === undefined) ||
+        (model.interactionStrategies !== undefined && interactionStrategies === undefined)
+      ) {
+        throw new BridgeError({
+          code: "invalid_request",
+          message: `Model catalog entry ${adapterId}/${modelId} contains an invalid list.`,
+          retryable: false,
+        });
       }
       models[modelId] = {
         nativeModel: model.nativeModel,
         ...(efforts === undefined ? {} : { efforts }),
         ...(capabilities === undefined ? {} : { capabilities }),
-        ...(interactionStrategies === undefined ? {} : { interactionStrategies: interactionStrategies as RouteDescriptor["interactionStrategies"] }),
+        ...(interactionStrategies === undefined
+          ? {}
+          : { interactionStrategies: interactionStrategies as RouteDescriptor["interactionStrategies"] }),
       };
     }
     parsedAdapters[adapterId] = {
@@ -89,7 +125,10 @@ export async function loadUserModelCatalog(path = defaultCatalogPath()): Promise
     if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
       return {};
     }
-    throw new BridgeError({ code: "invalid_request", message: `Model catalog ${path} could not be read.`, retryable: false }, { cause: error });
+    throw new BridgeError(
+      { code: "invalid_request", message: `Model catalog ${path} could not be read.`, retryable: false },
+      { cause: error },
+    );
   }
   try {
     return parseCatalog(JSON.parse(text) as unknown, path);
@@ -97,7 +136,10 @@ export async function loadUserModelCatalog(path = defaultCatalogPath()): Promise
     if (error instanceof BridgeError) {
       throw error;
     }
-    throw new BridgeError({ code: "invalid_request", message: `Model catalog ${path} is not valid JSON.`, retryable: false }, { cause: error });
+    throw new BridgeError(
+      { code: "invalid_request", message: `Model catalog ${path} is not valid JSON.`, retryable: false },
+      { cause: error },
+    );
   }
 }
 
@@ -109,7 +151,13 @@ function userEvidence(adapterId: string, modelId: string, nativeModel: string): 
   };
 }
 
-function routeWithModel(route: RouteDescriptor, model: string, nativeModel: string, catalog: UserModelDefinition | undefined, adapterId: string): RouteDescriptor {
+function routeWithModel(
+  route: RouteDescriptor,
+  model: string,
+  nativeModel: string,
+  catalog: UserModelDefinition | undefined,
+  adapterId: string,
+): RouteDescriptor {
   return {
     ...route,
     routeId: `${route.adapter}:${model}`,
@@ -122,14 +170,19 @@ function routeWithModel(route: RouteDescriptor, model: string, nativeModel: stri
   };
 }
 
-export function applyUserModelCatalog(routes: readonly RouteDescriptor[], catalog: UserModelCatalog): readonly RouteDescriptor[] {
+export function applyUserModelCatalog(
+  routes: readonly RouteDescriptor[],
+  catalog: UserModelCatalog,
+): readonly RouteDescriptor[] {
   const result = [...routes];
   for (const [adapterId, adapterCatalog] of Object.entries(catalog.adapters ?? {})) {
     const adapterRoutes = routes.filter((route) => route.adapter === adapterId);
     for (const [alias, target] of Object.entries(adapterCatalog.aliases ?? {})) {
       const targetRoute = adapterRoutes.find((route) => route.model === target || route.canonicalModel === target);
       if (targetRoute !== undefined && !result.some((route) => route.adapter === adapterId && route.model === alias)) {
-        result.push(routeWithModel(targetRoute, alias, targetRoute.canonicalModel ?? targetRoute.model, undefined, adapterId));
+        result.push(
+          routeWithModel(targetRoute, alias, targetRoute.canonicalModel ?? targetRoute.model, undefined, adapterId),
+        );
       }
     }
     const template = adapterRoutes[0];

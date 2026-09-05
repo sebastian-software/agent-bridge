@@ -6,8 +6,8 @@ import test from "node:test";
 
 import { FakeAdapter } from "../src/adapters/fake.js";
 import { AdapterRegistry } from "../src/adapters/registry.js";
-import type { RouteDescriptor } from "../src/contract.js";
 import type { Adapter, AdapterRunContext, AdapterRunResult } from "../src/adapters/types.js";
+import type { RouteDescriptor } from "../src/contract.js";
 
 class CountingAdapter implements Adapter {
   readonly id = "counting";
@@ -15,23 +15,25 @@ class CountingAdapter implements Adapter {
 
   async discover(): Promise<readonly RouteDescriptor[]> {
     this.calls += 1;
-    return [{
-      routeId: "counting:test",
-      provider: "counting",
-      model: "test",
-      efforts: ["low"],
-      via: "counting",
-      adapter: this.id,
-      harnessVersion: "1.0.0",
-      authenticationMode: "none",
-      capabilities: [],
-      interactionStrategies: ["deny"],
-      assurance: "none",
-      runtimeIdentityEvidence: "verified",
-      readiness: "ready",
-      qualification: [],
-      diagnostics: [],
-    }];
+    return [
+      {
+        routeId: "counting:test",
+        provider: "counting",
+        model: "test",
+        efforts: ["low"],
+        via: "counting",
+        adapter: this.id,
+        harnessVersion: "1.0.0",
+        authenticationMode: "none",
+        capabilities: [],
+        interactionStrategies: ["deny"],
+        assurance: "none",
+        runtimeIdentityEvidence: "verified",
+        readiness: "ready",
+        qualification: [],
+        diagnostics: [],
+      },
+    ];
   }
 
   async run(_context: AdapterRunContext): Promise<AdapterRunResult> {
@@ -42,19 +44,23 @@ class CountingAdapter implements Adapter {
 test("user model catalog adds aliases and canonical native model mappings", async () => {
   const root = await mkdtemp(join(tmpdir(), "agent-bridge-catalog-"));
   const catalogPath = join(root, "config.json");
-  await writeFile(catalogPath, JSON.stringify({
-    adapters: {
-      fake: {
-        aliases: { quick: "fake-echo" },
-        models: {
-          local: {
-            nativeModel: "fake-echo",
-            efforts: ["low"],
+  await writeFile(
+    catalogPath,
+    JSON.stringify({
+      adapters: {
+        fake: {
+          aliases: { quick: "fake-echo" },
+          models: {
+            local: {
+              nativeModel: "fake-echo",
+              efforts: ["low"],
+            },
           },
         },
       },
-    },
-  }), "utf8");
+    }),
+    "utf8",
+  );
   try {
     const registry = new AdapterRegistry([new FakeAdapter()], { catalogPath });
     const routes = await registry.discover();

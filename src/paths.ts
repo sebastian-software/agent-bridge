@@ -1,5 +1,5 @@
-import { homedir, tmpdir } from "node:os";
 import { lstat, mkdir } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { BridgeError } from "./errors.js";
@@ -51,11 +51,13 @@ function usableEnvironmentPath(name: string): string | undefined {
 
 export function brokerPaths(): BrokerPaths {
   const uid = typeof process.getuid === "function" ? process.getuid() : "user";
-  const runtimeDirectory = usableEnvironmentPath("AGENT_BRIDGE_RUNTIME_DIR")
-    ?? usableEnvironmentPath("XDG_RUNTIME_DIR")
-    ?? join(tmpdir(), `agent-bridge-${uid}`);
-  const stateDirectory = usableEnvironmentPath("AGENT_BRIDGE_STATE_DIR")
-    ?? join(usableEnvironmentPath("XDG_STATE_HOME") ?? join(homedir(), ".local", "state"), "agent-bridge");
+  const runtimeDirectory =
+    usableEnvironmentPath("AGENT_BRIDGE_RUNTIME_DIR") ??
+    usableEnvironmentPath("XDG_RUNTIME_DIR") ??
+    join(tmpdir(), `agent-bridge-${uid}`);
+  const stateDirectory =
+    usableEnvironmentPath("AGENT_BRIDGE_STATE_DIR") ??
+    join(usableEnvironmentPath("XDG_STATE_HOME") ?? join(homedir(), ".local", "state"), "agent-bridge");
   return {
     runtimeDirectory,
     stateDirectory,

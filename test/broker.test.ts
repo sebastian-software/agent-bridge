@@ -3,11 +3,15 @@ import { chmod, cp, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-
-import { Broker } from "../src/broker.js";
-import type { ObservedIdentity, RouteDescriptor, StartInvocationRequest, StartInvocationResult } from "../src/contract.js";
 import { AdapterRegistry } from "../src/adapters/registry.js";
 import type { Adapter, AdapterRunContext, AdapterRunResult } from "../src/adapters/types.js";
+import { Broker } from "../src/broker.js";
+import type {
+  ObservedIdentity,
+  RouteDescriptor,
+  StartInvocationRequest,
+  StartInvocationResult,
+} from "../src/contract.js";
 import { BridgeError } from "../src/errors.js";
 import type { BrokerPaths } from "../src/paths.js";
 import { ensurePrivateDirectory } from "../src/paths.js";
@@ -60,27 +64,31 @@ class InteractiveAdapter implements Adapter {
   readonly id = "interactive";
 
   async discover(): Promise<readonly RouteDescriptor[]> {
-    return [{
-      routeId: "interactive:test",
-      provider: "agent-bridge",
-      model: "interactive",
-      efforts: ["low", "medium", "high"],
-      via: "interactive",
-      adapter: this.id,
-      harnessVersion: "1.0.0",
-      authenticationMode: "none",
-      capabilities: ["core.input.text", "core.output.text"],
-      interactionStrategies: ["orchestrator"],
-      assurance: "none",
-      runtimeIdentityEvidence: "verified",
-      readiness: "ready",
-      qualification: [{
-        qualificationId: "interactive-v1",
-        testedAt: "2026-08-27T00:00:00.000Z",
-        claim: "Deterministic interactive fixture for broker tests.",
-      }],
-      diagnostics: [],
-    }];
+    return [
+      {
+        routeId: "interactive:test",
+        provider: "agent-bridge",
+        model: "interactive",
+        efforts: ["low", "medium", "high"],
+        via: "interactive",
+        adapter: this.id,
+        harnessVersion: "1.0.0",
+        authenticationMode: "none",
+        capabilities: ["core.input.text", "core.output.text"],
+        interactionStrategies: ["orchestrator"],
+        assurance: "none",
+        runtimeIdentityEvidence: "verified",
+        readiness: "ready",
+        qualification: [
+          {
+            qualificationId: "interactive-v1",
+            testedAt: "2026-08-27T00:00:00.000Z",
+            claim: "Deterministic interactive fixture for broker tests.",
+          },
+        ],
+        diagnostics: [],
+      },
+    ];
   }
 
   async run(context: AdapterRunContext): Promise<AdapterRunResult> {
@@ -110,23 +118,27 @@ class NativePayloadAdapter implements Adapter {
   readonly id = "native-payload";
 
   async discover(): Promise<readonly RouteDescriptor[]> {
-    return [{
-      routeId: "native-payload:test",
-      provider: "agent-bridge",
-      model: "native-payload",
-      efforts: ["high"],
-      via: "native-payload",
-      adapter: this.id,
-      harnessVersion: "1.0.0",
-      authenticationMode: "none",
-      capabilities: ["core.input.text", "core.output.text"],
-      interactionStrategies: ["deny"],
-      assurance: "none",
-      runtimeIdentityEvidence: "verified",
-      readiness: "ready",
-      qualification: [{ qualificationId: "native-v1", testedAt: "2026-08-27T00:00:00.000Z", claim: "Native payload fixture." }],
-      diagnostics: [],
-    }];
+    return [
+      {
+        routeId: "native-payload:test",
+        provider: "agent-bridge",
+        model: "native-payload",
+        efforts: ["high"],
+        via: "native-payload",
+        adapter: this.id,
+        harnessVersion: "1.0.0",
+        authenticationMode: "none",
+        capabilities: ["core.input.text", "core.output.text"],
+        interactionStrategies: ["deny"],
+        assurance: "none",
+        runtimeIdentityEvidence: "verified",
+        readiness: "ready",
+        qualification: [
+          { qualificationId: "native-v1", testedAt: "2026-08-27T00:00:00.000Z", claim: "Native payload fixture." },
+        ],
+        diagnostics: [],
+      },
+    ];
   }
 
   async run(context: AdapterRunContext): Promise<AdapterRunResult> {
@@ -167,10 +179,10 @@ test("broker runs asynchronously, persists events, and deduplicates starts", asy
     assert.equal(stateOf(terminal), "succeeded");
     assert.ok("outcome" in terminal);
 
-    const listed = await broker.execute("invocation.list", {
+    const listed = (await broker.execute("invocation.list", {
       callerCorrelationId: undefined,
       includeTombstones: false,
-    }) as { invocations: readonly { invocationId: string; resolvedRouteId: string }[] };
+    })) as { invocations: readonly { invocationId: string; resolvedRouteId: string }[] };
     assert.equal(listed.invocations[0]?.invocationId, started.invocationId);
     assert.equal(listed.invocations[0]?.resolvedRouteId, "fake:fake-echo");
 
@@ -186,10 +198,12 @@ test("broker runs asynchronously, persists events, and deduplicates starts", asy
     assert.equal(after.events[0]?.sequence, 3);
 
     await assert.rejects(
-      broker.start(request(root, "fake-echo", {
-        idempotencyKey: "same-request",
-        input: [{ type: "text", text: "different" }],
-      })),
+      broker.start(
+        request(root, "fake-echo", {
+          idempotencyKey: "same-request",
+          input: [{ type: "text", text: "different" }],
+        }),
+      ),
       (error: unknown) => error instanceof BridgeError && error.code === "invocation_conflict",
     );
   } finally {
@@ -205,10 +219,21 @@ test("store persists invocation metadata and events in separate files", async ()
   try {
     const started = await broker.start(request(root, "fake-echo"));
     await waitForTerminal(broker, started.invocationId);
-    const manifest = JSON.parse(await readFile(paths(root).stateFile, "utf8")) as { storageVersion?: unknown; format?: unknown };
+    const manifest = JSON.parse(await readFile(paths(root).stateFile, "utf8")) as {
+      storageVersion?: unknown;
+      format?: unknown;
+    };
     assert.deepEqual(manifest, { storageVersion: 2, format: "directory-v1" });
-    const invocationDirectory = join(paths(root).stateDirectory, "invocations", encodeURIComponent(started.invocationId));
-    const metadata = JSON.parse(await readFile(join(invocationDirectory, "meta.json"), "utf8")) as { events?: unknown; outcome?: unknown; state?: unknown };
+    const invocationDirectory = join(
+      paths(root).stateDirectory,
+      "invocations",
+      encodeURIComponent(started.invocationId),
+    );
+    const metadata = JSON.parse(await readFile(join(invocationDirectory, "meta.json"), "utf8")) as {
+      events?: unknown;
+      outcome?: unknown;
+      state?: unknown;
+    };
     assert.equal(metadata.events, undefined);
     assert.equal(metadata.outcome, undefined);
     assert.equal(metadata.state, "succeeded");
@@ -254,7 +279,10 @@ test("forced broker shutdown records active invocations as interrupted", async (
       broker.execute("system.shutdown", {}),
       (error: unknown) => error instanceof BridgeError && error.code === "invocation_conflict",
     );
-    const accepted = await broker.execute("system.shutdown", { force: true }) as { accepted: boolean; activeInvocations: number };
+    const accepted = (await broker.execute("system.shutdown", { force: true })) as {
+      accepted: boolean;
+      activeInvocations: number;
+    };
     assert.equal(accepted.accepted, true);
     assert.equal(accepted.activeInvocations, 1);
     await broker.close();
@@ -296,17 +324,19 @@ test("broker supervises the fake harness process across success and failure scen
     const broker = new Broker(paths(root));
     await broker.initialize();
     try {
-      const started = await broker.start(request(root, scenario.model, {
-        selector: {
-          provider: "agent-bridge",
-          model: scenario.model,
-          via: "fake-process",
-          effort: "high",
-          requiredCapabilities: ["core.input.text"],
-        },
-        interactionStrategy: "deny",
-        ...(!("timeoutMs" in scenario) ? {} : { timeoutMs: scenario.timeoutMs }),
-      }));
+      const started = await broker.start(
+        request(root, scenario.model, {
+          selector: {
+            provider: "agent-bridge",
+            model: scenario.model,
+            via: "fake-process",
+            effort: "high",
+            requiredCapabilities: ["core.input.text"],
+          },
+          interactionStrategy: "deny",
+          ...(!("timeoutMs" in scenario) ? {} : { timeoutMs: scenario.timeoutMs }),
+        }),
+      );
       const terminal = await waitForTerminal(broker, started.invocationId);
       assert.equal(stateOf(terminal), scenario.state);
       if ("errorCode" in scenario) {
@@ -316,7 +346,11 @@ test("broker supervises the fake harness process across success and failure scen
         assert.deepEqual((terminal.outcome as { content: unknown }).content, [{ type: "text", text: "echo this" }]);
       }
       if (scenario.model === "effects") {
-        assert.ok((terminal.outcome as { effects: readonly { path: string }[] }).effects.some((effect) => effect.path.endsWith("fake-renamed.txt")));
+        assert.ok(
+          (terminal.outcome as { effects: readonly { path: string }[] }).effects.some((effect) =>
+            effect.path.endsWith("fake-renamed.txt"),
+          ),
+        );
       }
     } finally {
       await broker.close();
@@ -330,16 +364,18 @@ test("broker cancellation terminates a supervised fake harness process", async (
   const broker = new Broker(paths(root));
   await broker.initialize();
   try {
-    const started = await broker.start(request(root, "cancel", {
-      selector: {
-        provider: "agent-bridge",
-        model: "cancel",
-        via: "fake-process",
-        effort: "high",
-        requiredCapabilities: ["core.input.text"],
-      },
-      interactionStrategy: "deny",
-    }));
+    const started = await broker.start(
+      request(root, "cancel", {
+        selector: {
+          provider: "agent-bridge",
+          model: "cancel",
+          via: "fake-process",
+          effort: "high",
+          requiredCapabilities: ["core.input.text"],
+        },
+        interactionStrategy: "deny",
+      }),
+    );
     for (let attempt = 0; attempt < 100; attempt += 1) {
       if (stateOf(await broker.inspect(started.invocationId)) === "running") {
         break;
@@ -360,14 +396,16 @@ test("broker resumes an invocation after an orchestrator input response", async 
   const broker = new Broker(paths(root), { registry: new AdapterRegistry([new InteractiveAdapter()]) });
   await broker.initialize();
   try {
-    const started = await broker.start(request(root, "interactive", {
-      selector: {
-        provider: "agent-bridge",
-        model: "interactive",
-        via: "interactive",
-        requiredCapabilities: ["core.input.text"],
-      },
-    }));
+    const started = await broker.start(
+      request(root, "interactive", {
+        selector: {
+          provider: "agent-bridge",
+          model: "interactive",
+          via: "interactive",
+          requiredCapabilities: ["core.input.text"],
+        },
+      }),
+    );
     for (let attempt = 0; attempt < 100; attempt += 1) {
       if (stateOf(await broker.inspect(started.invocationId)) === "waiting_for_input") {
         break;
@@ -375,11 +413,11 @@ test("broker resumes an invocation after an orchestrator input response", async 
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
     assert.equal(stateOf(await broker.inspect(started.invocationId)), "waiting_for_input");
-    const response = await broker.execute("invocation.respond", {
+    const response = (await broker.execute("invocation.respond", {
       invocationId: started.invocationId,
       requestId: "permission-1",
       decision: "allow",
-    }) as { readonly accepted: boolean };
+    })) as { readonly accepted: boolean };
     assert.equal(response.accepted, true);
     const terminal = await waitForTerminal(broker, started.invocationId);
     assert.equal(stateOf(terminal), "succeeded");
@@ -400,16 +438,18 @@ test("broker keeps native payloads bounded unless diagnostic mode is enabled", a
     });
     await broker.initialize();
     try {
-      const started = await broker.start(request(root, "native-payload", {
-        selector: {
-          provider: "agent-bridge",
-          model: "native-payload",
-          via: "native-payload",
-          effort: "high",
-          requiredCapabilities: ["core.input.text"],
-        },
-        interactionStrategy: "deny",
-      }));
+      const started = await broker.start(
+        request(root, "native-payload", {
+          selector: {
+            provider: "agent-bridge",
+            model: "native-payload",
+            via: "native-payload",
+            effort: "high",
+            requiredCapabilities: ["core.input.text"],
+          },
+          interactionStrategy: "deny",
+        }),
+      );
       return await waitForTerminal(broker, started.invocationId);
     } finally {
       await broker.close();
@@ -469,9 +509,11 @@ test("route resolution rejects assurance the fake route cannot provide", async (
   await broker.initialize();
   try {
     await assert.rejects(
-      broker.start(request(root, "fake-echo", {
-        requestedPolicy: { minimumAssurance: "isolated" },
-      })),
+      broker.start(
+        request(root, "fake-echo", {
+          requestedPolicy: { minimumAssurance: "isolated" },
+        }),
+      ),
       (error: unknown) => error instanceof BridgeError && error.code === "route_unavailable",
     );
   } finally {

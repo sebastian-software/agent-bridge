@@ -2,9 +2,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
-
-import { SCHEMA_DEFINITIONS, describeContract } from "../src/operations.js";
 import { SCHEMA_VERSION } from "../src/contract.js";
+import { describeContract, SCHEMA_DEFINITIONS } from "../src/operations.js";
 
 test("published schemas are valid JSON documents with stable identities", async () => {
   for (const definition of SCHEMA_DEFINITIONS) {

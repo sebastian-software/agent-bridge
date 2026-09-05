@@ -5,41 +5,41 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import { AdapterRegistry } from "./adapters/registry.js";
 import type { AdapterEvent, AdapterRunResult } from "./adapters/types.js";
+import { type BrokerConfig, type BrokerConfigValues, brokerConfigFromValues } from "./config.js";
 import {
-  SCHEMA_VERSION,
-  TERMINAL_STATES,
+  type EffectObservation,
+  type EventsResult,
+  type InputResponse,
+  type InvocationEvent,
+  type InvocationListResult,
+  type InvocationOutcome,
+  type InvocationRecord,
+  type InvocationState,
+  type InvocationTombstone,
+  type JsonValue,
+  type ObservedIdentity,
+  type PolicyEvidence,
   parseEventsParams,
   parseInvocationIdParams,
   parseInvocationListParams,
   parseRespondParams,
   parseRouteDiscoverParams,
   parseShutdownParams,
-  parseWaitParams,
   parseStartInvocationRequest,
-  type EventsResult,
-  type EffectObservation,
-  type InvocationEvent,
-  type InvocationOutcome,
-  type InvocationListResult,
-  type InvocationRecord,
-  type InputResponse,
-  type InvocationState,
-  type InvocationTombstone,
-  type JsonValue,
-  type ObservedIdentity,
-  type PolicyEvidence,
+  parseWaitParams,
+  SCHEMA_VERSION,
   type StartInvocationRequest,
   type StartInvocationResult,
+  TERMINAL_STATES,
   type TerminalStatus,
 } from "./contract.js";
+import { captureWorkspaceSnapshot, observeWorkspaceEffects, type WorkspaceSnapshot } from "./effects.js";
 import { BridgeError } from "./errors.js";
 import { describeContract } from "./operations.js";
 import type { BrokerPaths } from "./paths.js";
 import { ensurePrivateDirectory } from "./paths.js";
 import { InvocationStore } from "./store.js";
-import { captureWorkspaceSnapshot, observeWorkspaceEffects, type WorkspaceSnapshot } from "./effects.js";
 import { canonicalJson, messageFrom, sha256 } from "./util.js";
-import { brokerConfigFromValues, type BrokerConfig, type BrokerConfigValues } from "./config.js";
 import { PACKAGE_VERSION } from "./version.js";
 
 interface MutableResult<T> {
@@ -57,8 +57,7 @@ function unverifiedIdentity(): ObservedIdentity {
 }
 
 function isAbortError(error: unknown): boolean {
-  return error instanceof Error
-    && (error.name === "AbortError" || ("code" in error && error.code === "ABORT_ERR"));
+  return error instanceof Error && (error.name === "AbortError" || ("code" in error && error.code === "ABORT_ERR"));
 }
 
 function eventCursor(sequence: number): string {
@@ -148,20 +147,25 @@ export class Broker {
   readonly #startedAt = new Date().toISOString();
   #mutationTail: Promise<void> = Promise.resolve();
 
-  constructor(paths: BrokerPaths, options?: {
-    readonly registry?: AdapterRegistry;
-    readonly config?: BrokerConfig;
-    readonly retention?: {
-      readonly completedMs?: number;
-      readonly maxBytes?: number;
-    };
-    readonly diagnosticMode?: boolean;
-  }) {
+  constructor(
+    paths: BrokerPaths,
+    options?: {
+      readonly registry?: AdapterRegistry;
+      readonly config?: BrokerConfig;
+      readonly retention?: {
+        readonly completedMs?: number;
+        readonly maxBytes?: number;
+      };
+      readonly diagnosticMode?: boolean;
+    },
+  ) {
     this.#paths = paths;
     this.#store = new InvocationStore(paths.stateFile);
     this.#registry = options?.registry ?? new AdapterRegistry();
     const compatibility: Partial<BrokerConfigValues> = {
-      ...(options?.retention?.completedMs === undefined ? {} : { retentionCompletedDays: options.retention.completedMs / (24 * 60 * 60 * 1000) }),
+      ...(options?.retention?.completedMs === undefined
+        ? {}
+        : { retentionCompletedDays: options.retention.completedMs / (24 * 60 * 60 * 1000) }),
       ...(options?.retention?.maxBytes === undefined ? {} : { retentionMaxBytes: options.retention.maxBytes }),
       ...(options?.diagnosticMode === undefined ? {} : { diagnosticMode: options.diagnosticMode }),
     };
@@ -194,13 +198,21 @@ export class Broker {
       const completedAt = new Date().toISOString();
       for (const invocationId of activeIds) {
         const current = this.#requireRecord(invocationId);
-        const withEvent = this.#appendBridgeEvent(current, "lifecycle", {
-          state: "interrupted",
-          reason: "broker_restart",
-        }, completedAt);
+        const withEvent = this.#appendBridgeEvent(
+          current,
+          "lifecycle",
+          {
+            state: "interrupted",
+            reason: "broker_restart",
+          },
+          completedAt,
+        );
         const outcome = this.#outcome(withEvent, "interrupted", completedAt, {
           observedIdentity: unverifiedIdentity(),
-          effectObservation: { complete: false, diagnostics: ["Broker restart ended the active invocation before its after-snapshot."] },
+          effectObservation: {
+            complete: false,
+            diagnostics: ["Broker restart ended the active invocation before its after-snapshot."],
+          },
           error: {
             code: "broker_restarted",
             message: "The broker restarted while this invocation was active.",
@@ -344,16 +356,19 @@ export class Broker {
         retryable: false,
       });
     }
-    let workspaceStat;
+    let workspaceStat: Awaited<ReturnType<typeof stat>>;
     try {
       workspaceStat = await stat(request.workingDirectory);
     } catch (error) {
-      throw new BridgeError({
-        code: "invalid_request",
-        message: "workingDirectory does not exist or cannot be inspected.",
-        retryable: false,
-        details: { workingDirectory: request.workingDirectory },
-      }, { cause: error });
+      throw new BridgeError(
+        {
+          code: "invalid_request",
+          message: "workingDirectory does not exist or cannot be inspected.",
+          retryable: false,
+          details: { workingDirectory: request.workingDirectory },
+        },
+        { cause: error },
+      );
     }
     if (!workspaceStat.isDirectory()) {
       throw new BridgeError({
@@ -419,7 +434,10 @@ export class Broker {
     });
 
     if (!result.deduplicated) {
-      this.#beforeSnapshots.set(invocationId, await captureWorkspaceSnapshot(request.workingDirectory, this.#effectLimits));
+      this.#beforeSnapshots.set(
+        invocationId,
+        await captureWorkspaceSnapshot(request.workingDirectory, this.#effectLimits),
+      );
       this.#launch(invocationId);
     }
     return result;
@@ -443,9 +461,7 @@ export class Broker {
       eventCount: record.events.length,
       ...(lastEvent === undefined ? {} : { lastCursor: lastEvent.cursor }),
       ...(record.outcome === undefined ? {} : { outcome: record.outcome }),
-      next: TERMINAL_STATES.has(record.state)
-        ? ["invocation.events"]
-        : ["invocation.events", "invocation.cancel"],
+      next: TERMINAL_STATES.has(record.state) ? ["invocation.events"] : ["invocation.events", "invocation.cancel"],
     };
   }
 
@@ -460,7 +476,10 @@ export class Broker {
     const since = params.since === undefined ? undefined : Date.parse(params.since);
     const invocations = [...this.#records.values()]
       .filter((record) => params.state === undefined || record.state === params.state)
-      .filter((record) => params.callerCorrelationId === undefined || record.callerCorrelationId === params.callerCorrelationId)
+      .filter(
+        (record) =>
+          params.callerCorrelationId === undefined || record.callerCorrelationId === params.callerCorrelationId,
+      )
       .filter((record) => since === undefined || Date.parse(record.createdAt) >= since)
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
       .slice(0, params.limit)
@@ -562,10 +581,15 @@ export class Broker {
         };
       }
       const timestamp = new Date().toISOString();
-      const withEvent = this.#appendBridgeEvent(current, "lifecycle", {
-        state: "cancelling",
-        reason: "caller_request",
-      }, timestamp);
+      const withEvent = this.#appendBridgeEvent(
+        current,
+        "lifecycle",
+        {
+          state: "cancelling",
+          reason: "caller_request",
+        },
+        timestamp,
+      );
       this.#records.set(invocationId, {
         ...withEvent,
         state: "cancelling",
@@ -619,7 +643,10 @@ export class Broker {
     if (!shouldRun) {
       await this.#complete(invocationId, "cancelled", {
         observedIdentity: unverifiedIdentity(),
-        effectObservation: { complete: false, diagnostics: ["Invocation was cancelled before an effect snapshot could be collected."] },
+        effectObservation: {
+          complete: false,
+          diagnostics: ["Invocation was cancelled before an effect snapshot could be collected."],
+        },
         error: { code: "cancelled", message: "The invocation was cancelled before the adapter started." },
       });
       this.#controllers.delete(invocationId);
@@ -658,7 +685,11 @@ export class Broker {
           observedIdentity: result.observedIdentity,
           error: {
             code: interrupted ? "broker_shutdown" : timedOut ? "timed_out" : "cancelled",
-            message: interrupted ? "The broker shut down while the invocation was active." : timedOut ? "The invocation exceeded its timeout." : "The invocation was cancelled.",
+            message: interrupted
+              ? "The broker shut down while the invocation was active."
+              : timedOut
+                ? "The invocation exceeded its timeout."
+                : "The invocation was cancelled.",
           },
         });
       } else {
@@ -671,7 +702,11 @@ export class Broker {
           observedIdentity: unverifiedIdentity(),
           error: {
             code: interrupted ? "broker_shutdown" : timedOut ? "timed_out" : "cancelled",
-            message: interrupted ? "The broker shut down while the invocation was active." : timedOut ? "The invocation exceeded its timeout." : "The invocation was cancelled.",
+            message: interrupted
+              ? "The broker shut down while the invocation was active."
+              : timedOut
+                ? "The invocation exceeded its timeout."
+                : "The invocation was cancelled.",
           },
         });
       } else {
@@ -697,10 +732,15 @@ export class Broker {
         return { value: undefined, changed: false };
       }
       const timestamp = new Date().toISOString();
-      const withEvent = this.#appendBridgeEvent(current, "lifecycle", {
-        state: "cancelling",
-        reason: "timeout",
-      }, timestamp);
+      const withEvent = this.#appendBridgeEvent(
+        current,
+        "lifecycle",
+        {
+          state: "cancelling",
+          reason: "timeout",
+        },
+        timestamp,
+      );
       this.#records.set(invocationId, {
         ...withEvent,
         state: "cancelling",
@@ -726,17 +766,21 @@ export class Broker {
         timestamp,
         category: event.category,
         ...(event.content === undefined ? {} : { content: event.content }),
-        ...(event.data === undefined && event.inputRequest === undefined ? {} : {
-          data: {
-            ...(event.data ?? {}),
-            ...(event.inputRequest === undefined ? {} : {
-              requestId: event.inputRequest.requestId,
-              kind: event.inputRequest.kind,
-              prompt: event.inputRequest.prompt,
-              ...(event.inputRequest.toolName === undefined ? {} : { toolName: event.inputRequest.toolName }),
+        ...(event.data === undefined && event.inputRequest === undefined
+          ? {}
+          : {
+              data: {
+                ...(event.data ?? {}),
+                ...(event.inputRequest === undefined
+                  ? {}
+                  : {
+                      requestId: event.inputRequest.requestId,
+                      kind: event.inputRequest.kind,
+                      prompt: event.inputRequest.prompt,
+                      ...(event.inputRequest.toolName === undefined ? {} : { toolName: event.inputRequest.toolName }),
+                    }),
+              },
             }),
-          },
-        }),
         provenance: { source: "adapter", adapter: current.resolvedRoute.adapter },
         ...(event.native === undefined ? {} : { native: persistedNative(event.native, this.#diagnosticMode) }),
       };
@@ -747,12 +791,17 @@ export class Broker {
         events: [...current.events, appended],
       };
       for (const effect of event.effects ?? []) {
-        updated = this.#appendBridgeEvent(updated, "effect", {
-          path: effect.path,
-          ...(effect.previousPath === undefined ? {} : { previousPath: effect.previousPath }),
-          kind: effect.kind,
-          evidence: effect.evidence,
-        }, timestamp);
+        updated = this.#appendBridgeEvent(
+          updated,
+          "effect",
+          {
+            path: effect.path,
+            ...(effect.previousPath === undefined ? {} : { previousPath: effect.previousPath }),
+            kind: effect.kind,
+            evidence: effect.evidence,
+          },
+          timestamp,
+        );
       }
       this.#records.set(invocationId, updated);
       return { value: undefined, changed: true };
@@ -769,9 +818,7 @@ export class Broker {
           retryable: false,
         });
       }
-      const pendingRequest = [...current.events]
-        .reverse()
-        .find((event) => event.category === "input_required");
+      const pendingRequest = [...current.events].reverse().find((event) => event.category === "input_required");
       if (pendingRequest?.data?.requestId !== response.requestId) {
         throw new BridgeError({
           code: "invalid_request",
@@ -781,12 +828,17 @@ export class Broker {
         });
       }
       const timestamp = new Date().toISOString();
-      const withEvent = this.#appendBridgeEvent(current, "lifecycle", {
-        state: "running",
-        reason: "caller_response",
-        requestId: response.requestId,
-        decision: response.decision,
-      }, timestamp);
+      const withEvent = this.#appendBridgeEvent(
+        current,
+        "lifecycle",
+        {
+          state: "running",
+          reason: "caller_response",
+          requestId: response.requestId,
+          decision: response.decision,
+        },
+        timestamp,
+      );
       this.#records.set(response.invocationId, {
         ...withEvent,
         state: "running",
@@ -808,7 +860,11 @@ export class Broker {
     return result;
   }
 
-  async #awaitInput(invocationId: string, requestId: string, signal?: AbortSignal): Promise<Pick<InputResponse, "decision">> {
+  async #awaitInput(
+    invocationId: string,
+    requestId: string,
+    signal?: AbortSignal,
+  ): Promise<Pick<InputResponse, "decision">> {
     const key = `${invocationId}:${requestId}`;
     const response = this.#inputResponses.get(key);
     if (response !== undefined) {
@@ -842,15 +898,19 @@ export class Broker {
     },
   ): Promise<void> {
     const current = this.#records.get(invocationId);
-    const afterSnapshot = current === undefined
-      ? undefined
-      : await captureWorkspaceSnapshot(current.request.workingDirectory, this.#effectLimits);
-    const observed = await observeWorkspaceEffects(this.#beforeSnapshots.get(invocationId), afterSnapshot ?? {
-      root: current?.request.workingDirectory ?? "",
-      files: new Map(),
-      complete: false,
-      diagnostics: ["Invocation record was not available for effect observation."],
-    });
+    const afterSnapshot =
+      current === undefined
+        ? undefined
+        : await captureWorkspaceSnapshot(current.request.workingDirectory, this.#effectLimits);
+    const observed = await observeWorkspaceEffects(
+      this.#beforeSnapshots.get(invocationId),
+      afterSnapshot ?? {
+        root: current?.request.workingDirectory ?? "",
+        files: new Map(),
+        complete: false,
+        diagnostics: ["Invocation record was not available for effect observation."],
+      },
+    );
     await this.#mutate(() => {
       const current = this.#requireRecord(invocationId);
       if (TERMINAL_STATES.has(current.state)) {
@@ -860,12 +920,17 @@ export class Broker {
       const allEffects = [...(result.effects ?? []), ...observed.effects];
       let withEvent = current;
       for (const effect of observed.effects) {
-        withEvent = this.#appendBridgeEvent(withEvent, "effect", {
-          path: effect.path,
-          ...(effect.previousPath === undefined ? {} : { previousPath: effect.previousPath }),
-          kind: effect.kind,
-          evidence: effect.evidence,
-        }, completedAt);
+        withEvent = this.#appendBridgeEvent(
+          withEvent,
+          "effect",
+          {
+            path: effect.path,
+            ...(effect.previousPath === undefined ? {} : { previousPath: effect.previousPath }),
+            kind: effect.kind,
+            evidence: effect.evidence,
+          },
+          completedAt,
+        );
       }
       withEvent = this.#appendBridgeEvent(withEvent, "lifecycle", { state: status }, completedAt);
       const outcome = this.#outcome(withEvent, status, completedAt, {
@@ -902,9 +967,8 @@ export class Broker {
       readonly error?: InvocationOutcome["error"];
     },
   ): InvocationOutcome {
-    const durationMs = record.startedAt === undefined
-      ? undefined
-      : Math.max(0, Date.parse(completedAt) - Date.parse(record.startedAt));
+    const durationMs =
+      record.startedAt === undefined ? undefined : Math.max(0, Date.parse(completedAt) - Date.parse(record.startedAt));
     return {
       schemaVersion: SCHEMA_VERSION,
       invocationId: record.invocationId,
@@ -1021,7 +1085,10 @@ export class Broker {
       }
       return result.value;
     });
-    this.#mutationTail = scheduled.then(() => undefined, () => undefined);
+    this.#mutationTail = scheduled.then(
+      () => undefined,
+      () => undefined,
+    );
     return scheduled;
   }
 
@@ -1029,8 +1096,11 @@ export class Broker {
     const now = Date.now();
     const candidates = [...this.#records.values()]
       .filter((record) => TERMINAL_STATES.has(record.state) && record.outcome !== undefined)
-      .sort((left, right) => Date.parse(left.outcome?.completedAt ?? left.updatedAt)
-        - Date.parse(right.outcome?.completedAt ?? right.updatedAt));
+      .sort(
+        (left, right) =>
+          Date.parse(left.outcome?.completedAt ?? left.updatedAt) -
+          Date.parse(right.outcome?.completedAt ?? right.updatedAt),
+      );
     const evict = (record: InvocationRecord): void => {
       this.#records.delete(record.invocationId);
       this.#tombstones.set(record.invocationId, {
@@ -1047,11 +1117,19 @@ export class Broker {
       }
     }
 
-    const serializedSize = (): number => Buffer.byteLength(JSON.stringify({
-      storageVersion: 1,
-      invocations: [...this.#records.values()],
-      tombstones: [...this.#tombstones.values()],
-    }, null, 2), "utf8");
+    const serializedSize = (): number =>
+      Buffer.byteLength(
+        JSON.stringify(
+          {
+            storageVersion: 1,
+            invocations: [...this.#records.values()],
+            tombstones: [...this.#tombstones.values()],
+          },
+          null,
+          2,
+        ),
+        "utf8",
+      );
     for (const record of candidates) {
       if (!this.#records.has(record.invocationId) || serializedSize() <= this.#retention.maxBytes) {
         continue;

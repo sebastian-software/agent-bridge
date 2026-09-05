@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { execFile as execFileCallback, spawn, type ChildProcess } from "node:child_process";
+import { type ChildProcess, execFile as execFileCallback, spawn } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { promisify } from "node:util";
 import test from "node:test";
+import { promisify } from "node:util";
 
 import { IpcClient } from "../src/ipc.js";
 
@@ -46,7 +46,12 @@ function childExit(child: ChildProcess): Promise<void> {
 
 function invocationIdFrom(stdout: string): string {
   const value = JSON.parse(stdout) as unknown;
-  if (typeof value !== "object" || value === null || !("invocationId" in value) || typeof value.invocationId !== "string") {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("invocationId" in value) ||
+    typeof value.invocationId !== "string"
+  ) {
     assert.fail("Expected a CLI result with an invocationId.");
   }
   return value.invocationId;
@@ -81,32 +86,30 @@ test("CLI discovers, starts, follows, and inspects through the Unix socket", asy
       assert.equal(failure.error?.code, "invalid_request");
     }
 
-    const started = await execFile(process.execPath, [
-      cliPath,
-      "start",
-      "--provider",
-      "agent-bridge",
-      "--model",
-      "fake-echo",
-      "--via",
-      "fake",
-      "--text",
-      "hello from CLI",
-      "--cwd",
-      root,
-      "--correlation-id",
-      "cli-test",
-      "--json",
-    ], { env });
+    const started = await execFile(
+      process.execPath,
+      [
+        cliPath,
+        "start",
+        "--provider",
+        "agent-bridge",
+        "--model",
+        "fake-echo",
+        "--via",
+        "fake",
+        "--text",
+        "hello from CLI",
+        "--cwd",
+        root,
+        "--correlation-id",
+        "cli-test",
+        "--json",
+      ],
+      { env },
+    );
     const invocationId = invocationIdFrom(started.stdout);
 
-    const followed = await execFile(process.execPath, [
-      cliPath,
-      "events",
-      invocationId,
-      "--follow",
-      "--json",
-    ], { env });
+    const followed = await execFile(process.execPath, [cliPath, "events", invocationId, "--follow", "--json"], { env });
     const eventLines = followed.stdout.trim().split("\n").filter(Boolean);
     assert.ok(eventLines.length >= 5);
     const terminalEvent = JSON.parse(eventLines.at(-1) ?? "null") as { data?: { state?: string } };
@@ -128,24 +131,34 @@ test("CLI discovers, starts, follows, and inspects through the Unix socket", asy
     const listed = await execFile(process.execPath, [cliPath, "list", "--correlation", "cli-test", "--json"], { env });
     assert.equal((JSON.parse(listed.stdout) as { invocations?: readonly unknown[] }).invocations?.length, 1);
 
-    const oneShot = await execFile(process.execPath, [
-      cliPath,
-      "run",
-      "--provider",
-      "agent-bridge",
-      "--model",
-      "fake-echo",
-      "--via",
-      "fake",
-      "--text",
-      "one shot",
-      "--cwd",
-      root,
-      "--json",
-    ], { env });
-    const oneShotLines = oneShot.stdout.trim().split("\n").filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>);
+    const oneShot = await execFile(
+      process.execPath,
+      [
+        cliPath,
+        "run",
+        "--provider",
+        "agent-bridge",
+        "--model",
+        "fake-echo",
+        "--via",
+        "fake",
+        "--text",
+        "one shot",
+        "--cwd",
+        root,
+        "--json",
+      ],
+      { env },
+    );
+    const oneShotLines = oneShot.stdout
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
     assert.ok(oneShotLines.some((line) => line.category === "lifecycle"));
-    assert.equal((oneShotLines.at(-1)?.outcome as { status?: string }).status, "succeeded");
+    const oneShotOutcome = oneShotLines.at(-1)?.outcome;
+    assert.ok(typeof oneShotOutcome === "object" && oneShotOutcome !== null && "status" in oneShotOutcome);
+    assert.equal(oneShotOutcome.status, "succeeded");
 
     const version = await execFile(process.execPath, [cliPath, "--version"], { env });
     assert.equal(version.stdout.trim(), "0.0.0");
@@ -167,19 +180,23 @@ test("a real broker crash is reconciled as interrupted after restart", async () 
   let broker = spawn(process.execPath, [cliPath, "broker", "serve"], { env, stdio: "ignore" });
   try {
     await waitForBroker(new IpcClient(socketPath));
-    const started = await execFile(process.execPath, [
-      cliPath,
-      "start",
-      "--provider",
-      "agent-bridge",
-      "--model",
-      "fake-slow",
-      "--text",
-      "survive caller disconnect",
-      "--cwd",
-      root,
-      "--json",
-    ], { env });
+    const started = await execFile(
+      process.execPath,
+      [
+        cliPath,
+        "start",
+        "--provider",
+        "agent-bridge",
+        "--model",
+        "fake-slow",
+        "--text",
+        "survive caller disconnect",
+        "--cwd",
+        root,
+        "--json",
+      ],
+      { env },
+    );
     const invocationId = invocationIdFrom(started.stdout);
 
     broker.kill("SIGKILL");

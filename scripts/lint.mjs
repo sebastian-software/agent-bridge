@@ -11,7 +11,7 @@ async function filesUnder(directory) {
   for (const entry of entries) {
     const path = join(directory, entry.name);
     if (entry.isDirectory()) {
-      files.push(...await filesUnder(path));
+      files.push(...(await filesUnder(path)));
     } else if (extensions.has(path.slice(path.lastIndexOf(".")))) {
       files.push(path);
     }

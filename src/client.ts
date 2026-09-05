@@ -1,14 +1,13 @@
 import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 
 import type {
   EventsResult,
+  InvocationEvent,
   InvocationListResult,
   InvocationOutcome,
   InvocationState,
-  InvocationSummary,
-  InvocationEvent,
   RouteDescriptor,
   StartInvocationRequest,
   StartInvocationResult,
@@ -146,7 +145,10 @@ export class AgentBridgeClient {
     return this.#request("invocation.get", { invocationId });
   }
 
-  events(invocationId: string, options: { readonly after?: string; readonly waitMs?: number } = {}): Promise<EventsResult> {
+  events(
+    invocationId: string,
+    options: { readonly after?: string; readonly waitMs?: number } = {},
+  ): Promise<EventsResult> {
     return this.#request("invocation.events", {
       invocationId,
       ...(options.after === undefined ? {} : { after: options.after }),
@@ -187,13 +189,15 @@ export class AgentBridgeClient {
     return this.#request("invocation.cancel", { invocationId });
   }
 
-  list(options: {
-    readonly state?: InvocationState;
-    readonly callerCorrelationId?: string;
-    readonly since?: string;
-    readonly limit?: number;
-    readonly includeTombstones?: boolean;
-  } = {}): Promise<InvocationListResult> {
+  list(
+    options: {
+      readonly state?: InvocationState;
+      readonly callerCorrelationId?: string;
+      readonly since?: string;
+      readonly limit?: number;
+      readonly includeTombstones?: boolean;
+    } = {},
+  ): Promise<InvocationListResult> {
     return this.#request("invocation.list", {
       ...(options.state === undefined ? {} : { state: options.state }),
       ...(options.callerCorrelationId === undefined ? {} : { callerCorrelationId: options.callerCorrelationId }),
@@ -226,7 +230,11 @@ export class AgentBridgeClient {
     return this.result(started.invocationId);
   }
 
-  async #request<K extends keyof OperationResultMap>(operation: K, params: unknown, allowAutostart = this.#autostart): Promise<OperationResultMap[K]> {
+  async #request<K extends keyof OperationResultMap>(
+    operation: K,
+    params: unknown,
+    allowAutostart = this.#autostart,
+  ): Promise<OperationResultMap[K]> {
     const client = new IpcClient(this.#socketPath);
     try {
       if (operation !== "system.status" && operation !== "system.shutdown") {
@@ -244,9 +252,14 @@ export class AgentBridgeClient {
           await delay(100);
         }
       }
-      return await client.request(operation, params) as OperationResultMap[K];
+      return (await client.request(operation, params)) as OperationResultMap[K];
     } catch (error) {
-      if (!allowAutostart || !(error instanceof BridgeError) || error.code !== "broker_unavailable" || !error.retryable) {
+      if (
+        !allowAutostart ||
+        !(error instanceof BridgeError) ||
+        error.code !== "broker_unavailable" ||
+        !error.retryable
+      ) {
         throw error;
       }
     }
@@ -262,7 +275,7 @@ export class AgentBridgeClient {
     for (let attempt = 0; attempt < 50; attempt += 1) {
       await delay(50);
       try {
-        return await client.request(operation, params) as OperationResultMap[K];
+        return (await client.request(operation, params)) as OperationResultMap[K];
       } catch (error) {
         lastError = error;
         if (!(error instanceof BridgeError) || error.code !== "broker_unavailable") {
@@ -270,11 +283,14 @@ export class AgentBridgeClient {
         }
       }
     }
-    throw new BridgeError({
-      code: "broker_unavailable",
-      message: `The broker did not become ready at ${this.#socketPath}.`,
-      retryable: true,
-    }, { cause: lastError });
+    throw new BridgeError(
+      {
+        code: "broker_unavailable",
+        message: `The broker did not become ready at ${this.#socketPath}.`,
+        retryable: true,
+      },
+      { cause: lastError },
+    );
   }
 }
 

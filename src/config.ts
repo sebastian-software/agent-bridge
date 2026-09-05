@@ -1,7 +1,6 @@
 import { readFile } from "node:fs/promises";
-
-import { defaultCatalogPath } from "./model-catalog.js";
 import { BridgeError } from "./errors.js";
+import { defaultCatalogPath } from "./model-catalog.js";
 
 export type ConfigSource = "default" | "config" | "env" | "cli";
 
@@ -31,7 +30,12 @@ export const DEFAULT_BROKER_CONFIG: BrokerConfigValues = {
 };
 
 function invalid(message: string, details?: Readonly<Record<string, unknown>>): never {
-  throw new BridgeError({ code: "invalid_request", message, retryable: false, ...(details === undefined ? {} : { details }) });
+  throw new BridgeError({
+    code: "invalid_request",
+    message,
+    retryable: false,
+    ...(details === undefined ? {} : { details }),
+  });
 }
 
 function object(value: unknown, field: string): Record<string, unknown> {
@@ -83,13 +87,27 @@ function sourceValues(root: Record<string, unknown>, configPath: string): Partia
   const retention = source.retention === undefined ? {} : object(source.retention, "config.broker.retention");
   const effects = source.effects === undefined ? {} : object(source.effects, "config.broker.effects");
   return {
-    ...(retention.completedDays === undefined ? {} : { retentionCompletedDays: numberValue(retention.completedDays, `${configPath}: retention.completedDays`, 0) }),
-    ...(retention.maxBytes === undefined ? {} : { retentionMaxBytes: numberValue(retention.maxBytes, `${configPath}: retention.maxBytes`, 1) }),
-    ...(source.diagnosticMode === undefined ? {} : { diagnosticMode: booleanValue(source.diagnosticMode, `${configPath}: diagnosticMode`) }),
-    ...(source.idleShutdownMinutes === undefined ? {} : { idleShutdownMinutes: numberValue(source.idleShutdownMinutes, `${configPath}: idleShutdownMinutes`, 0) }),
-    ...(effects.maxFiles === undefined ? {} : { effectsMaxFiles: numberValue(effects.maxFiles, `${configPath}: effects.maxFiles`, 1) }),
-    ...(effects.maxBytes === undefined ? {} : { effectsMaxBytes: numberValue(effects.maxBytes, `${configPath}: effects.maxBytes`, 1) }),
-    ...(source.terminationGraceMs === undefined ? {} : { terminationGraceMs: numberValue(source.terminationGraceMs, `${configPath}: terminationGraceMs`, 1) }),
+    ...(retention.completedDays === undefined
+      ? {}
+      : { retentionCompletedDays: numberValue(retention.completedDays, `${configPath}: retention.completedDays`, 0) }),
+    ...(retention.maxBytes === undefined
+      ? {}
+      : { retentionMaxBytes: numberValue(retention.maxBytes, `${configPath}: retention.maxBytes`, 1) }),
+    ...(source.diagnosticMode === undefined
+      ? {}
+      : { diagnosticMode: booleanValue(source.diagnosticMode, `${configPath}: diagnosticMode`) }),
+    ...(source.idleShutdownMinutes === undefined
+      ? {}
+      : { idleShutdownMinutes: numberValue(source.idleShutdownMinutes, `${configPath}: idleShutdownMinutes`, 0) }),
+    ...(effects.maxFiles === undefined
+      ? {}
+      : { effectsMaxFiles: numberValue(effects.maxFiles, `${configPath}: effects.maxFiles`, 1) }),
+    ...(effects.maxBytes === undefined
+      ? {}
+      : { effectsMaxBytes: numberValue(effects.maxBytes, `${configPath}: effects.maxBytes`, 1) }),
+    ...(source.terminationGraceMs === undefined
+      ? {}
+      : { terminationGraceMs: numberValue(source.terminationGraceMs, `${configPath}: terminationGraceMs`, 1) }),
   };
 }
 
@@ -111,7 +129,10 @@ export async function loadBrokerConfig(cli: Partial<BrokerConfigValues> = {}): P
       if (error instanceof BridgeError) {
         throw error;
       }
-      throw new BridgeError({ code: "invalid_request", message: `Config file ${configPath} could not be read.`, retryable: false }, { cause: error });
+      throw new BridgeError(
+        { code: "invalid_request", message: `Config file ${configPath} could not be read.`, retryable: false },
+        { cause: error },
+      );
     }
   }
 
@@ -131,12 +152,21 @@ export async function loadBrokerConfig(cli: Partial<BrokerConfigValues> = {}): P
   if (effectsMaxBytes !== undefined) environment.effectsMaxBytes = effectsMaxBytes;
   if (terminationGraceMs !== undefined) environment.terminationGraceMs = terminationGraceMs;
   const values = { ...DEFAULT_BROKER_CONFIG, ...fileValues, ...environment, ...cli };
-  const sources = Object.fromEntries((Object.keys(DEFAULT_BROKER_CONFIG) as (keyof BrokerConfigValues)[]).map((key) => [
-    key,
-    cli[key] !== undefined ? "cli" : environment[key] !== undefined ? "env" : fileValues[key] !== undefined ? "config" : "default",
-  ])) as Record<keyof BrokerConfigValues, ConfigSource>;
+  const sources = Object.fromEntries(
+    (Object.keys(DEFAULT_BROKER_CONFIG) as (keyof BrokerConfigValues)[]).map((key) => [
+      key,
+      cli[key] !== undefined
+        ? "cli"
+        : environment[key] !== undefined
+          ? "env"
+          : fileValues[key] !== undefined
+            ? "config"
+            : "default",
+    ]),
+  ) as Record<keyof BrokerConfigValues, ConfigSource>;
   for (const [key, value] of Object.entries(values)) {
-    const minimum = key === "retentionCompletedDays" || key === "idleShutdownMinutes" ? 0 : key === "diagnosticMode" ? undefined : 1;
+    const minimum =
+      key === "retentionCompletedDays" || key === "idleShutdownMinutes" ? 0 : key === "diagnosticMode" ? undefined : 1;
     if (key === "diagnosticMode") {
       booleanValue(value, key);
     } else {
@@ -148,6 +178,8 @@ export async function loadBrokerConfig(cli: Partial<BrokerConfigValues> = {}): P
 
 export function brokerConfigFromValues(values: Partial<BrokerConfigValues> = {}): BrokerConfig {
   const merged = { ...DEFAULT_BROKER_CONFIG, ...values };
-  const sources = Object.fromEntries((Object.keys(DEFAULT_BROKER_CONFIG) as (keyof BrokerConfigValues)[]).map((key) => [key, "default"])) as Record<keyof BrokerConfigValues, ConfigSource>;
+  const sources = Object.fromEntries(
+    (Object.keys(DEFAULT_BROKER_CONFIG) as (keyof BrokerConfigValues)[]).map((key) => [key, "default"]),
+  ) as Record<keyof BrokerConfigValues, ConfigSource>;
   return { ...merged, sources, configPath: defaultCatalogPath() };
 }

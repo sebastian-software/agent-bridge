@@ -9,18 +9,8 @@ export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue
 export type Assurance = "isolated" | "native" | "none";
 export type EvidenceStatus = "inferred" | "reported" | "unverified" | "verified";
 export type InteractionStrategy = "deny" | "orchestrator" | "unattended";
-export type InvocationState =
-  | "queued"
-  | "running"
-  | "waiting_for_input"
-  | "cancelling"
-  | TerminalStatus;
-export type TerminalStatus =
-  | "cancelled"
-  | "failed"
-  | "interrupted"
-  | "succeeded"
-  | "timed_out";
+export type InvocationState = "queued" | "running" | "waiting_for_input" | "cancelling" | TerminalStatus;
+export type TerminalStatus = "cancelled" | "failed" | "interrupted" | "succeeded" | "timed_out";
 
 export const TERMINAL_STATES: ReadonlySet<InvocationState> = new Set([
   "cancelled",
@@ -438,30 +428,43 @@ export function parseOperationRequest(value: unknown): OperationRequest {
 export function parseStartInvocationRequest(value: unknown): StartInvocationRequest {
   const source = record(value, "params");
   const selectorSource = record(source.selector, "params.selector");
-  const policySource = source.requestedPolicy === undefined
-    ? {}
-    : record(source.requestedPolicy, "params.requestedPolicy");
+  const policySource =
+    source.requestedPolicy === undefined ? {} : record(source.requestedPolicy, "params.requestedPolicy");
   if (!Array.isArray(source.input) || source.input.length === 0) {
     invalid("params.input must contain at least one content part.");
   }
 
   const effort = optionalString(selectorSource.effort, "params.selector.effort");
   const via = optionalString(selectorSource.via, "params.selector.via");
-  const minimumObservedEvidence = selectorSource.minimumObservedEvidence === undefined
-    ? undefined
-    : oneOf(selectorSource.minimumObservedEvidence, "params.selector.minimumObservedEvidence", ["unverified", "inferred", "reported", "verified"] as const);
-  const filesystem = policySource.filesystem === undefined
-    ? undefined
-    : oneOf(policySource.filesystem, "params.requestedPolicy.filesystem", ["inherit", "read-only", "workspace-write"] as const);
-  const commands = policySource.commands === undefined
-    ? undefined
-    : oneOf(policySource.commands, "params.requestedPolicy.commands", ["inherit", "deny", "allow"] as const);
-  const network = policySource.network === undefined
-    ? undefined
-    : oneOf(policySource.network, "params.requestedPolicy.network", ["inherit", "deny", "allow"] as const);
-  const additionalDirectories = policySource.additionalDirectories === undefined
-    ? undefined
-    : stringArray(policySource.additionalDirectories, "params.requestedPolicy.additionalDirectories");
+  const minimumObservedEvidence =
+    selectorSource.minimumObservedEvidence === undefined
+      ? undefined
+      : oneOf(selectorSource.minimumObservedEvidence, "params.selector.minimumObservedEvidence", [
+          "unverified",
+          "inferred",
+          "reported",
+          "verified",
+        ] as const);
+  const filesystem =
+    policySource.filesystem === undefined
+      ? undefined
+      : oneOf(policySource.filesystem, "params.requestedPolicy.filesystem", [
+          "inherit",
+          "read-only",
+          "workspace-write",
+        ] as const);
+  const commands =
+    policySource.commands === undefined
+      ? undefined
+      : oneOf(policySource.commands, "params.requestedPolicy.commands", ["inherit", "deny", "allow"] as const);
+  const network =
+    policySource.network === undefined
+      ? undefined
+      : oneOf(policySource.network, "params.requestedPolicy.network", ["inherit", "deny", "allow"] as const);
+  const additionalDirectories =
+    policySource.additionalDirectories === undefined
+      ? undefined
+      : stringArray(policySource.additionalDirectories, "params.requestedPolicy.additionalDirectories");
   const timeoutMs = optionalPositiveInteger(source.timeoutMs, "params.timeoutMs");
   const callerCorrelationId = optionalString(source.callerCorrelationId, "params.callerCorrelationId");
   const idempotencyKey = optionalString(source.idempotencyKey, "params.idempotencyKey");
@@ -472,24 +475,35 @@ export function parseStartInvocationRequest(value: unknown): StartInvocationRequ
       model: stringValue(selectorSource.model, "params.selector.model", { nonEmpty: true }),
       ...(effort === undefined ? {} : { effort }),
       ...(via === undefined ? {} : { via }),
-      requiredCapabilities: selectorSource.requiredCapabilities === undefined
-        ? []
-        : stringArray(selectorSource.requiredCapabilities, "params.selector.requiredCapabilities"),
+      requiredCapabilities:
+        selectorSource.requiredCapabilities === undefined
+          ? []
+          : stringArray(selectorSource.requiredCapabilities, "params.selector.requiredCapabilities"),
       ...(minimumObservedEvidence === undefined ? {} : { minimumObservedEvidence }),
     },
     input: parseContentParts(source.input, "params.input"),
     workingDirectory: stringValue(source.workingDirectory, "params.workingDirectory", { nonEmpty: true }),
-    interactionStrategy: source.interactionStrategy === undefined
-      ? "orchestrator"
-      : oneOf(source.interactionStrategy, "params.interactionStrategy", ["orchestrator", "deny", "unattended"] as const),
+    interactionStrategy:
+      source.interactionStrategy === undefined
+        ? "orchestrator"
+        : oneOf(source.interactionStrategy, "params.interactionStrategy", [
+            "orchestrator",
+            "deny",
+            "unattended",
+          ] as const),
     requestedPolicy: {
       ...(filesystem === undefined ? {} : { filesystem }),
       ...(commands === undefined ? {} : { commands }),
       ...(network === undefined ? {} : { network }),
       ...(additionalDirectories === undefined ? {} : { additionalDirectories }),
-      minimumAssurance: policySource.minimumAssurance === undefined
-        ? "none"
-        : oneOf(policySource.minimumAssurance, "params.requestedPolicy.minimumAssurance", ["none", "native", "isolated"] as const),
+      minimumAssurance:
+        policySource.minimumAssurance === undefined
+          ? "none"
+          : oneOf(policySource.minimumAssurance, "params.requestedPolicy.minimumAssurance", [
+              "none",
+              "native",
+              "isolated",
+            ] as const),
     },
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
     ...(callerCorrelationId === undefined ? {} : { callerCorrelationId }),
@@ -577,19 +591,20 @@ export function parseInvocationListParams(value: unknown): {
   readonly includeTombstones: boolean;
 } {
   const source = record(value, "params");
-  const state = source.state === undefined
-    ? undefined
-    : oneOf(source.state, "params.state", [
-      "queued",
-      "running",
-      "waiting_for_input",
-      "cancelling",
-      "cancelled",
-      "failed",
-      "interrupted",
-      "succeeded",
-      "timed_out",
-    ] as const);
+  const state =
+    source.state === undefined
+      ? undefined
+      : oneOf(source.state, "params.state", [
+          "queued",
+          "running",
+          "waiting_for_input",
+          "cancelling",
+          "cancelled",
+          "failed",
+          "interrupted",
+          "succeeded",
+          "timed_out",
+        ] as const);
   const callerCorrelationId = optionalString(source.callerCorrelationId, "params.callerCorrelationId");
   const since = optionalString(source.since, "params.since");
   if (since !== undefined && !Number.isFinite(Date.parse(since))) {

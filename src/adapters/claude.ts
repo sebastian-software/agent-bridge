@@ -1,7 +1,14 @@
-import type { JsonValue, RequestedPolicy, RouteDescriptor, StartInvocationRequest, Usage, WorkspaceEffect } from "../contract.js";
+import type {
+  JsonValue,
+  RequestedPolicy,
+  RouteDescriptor,
+  StartInvocationRequest,
+  Usage,
+  WorkspaceEffect,
+} from "../contract.js";
 import { BridgeError } from "../errors.js";
-import { discoverManifestRoutes, type DiscoveryProbe } from "./discovery.js";
-import { ProcessAdapter, promptFor, type CommandSpec } from "./process.js";
+import { type DiscoveryProbe, discoverManifestRoutes } from "./discovery.js";
+import { type CommandSpec, ProcessAdapter, promptFor } from "./process.js";
 import type { AdapterEvent, AdapterRunContext } from "./types.js";
 
 const MANIFEST = {
@@ -19,7 +26,8 @@ const MANIFEST = {
     capabilities: ["core.input.text", "core.output.text", "core.streaming.events"],
     interactionStrategies: ["deny", "orchestrator", "unattended"] as const,
   })),
-  qualificationClaim: "Claude Code v2 native print-mode stream-json contract with model, effort, and permission mapping.",
+  qualificationClaim:
+    "Claude Code v2 native print-mode stream-json contract with model, effort, and permission mapping.",
   policySupport: {
     filesystem: ["read-only", "workspace-write"],
     commands: ["allow", "deny"],
@@ -110,14 +118,17 @@ function usageFrom(value: unknown): Usage | undefined {
     return undefined;
   }
   const source = value as Record<string, unknown>;
-  const numberValue = (candidate: unknown): number | undefined => typeof candidate === "number" && Number.isFinite(candidate) && candidate >= 0 ? candidate : undefined;
+  const numberValue = (candidate: unknown): number | undefined =>
+    typeof candidate === "number" && Number.isFinite(candidate) && candidate >= 0 ? candidate : undefined;
   const inputTokens = numberValue(source.input_tokens);
   const outputTokens = numberValue(source.output_tokens);
   const cacheReadTokens = numberValue(source.cache_read_input_tokens);
   const cacheWriteTokens = numberValue(source.cache_creation_input_tokens);
   const costUsd = numberValue(source.total_cost_usd);
   const turns = numberValue(source.num_turns);
-  if ([inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, costUsd, turns].every((item) => item === undefined)) {
+  if (
+    [inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, costUsd, turns].every((item) => item === undefined)
+  ) {
     return undefined;
   }
   return {
@@ -140,11 +151,13 @@ function effectFromTool(block: unknown): WorkspaceEffect | undefined {
   if (source.type !== "tool_use" || !["Edit", "MultiEdit", "Write", "NotebookEdit"].includes(String(source.name))) {
     return undefined;
   }
-  const input = typeof source.input === "object" && source.input !== null && !Array.isArray(source.input)
-    ? source.input as Record<string, unknown>
-    : {};
-  const path = [input.file_path, input.path, input.notebook_path]
-    .find((candidate): candidate is string => typeof candidate === "string" && candidate !== "");
+  const input =
+    typeof source.input === "object" && source.input !== null && !Array.isArray(source.input)
+      ? (source.input as Record<string, unknown>)
+      : {};
+  const path = [input.file_path, input.path, input.notebook_path].find(
+    (candidate): candidate is string => typeof candidate === "string" && candidate !== "",
+  );
   return path === undefined ? undefined : { path, kind: "modified", evidence: "harness-reported" };
 }
 
@@ -160,7 +173,10 @@ function textFromMessage(value: unknown): string | undefined {
     return undefined;
   }
   const text = content
-    .filter((part): part is { text: string } => typeof part === "object" && part !== null && "text" in part && typeof part.text === "string")
+    .filter(
+      (part): part is { text: string } =>
+        typeof part === "object" && part !== null && "text" in part && typeof part.text === "string",
+    )
     .map((part) => part.text)
     .join("");
   return text === "" ? undefined : text;
@@ -208,7 +224,10 @@ export class ClaudeAdapter extends ProcessAdapter {
 
   protected normalizeNative(
     value: Record<string, JsonValue>,
-    state: { identity: import("../contract.js").ObservedIdentity; content: { add(text: string): void; setFinal(text: string): void } },
+    state: {
+      identity: import("../contract.js").ObservedIdentity;
+      content: { add(text: string): void; setFinal(text: string): void };
+    },
   ): AdapterEvent | undefined {
     const type = typeof value.type === "string" ? value.type : "unknown";
     const sessionId = typeof value.session_id === "string" ? value.session_id : undefined;
@@ -217,20 +236,26 @@ export class ClaudeAdapter extends ProcessAdapter {
       state.identity = {
         ...state.identity,
         ...(model === undefined ? {} : { model: { value: model, evidence: "reported", source: "claude-stream" } }),
-        ...(sessionId === undefined ? {} : { nativeSessionId: { value: sessionId, evidence: "reported", source: "claude-stream" } }),
+        ...(sessionId === undefined
+          ? {}
+          : { nativeSessionId: { value: sessionId, evidence: "reported", source: "claude-stream" } }),
       };
     }
     if (type === "control_request") {
-      const request = typeof value.request === "object" && value.request !== null && !Array.isArray(value.request)
-        ? value.request as Record<string, unknown>
-        : {};
+      const request =
+        typeof value.request === "object" && value.request !== null && !Array.isArray(value.request)
+          ? (value.request as Record<string, unknown>)
+          : {};
       const requestId = typeof value.request_id === "string" ? value.request_id : undefined;
       const subtype = typeof request.subtype === "string" ? request.subtype : undefined;
       if (requestId !== undefined && subtype === "can_use_tool") {
         const toolName = typeof request.tool_name === "string" ? request.tool_name : undefined;
-        const prompt = typeof request.message === "string"
-          ? request.message
-          : toolName === undefined ? "Claude requested permission to continue." : `Claude requests permission to use ${toolName}.`;
+        const prompt =
+          typeof request.message === "string"
+            ? request.message
+            : toolName === undefined
+              ? "Claude requested permission to continue."
+              : `Claude requests permission to use ${toolName}.`;
         return {
           category: "input_required",
           inputRequest: {
@@ -245,9 +270,13 @@ export class ClaudeAdapter extends ProcessAdapter {
     }
     if (type === "assistant") {
       const text = textFromMessage(value.message);
-      const blocks = typeof value.message === "object" && value.message !== null && "content" in value.message && Array.isArray(value.message.content)
-        ? value.message.content
-        : [];
+      const blocks =
+        typeof value.message === "object" &&
+        value.message !== null &&
+        "content" in value.message &&
+        Array.isArray(value.message.content)
+          ? value.message.content
+          : [];
       const effects = blocks.map(effectFromTool).filter((effect): effect is WorkspaceEffect => effect !== undefined);
       if (text !== undefined) {
         return {
@@ -271,15 +300,20 @@ export class ClaudeAdapter extends ProcessAdapter {
         total_cost_usd: value.total_cost_usd,
         num_turns: value.num_turns,
       });
-      const isError = value.is_error === true || (typeof value.subtype === "string" && value.subtype.startsWith("error_"));
+      const isError =
+        value.is_error === true || (typeof value.subtype === "string" && value.subtype.startsWith("error_"));
       return {
         category: usage === undefined ? "lifecycle" : "usage",
         data: { state: "native_result", ...(usage === undefined ? {} : { usage: { ...usage } }) },
         ...(usage === undefined ? {} : { usage }),
-        ...(isError ? { failure: {
-          code: typeof value.subtype === "string" ? value.subtype : "native_error",
-          message: typeof value.result === "string" ? value.result : "Claude reported an unsuccessful result.",
-        } } : {}),
+        ...(isError
+          ? {
+              failure: {
+                code: typeof value.subtype === "string" ? value.subtype : "native_error",
+                message: typeof value.result === "string" ? value.result : "Claude reported an unsuccessful result.",
+              },
+            }
+          : {}),
         native: value,
       };
     }

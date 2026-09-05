@@ -1,7 +1,7 @@
 import type { JsonValue, RouteDescriptor, StartInvocationRequest, Usage, WorkspaceEffect } from "../contract.js";
 import { BridgeError } from "../errors.js";
-import { discoverManifestRoutes, type DiscoveryProbe } from "./discovery.js";
-import { ProcessAdapter, promptFor, type CommandSpec } from "./process.js";
+import { type DiscoveryProbe, discoverManifestRoutes } from "./discovery.js";
+import { type CommandSpec, ProcessAdapter, promptFor } from "./process.js";
 import type { AdapterEvent, AdapterRunContext } from "./types.js";
 
 const MANIFEST = {
@@ -48,7 +48,10 @@ function resolvePolicy(request: StartInvocationRequest): import("./types.js").Po
     { flag: "-c", value: "approval_policy=never" },
   ];
   if (request.requestedPolicy.network === "allow" || request.requestedPolicy.network === "deny") {
-    controls.push({ flag: "-c", value: `sandbox_workspace_write.network_access=${request.requestedPolicy.network === "allow"}` });
+    controls.push({
+      flag: "-c",
+      value: `sandbox_workspace_write.network_access=${request.requestedPolicy.network === "allow"}`,
+    });
   }
   for (const directory of request.requestedPolicy.additionalDirectories ?? []) {
     controls.push({ flag: "--add-dir", value: directory });
@@ -78,7 +81,8 @@ function usageFrom(value: unknown): Usage | undefined {
     return undefined;
   }
   const source = value as Record<string, unknown>;
-  const numberValue = (candidate: unknown): number | undefined => typeof candidate === "number" && Number.isFinite(candidate) && candidate >= 0 ? candidate : undefined;
+  const numberValue = (candidate: unknown): number | undefined =>
+    typeof candidate === "number" && Number.isFinite(candidate) && candidate >= 0 ? candidate : undefined;
   const inputTokens = numberValue(source.input_tokens);
   const outputTokens = numberValue(source.output_tokens);
   const cacheReadTokens = numberValue(source.cached_input_tokens);
@@ -112,10 +116,16 @@ function fileEffects(item: Record<string, unknown>): readonly WorkspaceEffect[] 
     if (path === undefined || path === "") {
       return [];
     }
-    const rawKind = typeof source.kind === "string" ? source.kind : typeof source.change === "string" ? source.change : "modified";
-    const kind = rawKind === "add" || rawKind === "create" ? "created"
-      : rawKind === "delete" || rawKind === "remove" ? "deleted"
-        : rawKind === "rename" ? "renamed" : "modified";
+    const rawKind =
+      typeof source.kind === "string" ? source.kind : typeof source.change === "string" ? source.change : "modified";
+    const kind =
+      rawKind === "add" || rawKind === "create"
+        ? "created"
+        : rawKind === "delete" || rawKind === "remove"
+          ? "deleted"
+          : rawKind === "rename"
+            ? "renamed"
+            : "modified";
     return [{ path, kind, evidence: "harness-reported" }];
   });
 }
@@ -185,13 +195,16 @@ export class CodexAdapter extends ProcessAdapter {
     const type = typeof value.type === "string" ? value.type : "unknown";
     const threadId = typeof value.thread_id === "string" ? value.thread_id : undefined;
     const model = typeof value.model === "string" ? value.model : undefined;
-    const item = typeof value.item === "object" && value.item !== null ? value.item as Record<string, unknown> : undefined;
+    const item =
+      typeof value.item === "object" && value.item !== null ? (value.item as Record<string, unknown>) : undefined;
     const itemText = item === undefined ? undefined : typeof item.text === "string" ? item.text : undefined;
     if (threadId !== undefined || model !== undefined) {
       state.identity = {
         ...state.identity,
         ...(model === undefined ? {} : { model: { value: model, evidence: "reported", source: "codex-jsonl" } }),
-        ...(threadId === undefined ? {} : { nativeSessionId: { value: threadId, evidence: "reported", source: "codex-jsonl" } }),
+        ...(threadId === undefined
+          ? {}
+          : { nativeSessionId: { value: threadId, evidence: "reported", source: "codex-jsonl" } }),
       };
     }
     const effects = item === undefined ? [] : fileEffects(item);

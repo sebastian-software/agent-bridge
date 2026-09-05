@@ -1,7 +1,7 @@
-import { createInterface } from "node:readline";
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { createInterface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
+import { fileURLToPath } from "node:url";
 
 import { errorDetail } from "./errors.js";
 import { OPERATION_DEFINITIONS, OPERATIONS_VERSION } from "./operations.js";
@@ -21,9 +21,7 @@ interface RpcRequest {
 }
 
 function record(value: unknown): UnknownRecord | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? value as UnknownRecord
-    : undefined;
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as UnknownRecord) : undefined;
 }
 
 function id(value: unknown): RpcId | undefined {
@@ -39,7 +37,9 @@ function operationName(name: unknown): string | undefined {
     return undefined;
   }
   const candidate = name.slice(TOOL_PREFIX.length).replaceAll("_", ".");
-  return OPERATION_DEFINITIONS.some((definition) => definition.name === candidate && definition.availability === "implemented")
+  return OPERATION_DEFINITIONS.some(
+    (definition) => definition.name === candidate && definition.availability === "implemented",
+  )
     ? candidate
     : undefined;
 }
@@ -74,9 +74,11 @@ function inlineSchema(value: unknown, root: Readonly<Record<string, unknown>>): 
       return inlineSchema((defs as Readonly<Record<string, unknown>>)[definition], root);
     }
   }
-  return Object.fromEntries(Object.entries(source)
-    .filter(([key]) => key !== "$defs")
-    .map(([key, entry]) => [key, inlineSchema(entry, root)]));
+  return Object.fromEntries(
+    Object.entries(source)
+      .filter(([key]) => key !== "$defs")
+      .map(([key, entry]) => [key, inlineSchema(entry, root)]),
+  );
 }
 
 const INVOCATION_REQUEST_SCHEMA = inlineSchema(schemaFile("invocation-request"), schemaFile("invocation-request"));
@@ -137,51 +139,64 @@ export class McpServer {
     if (request.method === "initialize") {
       const params = record(request.params);
       const requestedVersion = params?.protocolVersion;
-      const protocolVersion = typeof requestedVersion === "string" && SUPPORTED_PROTOCOL_VERSIONS.has(requestedVersion)
-        ? requestedVersion
-        : MCP_PROTOCOL_VERSION;
-      return JSON.stringify(response(request.id, {
-        protocolVersion,
-        capabilities: { tools: { listChanged: false } },
-        serverInfo: { name: "agent-bridge", version: OPERATIONS_VERSION },
-      }));
+      const protocolVersion =
+        typeof requestedVersion === "string" && SUPPORTED_PROTOCOL_VERSIONS.has(requestedVersion)
+          ? requestedVersion
+          : MCP_PROTOCOL_VERSION;
+      return JSON.stringify(
+        response(request.id, {
+          protocolVersion,
+          capabilities: { tools: { listChanged: false } },
+          serverInfo: { name: "agent-bridge", version: OPERATIONS_VERSION },
+        }),
+      );
     }
     if (request.method === "ping") {
       return JSON.stringify(response(request.id, {}));
     }
     if (request.method === "tools/list") {
-      return JSON.stringify(response(request.id, {
-        tools: OPERATION_DEFINITIONS.filter((definition) => definition.availability === "implemented").map((definition) => ({
-          name: toolName(definition.name),
-          description: definition.summary,
-          inputSchema: toolSchema(definition.name, "input"),
-          outputSchema: toolSchema(definition.name, "output"),
-        })),
-      }));
+      return JSON.stringify(
+        response(request.id, {
+          tools: OPERATION_DEFINITIONS.filter((definition) => definition.availability === "implemented").map(
+            (definition) => ({
+              name: toolName(definition.name),
+              description: definition.summary,
+              inputSchema: toolSchema(definition.name, "input"),
+              outputSchema: toolSchema(definition.name, "output"),
+            }),
+          ),
+        }),
+      );
     }
     if (request.method === "tools/call") {
       const params = record(request.params);
       const operation = operationName(params?.name);
       if (operation === undefined) {
-        return JSON.stringify(response(request.id, {
-          isError: true,
-          content: [{ type: "text", text: "Unknown agent-bridge tool." }],
-        }));
+        return JSON.stringify(
+          response(request.id, {
+            isError: true,
+            content: [{ type: "text", text: "Unknown agent-bridge tool." }],
+          }),
+        );
       }
       const argumentsValue = params?.arguments ?? {};
       try {
         const result = await this.#handleOperation(operation, argumentsValue);
-        return JSON.stringify(response(request.id, {
-          content: [{ type: "text", text: JSON.stringify(result) }],
-          structuredContent: result,
-        }));
+        return JSON.stringify(
+          response(request.id, {
+            content: [{ type: "text", text: JSON.stringify(result) }],
+            structuredContent: result,
+          }),
+        );
       } catch (error) {
         const detail = errorDetail(error);
-        return JSON.stringify(response(request.id, {
-          isError: true,
-          content: [{ type: "text", text: JSON.stringify({ error: detail }) }],
-          structuredContent: { error: detail },
-        }));
+        return JSON.stringify(
+          response(request.id, {
+            isError: true,
+            content: [{ type: "text", text: JSON.stringify({ error: detail }) }],
+            structuredContent: { error: detail },
+          }),
+        );
       }
     }
     return JSON.stringify(rpcError(request.id, -32601, `Unsupported MCP method: ${request.method}`));

@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
-import { access } from "node:fs/promises";
 import { constants } from "node:fs";
+import { access } from "node:fs/promises";
 import { promisify } from "node:util";
 
 import type { InteractionStrategy, RouteDescriptor } from "../contract.js";
@@ -58,21 +58,31 @@ function versionNumber(version: ParsedVersion): number {
 }
 
 export function satisfiesVersionRange(version: ParsedVersion, range: string): boolean {
-  const checks = range.trim().split(/\s+/).filter(Boolean).map((part) => {
-    const match = /^(>=|<=|>|<|=)?(\d+)\.(\d+)\.(\d+)$/.exec(part);
-    if (match === null || match[2] === undefined || match[3] === undefined || match[4] === undefined) {
-      return undefined;
-    }
-    const target = Number(match[2]) * 1_000_000 + Number(match[3]) * 1_000 + Number(match[4]);
-    return { operator: match[1] ?? "=", target };
-  });
-  return checks.every((check) => check !== undefined && (
-    check.operator === ">=" ? versionNumber(version) >= check.target
-      : check.operator === "<=" ? versionNumber(version) <= check.target
-        : check.operator === ">" ? versionNumber(version) > check.target
-          : check.operator === "<" ? versionNumber(version) < check.target
-            : versionNumber(version) === check.target
-  ));
+  const checks = range
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => {
+      const match = /^(>=|<=|>|<|=)?(\d+)\.(\d+)\.(\d+)$/.exec(part);
+      if (match === null || match[2] === undefined || match[3] === undefined || match[4] === undefined) {
+        return undefined;
+      }
+      const target = Number(match[2]) * 1_000_000 + Number(match[3]) * 1_000 + Number(match[4]);
+      return { operator: match[1] ?? "=", target };
+    });
+  return checks.every(
+    (check) =>
+      check !== undefined &&
+      (check.operator === ">="
+        ? versionNumber(version) >= check.target
+        : check.operator === "<="
+          ? versionNumber(version) <= check.target
+          : check.operator === ">"
+            ? versionNumber(version) > check.target
+            : check.operator === "<"
+              ? versionNumber(version) < check.target
+              : versionNumber(version) === check.target),
+  );
 }
 
 async function findExecutable(command: string): Promise<string | undefined> {
@@ -121,8 +131,7 @@ export async function discoverManifestRoutes(
   options?: { readonly executable?: string; readonly probe?: DiscoveryProbe },
 ): Promise<readonly RouteDescriptor[]> {
   const probe = options?.probe ?? {};
-  const executable = options?.executable
-    ?? await (probe.findExecutable ?? findExecutable)(manifest.command);
+  const executable = options?.executable ?? (await (probe.findExecutable ?? findExecutable)(manifest.command));
   if (executable === undefined || !(await isExecutable(executable))) {
     return manifest.models.map((model) => ({
       routeId: `${manifest.id}:${model.model}`,
@@ -164,7 +173,9 @@ export async function discoverManifestRoutes(
       runtimeIdentityEvidence: "unverified",
       readiness: "unqualified",
       qualification: [],
-      diagnostics: [`Installed ${manifest.command} version does not satisfy qualified range ${manifest.qualifiedVersionRange}.`],
+      diagnostics: [
+        `Installed ${manifest.command} version does not satisfy qualified range ${manifest.qualifiedVersionRange}.`,
+      ],
       ...(manifest.policySupport === undefined ? {} : { policySupport: manifest.policySupport }),
     }));
   }
@@ -185,11 +196,13 @@ export async function discoverManifestRoutes(
     assurance: "native",
     runtimeIdentityEvidence: "unverified",
     readiness: authenticated ? "ready" : "unavailable",
-    qualification: [{
-      qualificationId: `${manifest.id}-semver-${manifest.qualifiedVersionRange}`,
-      testedAt: new Date().toISOString(),
-      claim: `${manifest.qualificationClaim} Observed version ${version.value} satisfies ${manifest.qualifiedVersionRange}.`,
-    }],
+    qualification: [
+      {
+        qualificationId: `${manifest.id}-semver-${manifest.qualifiedVersionRange}`,
+        testedAt: new Date().toISOString(),
+        claim: `${manifest.qualificationClaim} Observed version ${version.value} satisfies ${manifest.qualifiedVersionRange}.`,
+      },
+    ],
     ...(manifest.policySupport === undefined ? {} : { policySupport: manifest.policySupport }),
     diagnostics: authenticated
       ? ["Authentication status probe succeeded; readiness remains provisional until an invocation succeeds."]

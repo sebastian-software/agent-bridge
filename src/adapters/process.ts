@@ -1,7 +1,15 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 
-import type { InputResponse, JsonValue, ObservedIdentity, ObservedValue, ResolvedRoute, StartInvocationRequest, Usage, WorkspaceEffect } from "../contract.js";
+import type {
+  InputResponse,
+  JsonValue,
+  ObservedIdentity,
+  ObservedValue,
+  StartInvocationRequest,
+  Usage,
+  WorkspaceEffect,
+} from "../contract.js";
 import { BridgeError } from "../errors.js";
 import type { Adapter, AdapterEvent, AdapterRunContext, AdapterRunResult } from "./types.js";
 
@@ -18,24 +26,24 @@ export interface CommandSpec {
 }
 
 function textContent(request: StartInvocationRequest): string {
-  return request.input.map((part) => {
-    if (part.type === "text") {
-      return part.text;
-    }
-    if (part.type === "json") {
-      return JSON.stringify(part.value);
-    }
-    if (part.type === "resource") {
-      return `[resource ${part.uri}]`;
-    }
-    return `[${part.type} ${part.path}]`;
-  }).join("\n\n");
+  return request.input
+    .map((part) => {
+      if (part.type === "text") {
+        return part.text;
+      }
+      if (part.type === "json") {
+        return JSON.stringify(part.value);
+      }
+      if (part.type === "resource") {
+        return `[resource ${part.uri}]`;
+      }
+      return `[${part.type} ${part.path}]`;
+    })
+    .join("\n\n");
 }
 
 function observed(value: string | undefined, source: string): ObservedValue {
-  return value === undefined
-    ? { evidence: "unverified" }
-    : { value, evidence: "reported", source };
+  return value === undefined ? { evidence: "unverified" } : { value, evidence: "reported", source };
 }
 
 function identity(provider: string, harnessVersion: string): ObservedIdentity {
@@ -52,33 +60,6 @@ function jsonRecord(value: unknown): Record<string, JsonValue> | undefined {
     return undefined;
   }
   return value as Record<string, JsonValue>;
-}
-
-function stringValue(value: unknown): string | undefined {
-  return typeof value === "string" && value !== "" ? value : undefined;
-}
-
-function nestedString(value: unknown, ...keys: readonly string[]): string | undefined {
-  let current: unknown = value;
-  for (const key of keys) {
-    if (typeof current !== "object" || current === null || !(key in current)) {
-      return undefined;
-    }
-    current = (current as Record<string, unknown>)[key];
-  }
-  return stringValue(current);
-}
-
-function textFromNative(value: unknown): string | undefined {
-  const direct = stringValue(value);
-  if (direct !== undefined) {
-    return direct;
-  }
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const parts = value.map((part) => nestedString(part, "text")).filter((part): part is string => part !== undefined);
-  return parts.length === 0 ? undefined : parts.join("");
 }
 
 function abortError(): Error {
@@ -118,8 +99,9 @@ export abstract class ProcessAdapter implements Adapter {
     const command = this.command(context);
     const deniedEnvironment = new Set(command.envDenyList ?? []);
     const environment = Object.fromEntries(
-      Object.entries({ ...process.env, ...command.env })
-        .filter(([key]) => !key.startsWith("AGENT_BRIDGE_") && !deniedEnvironment.has(key)),
+      Object.entries({ ...process.env, ...command.env }).filter(
+        ([key]) => !key.startsWith("AGENT_BRIDGE_") && !deniedEnvironment.has(key),
+      ),
     );
     const child = spawn(command.executable, [...command.args], {
       cwd: context.request.workingDirectory,
@@ -129,13 +111,15 @@ export abstract class ProcessAdapter implements Adapter {
       windowsHide: true,
     });
     let childError: Error | undefined;
-    const exitPromise = new Promise<{ readonly code: number | null; readonly signal: NodeJS.Signals | null }>((resolve) => {
-      child.once("error", (error) => {
-        childError = error;
-        resolve({ code: null, signal: null });
-      });
-      child.once("close", (code, signal) => resolve({ code, signal }));
-    });
+    const exitPromise = new Promise<{ readonly code: number | null; readonly signal: NodeJS.Signals | null }>(
+      (resolve) => {
+        child.once("error", (error) => {
+          childError = error;
+          resolve({ code: null, signal: null });
+        });
+        child.once("close", (code, signal) => resolve({ code, signal }));
+      },
+    );
     if (command.keepStdinOpen === true) {
       if (command.stdin !== undefined) {
         child.stdin?.write(command.stdin);
@@ -166,7 +150,10 @@ export abstract class ProcessAdapter implements Adapter {
       }
       terminationStarted = true;
       killProcessGroup(child, "SIGINT");
-      terminationTimer = setTimeout(() => killProcessGroup(child, "SIGKILL"), context.terminationGraceMs ?? TERMINATION_GRACE_MS);
+      terminationTimer = setTimeout(
+        () => killProcessGroup(child, "SIGKILL"),
+        context.terminationGraceMs ?? TERMINATION_GRACE_MS,
+      );
       terminationTimer.unref();
     };
     const onAbort = (): void => terminate();
@@ -192,12 +179,15 @@ export abstract class ProcessAdapter implements Adapter {
           try {
             decoded = JSON.parse(line) as unknown;
           } catch (error) {
-            throw new BridgeError({
-              code: "output_unparseable",
-              message: `The ${this.id} harness emitted malformed JSONL output.`,
-              retryable: false,
-              details: { line: line.slice(0, MAX_NATIVE_EVENT_BYTES) },
-            }, { cause: error });
+            throw new BridgeError(
+              {
+                code: "output_unparseable",
+                message: `The ${this.id} harness emitted malformed JSONL output.`,
+                retryable: false,
+                details: { line: line.slice(0, MAX_NATIVE_EVENT_BYTES) },
+              },
+              { cause: error },
+            );
           }
           const native = jsonRecord(decoded);
           if (native === undefined) {
@@ -237,18 +227,23 @@ export abstract class ProcessAdapter implements Adapter {
                   retryable: false,
                 });
               }
-              const response: Pick<InputResponse, "decision"> = await context.awaitInput(event.inputRequest.requestId, context.signal);
+              const response: Pick<InputResponse, "decision"> = await context.awaitInput(
+                event.inputRequest.requestId,
+                context.signal,
+              );
               if (context.signal.aborted) {
                 throw abortError();
               }
-              child.stdin.write(`${JSON.stringify({
-                type: "control_response",
-                response: {
-                  subtype: "success",
-                  request_id: event.inputRequest.requestId,
-                  response: { behavior: response.decision },
-                },
-              })}\n`);
+              child.stdin.write(
+                `${JSON.stringify({
+                  type: "control_response",
+                  response: {
+                    subtype: "success",
+                    request_id: event.inputRequest.requestId,
+                    response: { behavior: response.decision },
+                  },
+                })}\n`,
+              );
             } else {
               await context.emit(event);
             }
@@ -274,9 +269,10 @@ export abstract class ProcessAdapter implements Adapter {
         const diagnostic = stderr.join("").trim();
         throw new BridgeError({
           code: "harness_failed",
-          message: diagnostic === ""
-            ? `${this.id} exited with ${exit.signal === null ? `code ${String(exit.code)}` : `signal ${exit.signal}`}.`
-            : diagnostic.slice(0, MAX_NATIVE_EVENT_BYTES),
+          message:
+            diagnostic === ""
+              ? `${this.id} exited with ${exit.signal === null ? `code ${String(exit.code)}` : `signal ${exit.signal}`}.`
+              : diagnostic.slice(0, MAX_NATIVE_EVENT_BYTES),
           retryable: false,
           details: { exitCode: exit.code, signal: exit.signal },
         });

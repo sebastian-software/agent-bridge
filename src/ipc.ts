@@ -1,10 +1,15 @@
-import { appendFile, lstat, mkdir, chmod, rename, stat, unlink } from "node:fs/promises";
+import { appendFile, chmod, lstat, mkdir, rename, stat, unlink } from "node:fs/promises";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
 import { dirname } from "node:path";
 
-import { Broker } from "./broker.js";
-import { IPC_PROTOCOL_VERSION, parseOperationRequest, type OperationResponse } from "./contract.js";
-import { BridgeError, errorDetail, type BridgeErrorCode } from "./errors.js";
+import type { Broker } from "./broker.js";
+import {
+  IPC_PROTOCOL_VERSION,
+  type OperationRequest,
+  type OperationResponse,
+  parseOperationRequest,
+} from "./contract.js";
+import { BridgeError, type BridgeErrorCode, errorDetail } from "./errors.js";
 import { ensurePrivateDirectory } from "./paths.js";
 
 const MAX_MESSAGE_BYTES = 1_048_576;
@@ -30,17 +35,18 @@ const BRIDGE_ERROR_CODES: ReadonlySet<string> = new Set<BridgeErrorCode>([
 ]);
 
 function remoteErrorCode(code: unknown): BridgeErrorCode {
-  return typeof code === "string" && BRIDGE_ERROR_CODES.has(code)
-    ? code as BridgeErrorCode
-    : "internal_error";
+  return typeof code === "string" && BRIDGE_ERROR_CODES.has(code) ? (code as BridgeErrorCode) : "internal_error";
 }
 
 function brokerUnavailable(message: string, cause?: unknown): BridgeError {
-  return new BridgeError({
-    code: "broker_unavailable",
-    message,
-    retryable: true,
-  }, cause === undefined ? undefined : { cause });
+  return new BridgeError(
+    {
+      code: "broker_unavailable",
+      message,
+      retryable: true,
+    },
+    cause === undefined ? undefined : { cause },
+  );
 }
 
 async function socketAcceptsConnections(socketPath: string): Promise<boolean> {
@@ -72,7 +78,13 @@ export class BrokerServer {
     this.#resolveClosed = resolve;
   });
 
-  constructor(broker: Broker, socketPath: string, runtimeDirectory = dirname(socketPath), idleShutdownMinutes = 0, logFile?: string) {
+  constructor(
+    broker: Broker,
+    socketPath: string,
+    runtimeDirectory = dirname(socketPath),
+    idleShutdownMinutes = 0,
+    logFile?: string,
+  ) {
     this.#broker = broker;
     this.#socketPath = socketPath;
     this.#runtimeDirectory = runtimeDirectory;
@@ -197,11 +209,16 @@ export class BrokerServer {
       const line = received.slice(0, newline);
       this.#handle(line).then(
         ({ response, shutdown }) => this.#send(socket, response, shutdown),
-        (error: unknown) => this.#send(socket, {
-          id: "unknown",
-          ok: false,
-          error: errorDetail(error),
-        }, false),
+        (error: unknown) =>
+          this.#send(
+            socket,
+            {
+              id: "unknown",
+              ok: false,
+              error: errorDetail(error),
+            },
+            false,
+          ),
       );
     });
     socket.on("close", () => this.#sockets.delete(socket));
@@ -214,20 +231,27 @@ export class BrokerServer {
     try {
       decoded = JSON.parse(line) as unknown;
     } catch (error) {
-      throw new BridgeError({
-        code: "invalid_request",
-        message: "The IPC request is not valid JSON.",
-        retryable: false,
-      }, { cause: error });
+      throw new BridgeError(
+        {
+          code: "invalid_request",
+          message: "The IPC request is not valid JSON.",
+          retryable: false,
+        },
+        { cause: error },
+      );
     }
-    let request;
+    let request: OperationRequest;
     try {
       request = parseOperationRequest(decoded);
     } catch (error) {
-      const id = typeof decoded === "object" && decoded !== null && !Array.isArray(decoded)
-        && "id" in decoded && typeof decoded.id === "string"
-        ? decoded.id
-        : "unknown";
+      const id =
+        typeof decoded === "object" &&
+        decoded !== null &&
+        !Array.isArray(decoded) &&
+        "id" in decoded &&
+        typeof decoded.id === "string"
+          ? decoded.id
+          : "unknown";
       return {
         response: { id, ok: false, error: errorDetail(error) },
         shutdown: false,
@@ -261,17 +285,22 @@ export class BrokerServer {
     if (this.#idleShutdownMs <= 0) {
       return;
     }
-    this.#idleTimer = setTimeout(() => {
-      this.#idleTimer = undefined;
-      const active = this.#broker.status().activeInvocations;
-      if (active === 0 && Date.now() - this.#lastRequestAt >= this.#idleShutdownMs) {
-        this.stop().catch((error: unknown) => {
-          process.emitWarning(`Failed to stop idle broker: ${error instanceof Error ? error.message : "unknown error"}`);
-        });
-        return;
-      }
-      this.#scheduleIdleCheck();
-    }, Math.max(100, this.#idleShutdownMs));
+    this.#idleTimer = setTimeout(
+      () => {
+        this.#idleTimer = undefined;
+        const active = this.#broker.status().activeInvocations;
+        if (active === 0 && Date.now() - this.#lastRequestAt >= this.#idleShutdownMs) {
+          this.stop().catch((error: unknown) => {
+            process.emitWarning(
+              `Failed to stop idle broker: ${error instanceof Error ? error.message : "unknown error"}`,
+            );
+          });
+          return;
+        }
+        this.#scheduleIdleCheck();
+      },
+      Math.max(100, this.#idleShutdownMs),
+    );
     this.#idleTimer.unref();
   }
 
@@ -336,7 +365,9 @@ export class IpcClient {
           }
         });
       });
-      socket.once("error", (error) => finish(() => reject(brokerUnavailable(`Cannot connect to broker at ${this.#socketPath}.`, error))));
+      socket.once("error", (error) =>
+        finish(() => reject(brokerUnavailable(`Cannot connect to broker at ${this.#socketPath}.`, error))),
+      );
       socket.setTimeout(35_000, () => finish(() => reject(brokerUnavailable("The broker request timed out."))));
     });
 
@@ -356,13 +387,18 @@ export class IpcClient {
       throw brokerUnavailable("The broker error response is invalid.");
     }
     const remote = response.error;
-    const message = "message" in remote && typeof remote.message === "string"
-      ? remote.message
-      : "The broker returned an unspecified error.";
+    const message =
+      "message" in remote && typeof remote.message === "string"
+        ? remote.message
+        : "The broker returned an unspecified error.";
     const retryable = "retryable" in remote && typeof remote.retryable === "boolean" && remote.retryable;
-    const details = "details" in remote && typeof remote.details === "object" && remote.details !== null && !Array.isArray(remote.details)
-      ? remote.details as Readonly<Record<string, unknown>>
-      : undefined;
+    const details =
+      "details" in remote &&
+      typeof remote.details === "object" &&
+      remote.details !== null &&
+      !Array.isArray(remote.details)
+        ? (remote.details as Readonly<Record<string, unknown>>)
+        : undefined;
     throw new BridgeError({
       code: remoteErrorCode("code" in remote ? remote.code : undefined),
       message,

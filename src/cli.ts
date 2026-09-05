@@ -5,11 +5,11 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import { Broker } from "./broker.js";
 import { createClient } from "./client.js";
+import { type BrokerConfigValues, loadBrokerConfig } from "./config.js";
 import { BridgeError, errorDetail } from "./errors.js";
 import { BrokerServer, IpcClient } from "./ipc.js";
 import { McpServer } from "./mcp.js";
 import { brokerPaths } from "./paths.js";
-import { loadBrokerConfig, type BrokerConfigValues } from "./config.js";
 import { PACKAGE_VERSION } from "./version.js";
 
 const HELP = `agent-bridge — local harness delegation gateway
@@ -72,7 +72,18 @@ interface ParsedArguments {
   readonly options: ReadonlyMap<string, readonly string[]>;
 }
 
-const BOOLEAN_OPTIONS = new Set(["active", "diagnostic-mode", "fail-on-error", "follow", "force", "help", "json", "refresh", "until-terminal", "version"]);
+const BOOLEAN_OPTIONS = new Set([
+  "active",
+  "diagnostic-mode",
+  "fail-on-error",
+  "follow",
+  "force",
+  "help",
+  "json",
+  "refresh",
+  "until-terminal",
+  "version",
+]);
 
 function parseArguments(args: readonly string[]): ParsedArguments {
   const positionals: string[] = [];
@@ -222,8 +233,15 @@ function textContent(value: unknown): string {
     return "";
   }
   return value.content
-    .filter((part): part is { readonly type: "text"; readonly text: string } =>
-      typeof part === "object" && part !== null && "type" in part && part.type === "text" && "text" in part && typeof part.text === "string")
+    .filter(
+      (part): part is { readonly type: "text"; readonly text: string } =>
+        typeof part === "object" &&
+        part !== null &&
+        "type" in part &&
+        part.type === "text" &&
+        "text" in part &&
+        typeof part.text === "string",
+    )
     .map((part) => part.text)
     .join("\n");
 }
@@ -264,10 +282,17 @@ async function promptAndInput(parsed: ParsedArguments): Promise<readonly Record<
     try {
       decoded = JSON.parse(raw) as unknown;
     } catch (error) {
-      throw new BridgeError({ code: "invalid_request", message: "--input-json must contain valid JSON.", retryable: false }, { cause: error });
+      throw new BridgeError(
+        { code: "invalid_request", message: "--input-json must contain valid JSON.", retryable: false },
+        { cause: error },
+      );
     }
     if (!Array.isArray(decoded)) {
-      throw new BridgeError({ code: "invalid_request", message: "--input-json must contain a content-part array.", retryable: false });
+      throw new BridgeError({
+        code: "invalid_request",
+        message: "--input-json must contain a content-part array.",
+        retryable: false,
+      });
     }
     return decoded as readonly Record<string, unknown>[];
   }
@@ -280,7 +305,11 @@ async function promptAndInput(parsed: ParsedArguments): Promise<readonly Record<
     prompt = await readStandardInput();
   }
   if (prompt === undefined || prompt === "") {
-    throw new BridgeError({ code: "invalid_request", message: "Provide a prompt, --prompt-file, --input-json, or stdin.", retryable: false });
+    throw new BridgeError({
+      code: "invalid_request",
+      message: "Provide a prompt, --prompt-file, --input-json, or stdin.",
+      retryable: false,
+    });
   }
   return [{ type: "text", text: prompt }];
 }
@@ -333,7 +362,9 @@ function routeTable(value: unknown): string {
     if (typeof route !== "object" || route === null) continue;
     const item = route as Readonly<Record<string, unknown>>;
     const strategies = Array.isArray(item.interactionStrategies) ? item.interactionStrategies.join(",") : "";
-    lines.push(`${String(item.routeId ?? "").padEnd(34)} ${String(item.readiness ?? "").padEnd(11)} ${String(item.harnessVersion ?? "").padEnd(13)} ${String(item.authenticationMode ?? "").padEnd(10)} ${strategies}`);
+    lines.push(
+      `${String(item.routeId ?? "").padEnd(34)} ${String(item.readiness ?? "").padEnd(11)} ${String(item.harnessVersion ?? "").padEnd(13)} ${String(item.authenticationMode ?? "").padEnd(10)} ${strategies}`,
+    );
   }
   return lines.join("\n");
 }
@@ -346,7 +377,9 @@ function summaryTable(value: unknown): string {
   for (const entry of value.invocations) {
     if (typeof entry !== "object" || entry === null) continue;
     const item = entry as Readonly<Record<string, unknown>>;
-    lines.push(`${String(item.invocationId ?? "").padEnd(35)} ${String(item.state ?? "").padEnd(18)} ${String(item.createdAt ?? "").padEnd(24)} ${String(item.resolvedRouteId ?? "")}`);
+    lines.push(
+      `${String(item.invocationId ?? "").padEnd(35)} ${String(item.state ?? "").padEnd(18)} ${String(item.createdAt ?? "").padEnd(24)} ${String(item.resolvedRouteId ?? "")}`,
+    );
   }
   return lines.join("\n");
 }
@@ -375,7 +408,13 @@ async function startBroker(configOverrides: Partial<BrokerConfigValues> = {}): P
   const config = await loadBrokerConfig(configOverrides);
   const broker = new Broker(paths, { config });
   await broker.initialize();
-  const server = new BrokerServer(broker, paths.socketPath, paths.runtimeDirectory, config.idleShutdownMinutes, `${paths.stateDirectory}/broker.log`);
+  const server = new BrokerServer(
+    broker,
+    paths.socketPath,
+    paths.runtimeDirectory,
+    config.idleShutdownMinutes,
+    `${paths.stateDirectory}/broker.log`,
+  );
   await server.start();
   if (process.env.AGENT_BRIDGE_DAEMON !== "1") {
     process.stderr.write(`agent-bridge broker listening at ${paths.socketPath}\n`);
@@ -419,16 +458,19 @@ function parseEventsPage(value: unknown): {
       retryable: true,
     });
   }
-  if (!("events" in value) || !Array.isArray(value.events) || !("terminal" in value) || typeof value.terminal !== "boolean") {
+  if (
+    !("events" in value) ||
+    !Array.isArray(value.events) ||
+    !("terminal" in value) ||
+    typeof value.terminal !== "boolean"
+  ) {
     throw new BridgeError({
       code: "broker_unavailable",
       message: "The broker returned an incomplete events result.",
       retryable: true,
     });
   }
-  const nextCursor = "nextCursor" in value && typeof value.nextCursor === "string"
-    ? value.nextCursor
-    : undefined;
+  const nextCursor = "nextCursor" in value && typeof value.nextCursor === "string" ? value.nextCursor : undefined;
   return {
     events: value.events,
     ...(nextCursor === undefined ? {} : { nextCursor }),
@@ -452,7 +494,10 @@ async function runCommand(argv: readonly string[]): Promise<void> {
     const action = positional(parsed, 0, "broker action");
     if (action === "serve") {
       const overrides: { -readonly [Key in keyof BrokerConfigValues]?: BrokerConfigValues[Key] } = {};
-      const retentionCompletedDays = nonNegativeInteger(option(parsed, "retention-completed-days"), "retention-completed-days");
+      const retentionCompletedDays = nonNegativeInteger(
+        option(parsed, "retention-completed-days"),
+        "retention-completed-days",
+      );
       const retentionMaxBytes = positiveInteger(option(parsed, "retention-max-bytes"), "retention-max-bytes");
       const idleShutdownMinutes = nonNegativeInteger(option(parsed, "idle-shutdown-minutes"), "idle-shutdown-minutes");
       const effectsMaxFiles = positiveInteger(option(parsed, "effects-max-files"), "effects-max-files");
@@ -470,7 +515,10 @@ async function runCommand(argv: readonly string[]): Promise<void> {
     }
     if (action === "stop") {
       const paths = brokerPaths();
-      output(await new IpcClient(paths.socketPath).request("system.shutdown", { force: parsed.options.has("force") }), json);
+      output(
+        await new IpcClient(paths.socketPath).request("system.shutdown", { force: parsed.options.has("force") }),
+        json,
+      );
       return;
     }
     if (action === "status") {
@@ -579,7 +627,7 @@ async function runCommand(argv: readonly string[]): Promise<void> {
       if (interrupted || result.outcome.status !== "succeeded") {
         process.exitCode = interrupted ? exitCode("cancelled") : exitCode(result.outcome.status);
       }
-    return;
+      return;
     } finally {
       process.removeListener("SIGINT", onSignal);
     }
@@ -591,7 +639,12 @@ async function runCommand(argv: readonly string[]): Promise<void> {
       ...(parsed.options.has("active") ? {} : {}),
     });
     const filtered = parsed.options.has("active")
-      ? { ...list, invocations: list.invocations.filter((entry) => !["cancelled", "failed", "interrupted", "succeeded", "timed_out"].includes(entry.state)) }
+      ? {
+          ...list,
+          invocations: list.invocations.filter(
+            (entry) => !["cancelled", "failed", "interrupted", "succeeded", "timed_out"].includes(entry.state),
+          ),
+        }
       : list;
     json ? output(filtered, true) : process.stdout.write(`${summaryTable(filtered)}\n`);
     return;
@@ -613,7 +666,13 @@ async function runCommand(argv: readonly string[]): Promise<void> {
     } else {
       const content = textContent(result);
       if (content !== "") process.stdout.write(`${content}\n`);
-      if (parsed.options.has("fail-on-error") && typeof result === "object" && result !== null && "state" in result && result.state !== "succeeded") {
+      if (
+        parsed.options.has("fail-on-error") &&
+        typeof result === "object" &&
+        result !== null &&
+        "state" in result &&
+        result.state !== "succeeded"
+      ) {
         process.exitCode = exitCode(String(result.state));
       }
     }
@@ -625,25 +684,36 @@ async function runCommand(argv: readonly string[]): Promise<void> {
     const waited = parsed.options.has("until-terminal")
       ? await client.wait(invocationId)
       : await requestBroker("invocation.wait", { invocationId, ...(timeoutMs === undefined ? {} : { timeoutMs }) });
-    json ? output(waited, true) : human(typeof waited === "object" && waited !== null && "state" in waited ? `${String(waited.state)}${"waited" in waited && waited.waited === false ? " (still active)" : ""}` : waited);
+    json
+      ? output(waited, true)
+      : human(
+          typeof waited === "object" && waited !== null && "state" in waited
+            ? `${String(waited.state)}${"waited" in waited && waited.waited === false ? " (still active)" : ""}`
+            : waited,
+        );
     return;
   }
   if (command === "events") {
     const invocationId = positional(parsed, 0, "invocation ID");
     let after = option(parsed, "after");
     if (!parsed.options.has("follow")) {
-      output(await requestBroker("invocation.events", {
-        invocationId,
-        ...(after === undefined ? {} : { after }),
-      }), json);
+      output(
+        await requestBroker("invocation.events", {
+          invocationId,
+          ...(after === undefined ? {} : { after }),
+        }),
+        json,
+      );
       return;
     }
     while (true) {
-      const page = parseEventsPage(await requestBroker("invocation.events", {
-        invocationId,
-        ...(after === undefined ? {} : { after }),
-        waitMs: 30_000,
-      }));
+      const page = parseEventsPage(
+        await requestBroker("invocation.events", {
+          invocationId,
+          ...(after === undefined ? {} : { after }),
+          waitMs: 30_000,
+        }),
+      );
       for (const event of page.events) {
         json ? output(event, true) : process.stdout.write(`${eventSummary(event)}\n`);
       }
@@ -656,24 +726,30 @@ async function runCommand(argv: readonly string[]): Promise<void> {
     }
   }
   if (command === "cancel") {
-    output(await requestBroker("invocation.cancel", {
-      invocationId: positional(parsed, 0, "invocation ID"),
-    }), json);
+    output(
+      await requestBroker("invocation.cancel", {
+        invocationId: positional(parsed, 0, "invocation ID"),
+      }),
+      json,
+    );
     return;
   }
   if (command === "request") {
     const operation = positional(parsed, 0, "operation");
-    const paramsText = option(parsed, "params") ?? await readStandardInput();
+    const paramsText = option(parsed, "params") ?? (await readStandardInput());
     let params: unknown = {};
     if (paramsText.trim() !== "") {
       try {
         params = JSON.parse(paramsText) as unknown;
       } catch (error) {
-        throw new BridgeError({
-          code: "invalid_request",
-          message: "Request params must be valid JSON.",
-          retryable: false,
-        }, { cause: error });
+        throw new BridgeError(
+          {
+            code: "invalid_request",
+            message: "Request params must be valid JSON.",
+            retryable: false,
+          },
+          { cause: error },
+        );
       }
     }
     output(await requestBroker(operation, params), json);
