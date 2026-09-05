@@ -9,6 +9,7 @@ import { BridgeError } from "../errors.js";
 import { ClaudeAdapter } from "./claude.js";
 import { CodexAdapter } from "./codex.js";
 import { FakeAdapter } from "./fake.js";
+import { FakeProcessAdapter } from "./fake-process.js";
 import type { Adapter } from "./types.js";
 import { applyUserModelCatalog, defaultCatalogPath, loadUserModelCatalog } from "../model-catalog.js";
 
@@ -33,7 +34,7 @@ export class AdapterRegistry {
   #discoveryCache: { readonly expiresAt: number; readonly routes: readonly RouteDescriptor[] } | undefined;
 
   constructor(
-    adapters: readonly Adapter[] = [new FakeAdapter(), new ClaudeAdapter(), new CodexAdapter()],
+    adapters: readonly Adapter[] = [new FakeAdapter(), new FakeProcessAdapter(), new ClaudeAdapter(), new CodexAdapter()],
     options?: { readonly catalogPath?: string },
   ) {
     this.#adapters = new Map(adapters.map((adapter) => [adapter.id, adapter]));

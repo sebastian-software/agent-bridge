@@ -48,6 +48,7 @@ if (!["success", "failure", "timeout", "malformed", "truncated", "effects", "can
     emit({ type: "assistant", text });
     emit({ type: "result", status: "completed", usage: { inputTokens: 1, outputTokens: 1 } });
   } else if (scenario === "timeout" || scenario === "cancel") {
+    setInterval(() => {}, 1000);
     await new Promise(() => {});
   } else if (scenario === "slow") {
     for (let step = 2; step <= 8; step += 1) {

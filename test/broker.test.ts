@@ -275,6 +275,79 @@ test("private broker directories reject world-writable paths", async () => {
   }
 });
 
+test("broker supervises the fake harness process across success and failure scenarios", async () => {
+  const scenarios = [
+    { model: "success", state: "succeeded" },
+    { model: "truncated", state: "succeeded" },
+    { model: "failure", state: "failed", errorCode: "harness_failed" },
+    { model: "malformed", state: "failed", errorCode: "output_unparseable" },
+    { model: "timeout", state: "timed_out", timeoutMs: 100 },
+    { model: "effects", state: "succeeded" },
+  ] as const;
+  for (const scenario of scenarios) {
+    const root = await mkdtemp(join(tmpdir(), `agent-bridge-process-${scenario.model}-`));
+    const broker = new Broker(paths(root));
+    await broker.initialize();
+    try {
+      const started = await broker.start(request(root, scenario.model, {
+        selector: {
+          provider: "agent-bridge",
+          model: scenario.model,
+          via: "fake-process",
+          effort: "high",
+          requiredCapabilities: ["core.input.text"],
+        },
+        interactionStrategy: "deny",
+        ...(!("timeoutMs" in scenario) ? {} : { timeoutMs: scenario.timeoutMs }),
+      }));
+      const terminal = await waitForTerminal(broker, started.invocationId);
+      assert.equal(stateOf(terminal), scenario.state);
+      if ("errorCode" in scenario) {
+        assert.equal((terminal.outcome as { error?: { code?: string } }).error?.code, scenario.errorCode);
+      }
+      if (scenario.model === "success") {
+        assert.deepEqual((terminal.outcome as { content: unknown }).content, [{ type: "text", text: "echo this" }]);
+      }
+      if (scenario.model === "effects") {
+        assert.ok((terminal.outcome as { effects: readonly { path: string }[] }).effects.some((effect) => effect.path.endsWith("fake-renamed.txt")));
+      }
+    } finally {
+      await broker.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test("broker cancellation terminates a supervised fake harness process", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-bridge-process-cancel-"));
+  const broker = new Broker(paths(root));
+  await broker.initialize();
+  try {
+    const started = await broker.start(request(root, "cancel", {
+      selector: {
+        provider: "agent-bridge",
+        model: "cancel",
+        via: "fake-process",
+        effort: "high",
+        requiredCapabilities: ["core.input.text"],
+      },
+      interactionStrategy: "deny",
+    }));
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      if (stateOf(await broker.inspect(started.invocationId)) === "running") {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    await broker.cancel(started.invocationId);
+    const terminal = await waitForTerminal(broker, started.invocationId);
+    assert.equal(stateOf(terminal), "cancelled");
+  } finally {
+    await broker.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("broker resumes an invocation after an orchestrator input response", async () => {
   const root = await mkdtemp(join(tmpdir(), "agent-bridge-input-"));
   const broker = new Broker(paths(root), { registry: new AdapterRegistry([new InteractiveAdapter()]) });
