@@ -17,7 +17,7 @@ const MANIFEST = {
     model,
     efforts: ["low", "medium", "high", "max"],
     capabilities: ["core.input.text", "core.output.text", "core.streaming.events"],
-    interactionStrategies: ["deny", "unattended"] as const,
+    interactionStrategies: ["deny", "orchestrator", "unattended"] as const,
   })),
   qualificationClaim: "Claude Code v2 native print-mode stream-json contract with model, effort, and permission mapping.",
   policySupport: {
@@ -86,7 +86,23 @@ function commandArgs(context: AdapterRunContext): readonly string[] {
   if (context.request.requestedPolicy.commands === "deny") {
     args.push("--disallowedTools", "Bash");
   }
+  if (context.request.interactionStrategy === "orchestrator") {
+    args.push("--input-format", "stream-json");
+  }
   return args;
+}
+
+function initialInput(context: AdapterRunContext): string {
+  const prompt = promptFor(context);
+  if (context.request.interactionStrategy !== "orchestrator") {
+    return prompt;
+  }
+  return `${JSON.stringify({
+    type: "user",
+    message: { role: "user", content: [{ type: "text", text: prompt }] },
+    parent_tool_use_id: null,
+    session_id: null,
+  })}\n`;
 }
 
 function usageFrom(value: unknown): Usage | undefined {
@@ -184,7 +200,8 @@ export class ClaudeAdapter extends ProcessAdapter {
     return {
       executable,
       args: commandArgs(context),
-      stdin: promptFor(context),
+      stdin: initialInput(context),
+      ...(context.request.interactionStrategy === "orchestrator" ? { keepStdinOpen: true } : {}),
       envDenyList: ["CLAUDECODE", "CLAUDE_CODE", "CLAUDE_CODE_SESSION_ID"],
     };
   }
@@ -202,6 +219,29 @@ export class ClaudeAdapter extends ProcessAdapter {
         ...(model === undefined ? {} : { model: { value: model, evidence: "reported", source: "claude-stream" } }),
         ...(sessionId === undefined ? {} : { nativeSessionId: { value: sessionId, evidence: "reported", source: "claude-stream" } }),
       };
+    }
+    if (type === "control_request") {
+      const request = typeof value.request === "object" && value.request !== null && !Array.isArray(value.request)
+        ? value.request as Record<string, unknown>
+        : {};
+      const requestId = typeof value.request_id === "string" ? value.request_id : undefined;
+      const subtype = typeof request.subtype === "string" ? request.subtype : undefined;
+      if (requestId !== undefined && subtype === "can_use_tool") {
+        const toolName = typeof request.tool_name === "string" ? request.tool_name : undefined;
+        const prompt = typeof request.message === "string"
+          ? request.message
+          : toolName === undefined ? "Claude requested permission to continue." : `Claude requests permission to use ${toolName}.`;
+        return {
+          category: "input_required",
+          inputRequest: {
+            requestId,
+            kind: "permission",
+            prompt,
+            ...(toolName === undefined ? {} : { toolName }),
+          },
+          native: value,
+        };
+      }
     }
     if (type === "assistant") {
       const text = textFromMessage(value.message);
