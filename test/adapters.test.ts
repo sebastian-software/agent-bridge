@@ -154,6 +154,10 @@ class InspectableClaudeAdapter extends ClaudeAdapter {
   ): AdapterEvent | undefined {
     return this.normalizeNative(value, state);
   }
+
+  commandFor(context: AdapterRunContext): CommandSpec {
+    return this.command(context);
+  }
 }
 
 class InspectableCodexAdapter extends CodexAdapter {
@@ -300,6 +304,26 @@ test("Claude maps native permission requests to an input request", () => {
     prompt: "Run the command?",
     toolName: "Bash",
   });
+});
+
+test("Claude orchestrator mode delegates permission prompts and closes stdin after the result", () => {
+  const adapter = new InspectableClaudeAdapter({ executable: process.execPath });
+  const context: AdapterRunContext = {
+    invocationId: "inv_claude_orchestrator",
+    request: {
+      ...request(process.cwd()),
+      interactionStrategy: "orchestrator",
+      requestedPolicy: { minimumAssurance: "none", filesystem: "workspace-write" },
+    },
+    route: { ...route("claude", process.execPath), provider: "anthropic", model: "opus" },
+    signal: new AbortController().signal,
+    emit: async () => {},
+  };
+  const command = adapter.commandFor(context);
+  assert.deepEqual(command.args.slice(-4), ["--input-format", "stream-json", "--permission-prompt-tool", "stdio"]);
+  assert.equal(command.args[command.args.indexOf("--permission-mode") + 1], "default");
+  assert.equal(command.args.includes("--input-format"), true);
+  assert.equal(command.keepStdinOpen, true);
 });
 
 test("Codex excludes reasoning from answer content and reports file effects", () => {

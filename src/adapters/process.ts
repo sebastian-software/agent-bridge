@@ -234,18 +234,27 @@ export abstract class ProcessAdapter implements Adapter {
               if (context.signal.aborted) {
                 throw abortError();
               }
+              const nativeResponse = {
+                behavior: response.decision,
+                ...(response.decision === "allow"
+                  ? { updatedInput: event.inputRequest.input ?? {} }
+                  : { message: "The caller denied this permission request." }),
+              };
               child.stdin.write(
                 `${JSON.stringify({
                   type: "control_response",
                   response: {
                     subtype: "success",
                     request_id: event.inputRequest.requestId,
-                    response: { behavior: response.decision },
+                    response: nativeResponse,
                   },
                 })}\n`,
               );
             } else {
               await context.emit(event);
+            }
+            if (event.data?.state === "native_result" && child.stdin !== null && command.keepStdinOpen === true) {
+              child.stdin.end();
             }
           }
         }

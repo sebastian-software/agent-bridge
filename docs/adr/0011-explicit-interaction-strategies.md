@@ -43,3 +43,9 @@ The currently qualified routes expose these strategies:
   qualified harness version.
 - `unattended` is a declared execution choice, not a claim that the bridge can
   sandbox or fully observe every delegate effect.
+
+For Claude Code `orchestrator`, the adapter enables the native stdio permission
+channel with the default permission mode. The broker forwards caller decisions
+using Claude's control-response shape and closes the input stream after the
+native result so a completed run can terminate without waiting for another
+user message.
