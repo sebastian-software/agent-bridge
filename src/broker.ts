@@ -442,9 +442,10 @@ export class Broker {
           },
         });
       } else {
+        const errorCode = error instanceof BridgeError ? error.code : "adapter_failed";
         await this.#complete(invocationId, "failed", {
           observedIdentity: unverifiedIdentity(),
-          error: { code: "adapter_failed", message: messageFrom(error) },
+          error: { code: errorCode, message: messageFrom(error) },
         });
       }
     } finally {

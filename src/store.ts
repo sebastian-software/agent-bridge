@@ -104,9 +104,11 @@ function parseQualification(value: unknown, field: string): readonly Qualificati
 
 function parseResolvedRoute(value: unknown, field: string): ResolvedRoute {
   const source = objectValue(value, field);
+  const executable = optionalString(source.executable, `${field}.executable`);
   const effort = optionalString(source.effort, `${field}.effort`);
   return {
     routeId: requiredString(source.routeId, `${field}.routeId`),
+    ...(executable === undefined ? {} : { executable }),
     adapter: requiredString(source.adapter, `${field}.adapter`),
     harnessVersion: requiredString(source.harnessVersion, `${field}.harnessVersion`),
     authenticationMode: requiredString(source.authenticationMode, `${field}.authenticationMode`),

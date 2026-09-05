@@ -6,6 +6,8 @@ import type {
   StartInvocationRequest,
 } from "../contract.js";
 import { BridgeError } from "../errors.js";
+import { ClaudeAdapter } from "./claude.js";
+import { CodexAdapter } from "./codex.js";
 import { FakeAdapter } from "./fake.js";
 import type { Adapter } from "./types.js";
 
@@ -25,7 +27,7 @@ const EVIDENCE_RANK: Readonly<Record<EvidenceStatus, number>> = {
 export class AdapterRegistry {
   readonly #adapters: ReadonlyMap<string, Adapter>;
 
-  constructor(adapters: readonly Adapter[] = [new FakeAdapter()]) {
+  constructor(adapters: readonly Adapter[] = [new FakeAdapter(), new ClaudeAdapter(), new CodexAdapter()]) {
     this.#adapters = new Map(adapters.map((adapter) => [adapter.id, adapter]));
   }
 
@@ -100,6 +102,7 @@ export class AdapterRegistry {
       descriptor,
       route: {
         routeId: descriptor.routeId,
+        ...(descriptor.executable === undefined ? {} : { executable: descriptor.executable }),
         adapter: descriptor.adapter,
         harnessVersion: descriptor.harnessVersion,
         authenticationMode: descriptor.authenticationMode,

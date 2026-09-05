@@ -83,6 +83,7 @@ export interface QualificationEvidence {
 
 export interface RouteDescriptor {
   readonly routeId: string;
+  readonly executable?: string;
   readonly provider: string;
   readonly model: string;
   readonly efforts: readonly string[];
@@ -101,6 +102,7 @@ export interface RouteDescriptor {
 
 export interface ResolvedRoute {
   readonly routeId: string;
+  readonly executable?: string;
   readonly adapter: string;
   readonly harnessVersion: string;
   readonly authenticationMode: string;
