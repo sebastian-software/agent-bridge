@@ -23,9 +23,18 @@ process.on("SIGINT", () => process.exit(130));
 process.on("SIGTERM", () => process.exit(143));
 
 if (
-  !["success", "failure", "timeout", "malformed", "truncated", "effects", "cancel", "identity-absent", "slow", "exit-before-read"].includes(
-    scenario,
-  )
+  ![
+    "success",
+    "failure",
+    "timeout",
+    "malformed",
+    "truncated",
+    "effects",
+    "cancel",
+    "identity-absent",
+    "slow",
+    "exit-before-read",
+  ].includes(scenario)
 ) {
   console.error(`unknown scenario: ${scenario}`);
   process.exitCode = 2;
