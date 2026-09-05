@@ -72,8 +72,10 @@ test("CLI discovers, starts, follows, and inspects through the Unix socket", asy
     assert.equal(description.operationsVersion, "1.0");
 
     const status = await execFile(process.execPath, [cliPath, "broker", "status", "--json"], { env });
-    const brokerStatus = JSON.parse(status.stdout) as { ready?: unknown };
+    const brokerStatus = JSON.parse(status.stdout) as { ready?: unknown; environmentVariableNames?: unknown };
     assert.equal(brokerStatus.ready, true);
+    assert.ok(Array.isArray(brokerStatus.environmentVariableNames));
+    assert.ok(brokerStatus.environmentVariableNames.includes("PATH"));
 
     try {
       await execFile(process.execPath, [cliPath, "start", "--provider", "agent-bridge", "--json"], { env });

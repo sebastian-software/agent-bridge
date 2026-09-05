@@ -381,6 +381,7 @@ export class Broker {
       retainedInvocations: records.length,
       tombstones: this.#tombstones.size,
       diagnosticMode: this.#diagnosticMode,
+      environmentVariableNames: Object.keys(process.env).sort(),
     };
   }
 

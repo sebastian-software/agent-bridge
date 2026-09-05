@@ -78,6 +78,11 @@ active work unless `--force` is supplied. `broker logs --follow` follows the
 bounded rotating log. `--json` is available on broker operations and
 `describe`; `--version` and `version` print the package version.
 
+The broker environment is fixed when the daemon starts. Use `broker restart`
+after changing shell exports such as `PATH`, proxy settings, or harness
+configuration. `broker status --json` reports only the environment variable
+names, never their values.
+
 Stable process exit codes are: `0` success, `1` execution/internal failure,
 `2` invalid request, `3` broker unavailable, `4` invocation unavailable or not
 terminal, `5` route unavailable/ambiguous, and `6` invocation conflict.

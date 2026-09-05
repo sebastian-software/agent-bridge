@@ -11,7 +11,7 @@ list, route descriptors, and broker configuration. The JSON files in
 | Operation | Purpose | Next affordances |
 | --- | --- | --- |
 | `system.describe` | Describe versions, operations, routes, and settings | — |
-| `system.status` | Inspect broker readiness and counts | `broker stop` |
+| `system.status` | Inspect broker readiness, counts, and environment names | `broker stop` |
 | `system.shutdown` | Stop the broker, optionally forcing active work to interrupt | — |
 | `route.discover` | Discover qualified and authenticated routes | `invocation.start` |
 | `invocation.start` | Resolve one route and enqueue one invocation | `invocation.events`, `invocation.cancel` |
@@ -90,6 +90,13 @@ invocation granularity.
 The default state layout is a private directory containing a manifest,
 per-invocation metadata, append-only events, outcomes, and tombstones. Native
 payloads are omitted or bounded unless diagnostic mode is explicitly enabled.
+
+The broker captures its process environment when it starts. Harness processes
+inherit that broker environment after bridge-internal and adapter-declared
+session variables are removed; a later shell export is therefore picked up by
+`broker restart`, not by an already-running broker. `system.status` exposes the
+sorted names of variables present in the broker environment for diagnostics,
+never their values.
 
 ## Errors and exit codes
 
