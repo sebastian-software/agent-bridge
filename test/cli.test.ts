@@ -162,6 +162,25 @@ test("CLI discovers, starts, follows, and inspects through the Unix socket", asy
     assert.ok(typeof oneShotOutcome === "object" && oneShotOutcome !== null && "status" in oneShotOutcome);
     assert.equal(oneShotOutcome.status, "succeeded");
 
+    const humanRun = await execFile(
+      process.execPath,
+      [
+        cliPath,
+        "run",
+        "--provider",
+        "agent-bridge",
+        "--model",
+        "fake-echo",
+        "--via",
+        "fake",
+        "--cwd",
+        root,
+        "human progress",
+      ],
+      { env },
+    );
+    assert.ok(humanRun.stderr.includes("activity: fake-work"));
+
     const version = await execFile(process.execPath, [cliPath, "--version"], { env });
     assert.equal(version.stdout.trim(), "0.1.0");
   } finally {
