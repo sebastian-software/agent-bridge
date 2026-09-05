@@ -32,6 +32,13 @@ applies request overrides only through an adapter-owned namespaced extension.
 Only variable names and policy diagnostics may be recorded; values are never
 placed in events, outcomes, or logs.
 
+The Claude adapter's deny list covers the parent session, PID, entrypoint,
+child-session, messaging socket, and messaging token markers. Authentication,
+configuration, proxy, and other non-session variables remain inherited. The
+process-start diagnostic records the executable, prompt-redacted arguments,
+and removed variable names in normalized `data`; native payload bounding must
+not remove this operational evidence.
+
 ### Effort normalization (#17)
 
 The portable ordinal is `low`, `medium`, `high`, and `max`. Each adapter owns a

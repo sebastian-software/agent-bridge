@@ -15,6 +15,7 @@ import type { Adapter, AdapterEvent, AdapterRunContext, AdapterRunResult } from 
 
 const MAX_NATIVE_EVENT_BYTES = 64 * 1024;
 const TERMINATION_GRACE_MS = 2_000;
+const REDACTED_ARGUMENT_FLAGS = new Set(["--text", "--prompt", "--prompt-file"]);
 
 export interface CommandSpec {
   readonly executable: string;
@@ -81,6 +82,19 @@ function killProcessGroup(child: ChildProcess, signal: NodeJS.Signals): void {
   } catch {
     // The process may have exited between the signal and the close event.
   }
+}
+
+function diagnosticArgs(args: readonly string[]): readonly string[] {
+  const result: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index];
+    result.push(argument ?? "");
+    if (REDACTED_ARGUMENT_FLAGS.has(argument ?? "") && index + 1 < args.length) {
+      result.push("<redacted>");
+      index += 1;
+    }
+  }
+  return result;
 }
 
 export abstract class ProcessAdapter implements Adapter {
@@ -183,9 +197,9 @@ export abstract class ProcessAdapter implements Adapter {
     try {
       await context.emit({
         category: "activity",
-        data: { phase: "process_started" },
-        native: {
-          command: { executable: command.executable, args: [...command.args] },
+        data: {
+          phase: "process_started",
+          command: { executable: command.executable, args: [...diagnosticArgs(command.args)] },
           deniedEnvironment: [...deniedEnvironment].sort(),
         },
       });
