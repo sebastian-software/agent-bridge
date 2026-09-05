@@ -23,6 +23,7 @@ import {
   type QualificationEvidence,
   type ResolvedRoute,
   type TerminalStatus,
+  type Usage,
   type WorkspaceEffect,
 } from "./contract.js";
 import { BridgeError } from "./errors.js";
@@ -155,6 +156,36 @@ function parseObservedIdentity(value: unknown, field: string): ObservedIdentity 
   };
 }
 
+function parseUsage(value: unknown, field: string): Usage {
+  const source = objectValue(value, field);
+  const optionalCount = (candidate: unknown, name: string): number | undefined => {
+    if (candidate === undefined) {
+      return undefined;
+    }
+    const parsed = finiteNumber(candidate, `${field}.${name}`);
+    if (parsed < 0) {
+      corrupt(`${field}.${name} must not be negative.`);
+    }
+    return parsed;
+  };
+  const inputTokens = optionalCount(source.inputTokens, "inputTokens");
+  const outputTokens = optionalCount(source.outputTokens, "outputTokens");
+  const cacheReadTokens = optionalCount(source.cacheReadTokens, "cacheReadTokens");
+  const cacheWriteTokens = optionalCount(source.cacheWriteTokens, "cacheWriteTokens");
+  const turns = optionalCount(source.turns, "turns");
+  const costUsd = optionalCount(source.costUsd, "costUsd");
+  return {
+    ...(inputTokens === undefined ? {} : { inputTokens }),
+    ...(outputTokens === undefined ? {} : { outputTokens }),
+    ...(cacheReadTokens === undefined ? {} : { cacheReadTokens }),
+    ...(cacheWriteTokens === undefined ? {} : { cacheWriteTokens }),
+    ...(turns === undefined ? {} : { turns }),
+    ...(costUsd === undefined ? {} : { costUsd }),
+    evidence: literal(source.evidence, `${field}.evidence`, ["reported"] as const),
+    source: requiredString(source.source, `${field}.source`),
+  };
+}
+
 function parsePolicy(value: unknown, field: string, requestPolicy: PolicyEvidence["requestedPolicy"]): PolicyEvidence {
   const source = objectValue(value, field);
   return {
@@ -245,6 +276,7 @@ function parseOutcome(
   if (typeof effectObservation.complete !== "boolean") {
     corrupt(`${field}.effectObservation.complete must be a boolean.`);
   }
+  const usage = source.usage === undefined ? undefined : parseUsage(source.usage, `${field}.usage`);
   return {
     schemaVersion: SCHEMA_VERSION,
     invocationId,
@@ -262,6 +294,7 @@ function parseOutcome(
       complete: effectObservation.complete,
       diagnostics: stringList(effectObservation.diagnostics ?? [], `${field}.effectObservation.diagnostics`),
     },
+    ...(usage === undefined ? {} : { usage }),
     observedIdentity: parseObservedIdentity(source.observedIdentity, `${field}.observedIdentity`),
     policy,
     ...(startedAt === undefined ? {} : { startedAt }),

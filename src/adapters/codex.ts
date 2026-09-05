@@ -1,4 +1,4 @@
-import type { JsonValue, RouteDescriptor } from "../contract.js";
+import type { JsonValue, RouteDescriptor, Usage, WorkspaceEffect } from "../contract.js";
 import { BridgeError } from "../errors.js";
 import { discoverManifestRoutes, type DiscoveryProbe } from "./discovery.js";
 import { ProcessAdapter, promptFor, type CommandSpec } from "./process.js";
@@ -30,6 +30,53 @@ function sandbox(context: AdapterRunContext): string {
     return "workspace-write";
   }
   return "workspace-write";
+}
+
+function usageFrom(value: unknown): Usage | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const source = value as Record<string, unknown>;
+  const numberValue = (candidate: unknown): number | undefined => typeof candidate === "number" && Number.isFinite(candidate) && candidate >= 0 ? candidate : undefined;
+  const inputTokens = numberValue(source.input_tokens);
+  const outputTokens = numberValue(source.output_tokens);
+  const cacheReadTokens = numberValue(source.cached_input_tokens);
+  const cacheWriteTokens = numberValue(source.cache_creation_input_tokens);
+  const turns = numberValue(source.turns);
+  if ([inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, turns].every((item) => item === undefined)) {
+    return undefined;
+  }
+  return {
+    ...(inputTokens === undefined ? {} : { inputTokens }),
+    ...(outputTokens === undefined ? {} : { outputTokens }),
+    ...(cacheReadTokens === undefined ? {} : { cacheReadTokens }),
+    ...(cacheWriteTokens === undefined ? {} : { cacheWriteTokens }),
+    ...(turns === undefined ? {} : { turns }),
+    evidence: "reported",
+    source: "codex-jsonl",
+  };
+}
+
+function fileEffects(item: Record<string, unknown>): readonly WorkspaceEffect[] {
+  if (item.type !== "file_change") {
+    return [];
+  }
+  const changes = Array.isArray(item.changes) ? item.changes : [item];
+  return changes.flatMap((change): WorkspaceEffect[] => {
+    if (typeof change !== "object" || change === null || Array.isArray(change)) {
+      return [];
+    }
+    const source = change as Record<string, unknown>;
+    const path = typeof source.path === "string" ? source.path : undefined;
+    if (path === undefined || path === "") {
+      return [];
+    }
+    const rawKind = typeof source.kind === "string" ? source.kind : typeof source.change === "string" ? source.change : "modified";
+    const kind = rawKind === "add" || rawKind === "create" ? "created"
+      : rawKind === "delete" || rawKind === "remove" ? "deleted"
+        : rawKind === "rename" ? "renamed" : "modified";
+    return [{ path, kind, evidence: "harness-reported" }];
+  });
 }
 
 export class CodexAdapter extends ProcessAdapter {
@@ -70,12 +117,17 @@ export class CodexAdapter extends ProcessAdapter {
       context.request.workingDirectory,
       "-c",
       'approval_policy="never"',
-      promptFor(context),
+      "-",
     ];
     for (const directory of context.request.requestedPolicy.additionalDirectories ?? []) {
       args.splice(-1, 0, "--add-dir", directory);
     }
-    return { executable: context.route.executable, args };
+    return {
+      executable: context.route.executable,
+      args,
+      stdin: promptFor(context),
+      envDenyList: ["CODEX_THREAD_ID", "CODEX_SESSION_ID"],
+    };
   }
 
   protected normalizeNative(
@@ -94,12 +146,33 @@ export class CodexAdapter extends ProcessAdapter {
         ...(threadId === undefined ? {} : { nativeSessionId: { value: threadId, evidence: "reported", source: "codex-jsonl" } }),
       };
     }
-    if (itemText !== undefined && (item?.type === "agent_message" || type === "item.completed")) {
+    const effects = item === undefined ? [] : fileEffects(item);
+    if (itemText !== undefined && item?.type === "agent_message") {
       state.content.add(itemText);
-      return { category: "output", content: [{ type: "text", text: itemText }], native: value };
+      return {
+        category: "output",
+        content: [{ type: "text", text: itemText }],
+        ...(effects.length === 0 ? {} : { effects }),
+        native: value,
+      };
+    }
+    if (effects.length > 0) {
+      return { category: "effect", effects, native: value };
+    }
+    if (item?.type === "reasoning") {
+      return { category: "activity", data: { phase: "reasoning" }, native: value };
+    }
+    if (item?.type === "command_execution") {
+      return { category: "activity", data: { phase: "command_execution" }, native: value };
     }
     if (type === "turn.completed") {
-      return { category: "lifecycle", data: { state: "native_result" }, native: value };
+      const usage = usageFrom(value.usage);
+      return {
+        category: usage === undefined ? "lifecycle" : "usage",
+        data: { state: "native_result", ...(usage === undefined ? {} : { usage: { ...usage } }) },
+        ...(usage === undefined ? {} : { usage }),
+        native: value,
+      };
     }
     if (type.includes("error") || item?.type === "error") {
       return { category: "diagnostic", native: value };

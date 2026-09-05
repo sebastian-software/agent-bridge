@@ -171,6 +171,17 @@ export interface EffectObservation {
   readonly diagnostics: readonly string[];
 }
 
+export interface Usage {
+  readonly inputTokens?: number;
+  readonly outputTokens?: number;
+  readonly cacheReadTokens?: number;
+  readonly cacheWriteTokens?: number;
+  readonly turns?: number;
+  readonly costUsd?: number;
+  readonly evidence: "reported";
+  readonly source: string;
+}
+
 export interface InvocationOutcome {
   readonly schemaVersion: typeof SCHEMA_VERSION;
   readonly invocationId: string;
@@ -179,6 +190,7 @@ export interface InvocationOutcome {
   readonly artifacts: readonly ContentPart[];
   readonly effects: readonly WorkspaceEffect[];
   readonly effectObservation: EffectObservation;
+  readonly usage?: Usage;
   readonly observedIdentity: ObservedIdentity;
   readonly policy: PolicyEvidence;
   readonly startedAt?: string;
