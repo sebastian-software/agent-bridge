@@ -4,6 +4,17 @@ A local harness-to-harness delegation gateway. It lets an orchestrating agent
 harness delegate one bounded invocation to another installed harness and regain
 control with a normalized outcome.
 
+## Development
+
+```sh
+pnpm install --frozen-lockfile
+pnpm check
+```
+
+`pnpm check` runs the repository lint gate, TypeScript validation, the full
+test suite, and a dry-run package check. The package metadata is ready for a
+future npm release; no publish is performed by CI.
+
 ## Planning documents
 
 - [`CONTEXT.md`](CONTEXT.md): domain glossary and resolved invariants. This is
