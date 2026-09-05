@@ -110,6 +110,27 @@ export abstract class ProcessAdapter implements Adapter {
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     });
+    let streamError: { readonly stream: "stdin" | "stdout" | "stderr"; readonly error: Error } | undefined;
+    const streamDiagnostics: Promise<void>[] = [];
+    const reportStreamError = (stream: "stdin" | "stdout" | "stderr", error: Error): void => {
+      streamError ??= { stream, error };
+      streamDiagnostics.push(
+        context
+          .emit({
+            category: "diagnostic",
+            data: {
+              phase: "stream_error",
+              stream,
+              code: "code" in error && typeof error.code === "string" ? error.code : "unknown",
+              message: error.message,
+            },
+          })
+          .catch(() => undefined),
+      );
+    };
+    child.stdin?.on("error", (error) => reportStreamError("stdin", error));
+    child.stdout?.on("error", (error) => reportStreamError("stdout", error));
+    child.stderr?.on("error", (error) => reportStreamError("stderr", error));
     let childError: Error | undefined;
     const exitPromise = new Promise<{ readonly code: number | null; readonly signal: NodeJS.Signals | null }>(
       (resolve) => {
@@ -260,8 +281,23 @@ export abstract class ProcessAdapter implements Adapter {
         }
       }
       const exit = await exitPromise;
+      await Promise.all(streamDiagnostics);
       if (childError !== undefined) {
         throw childError;
+      }
+      if (streamError !== undefined) {
+        throw new BridgeError({
+          code: "harness_failed",
+          message: `${this.id} ${streamError.stream} stream failed: ${streamError.error.message}`,
+          retryable: false,
+          details: {
+            stream: streamError.stream,
+            code:
+              "code" in streamError.error && typeof streamError.error.code === "string"
+                ? streamError.error.code
+                : "unknown",
+          },
+        });
       }
       if (context.signal.aborted) {
         throw abortError();

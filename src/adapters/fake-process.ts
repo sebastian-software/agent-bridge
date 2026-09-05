@@ -14,6 +14,7 @@ const SCENARIOS = [
   "cancel",
   "identity-absent",
   "slow",
+  "exit-before-read",
 ] as const;
 
 function route(model: string): RouteDescriptor {
@@ -74,6 +75,13 @@ export class FakeProcessAdapter extends ProcessAdapter {
 
   protected command(context: AdapterRunContext): CommandSpec {
     const harness = process.env.AGENT_BRIDGE_FAKE_HARNESS_PATH ?? join(process.cwd(), "scripts", "fake-harness.mjs");
+    if (context.route.model === "exit-before-read") {
+      return {
+        executable: process.execPath,
+        args: [harness, "--scenario", context.route.model, "--cwd", context.request.workingDirectory],
+        stdin: promptFor(context),
+      };
+    }
     return {
       executable: process.execPath,
       args: [

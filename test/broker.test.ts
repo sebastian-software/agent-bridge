@@ -359,6 +359,28 @@ test("broker supervises the fake harness process across success and failure scen
   }
 });
 
+test("broker turns an early harness exit while writing stdin into a failed invocation", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-bridge-stdin-error-"));
+  const broker = new Broker(paths(root));
+  await broker.initialize();
+  try {
+    const started = await broker.start(
+      request(root, "exit-before-read", {
+        selector: { ...request(root, "exit-before-read").selector, via: "fake-process" },
+        interactionStrategy: "deny",
+        input: [{ type: "text", text: "x".repeat(300_000) }],
+      }),
+    );
+    const terminal = await waitForTerminal(broker, started.invocationId);
+    assert.equal(stateOf(terminal), "failed");
+    const events = (await broker.events({ invocationId: started.invocationId })).events;
+    assert.ok(events.some((event) => event.category === "diagnostic" && event.data?.phase === "stream_error"));
+  } finally {
+    await broker.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("broker cancellation terminates a supervised fake harness process", async () => {
   const root = await mkdtemp(join(tmpdir(), "agent-bridge-process-cancel-"));
   const broker = new Broker(paths(root));
