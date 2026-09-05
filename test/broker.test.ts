@@ -201,3 +201,33 @@ test("restart reconciliation marks a persisted active snapshot interrupted", asy
     await rm(restartRoot, { recursive: true, force: true });
   }
 });
+
+test("retention evicts completed records and persists tombstones", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-bridge-retention-"));
+  const brokerOptions = { retention: { completedMs: 0, maxBytes: 1_073_741_824 } };
+  const broker = new Broker(paths(root), brokerOptions);
+  await broker.initialize();
+  let invocationId = "";
+  try {
+    invocationId = (await broker.start(request(root, "fake-echo"))).invocationId;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await assert.rejects(
+      broker.inspect(invocationId),
+      (error: unknown) => error instanceof BridgeError && error.code === "invocation_evicted",
+    );
+  } finally {
+    await broker.close();
+  }
+
+  const restarted = new Broker(paths(root), brokerOptions);
+  await restarted.initialize();
+  try {
+    await assert.rejects(
+      restarted.inspect(invocationId),
+      (error: unknown) => error instanceof BridgeError && error.code === "invocation_evicted",
+    );
+  } finally {
+    await restarted.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});

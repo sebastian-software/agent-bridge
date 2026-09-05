@@ -6,6 +6,7 @@ export type BridgeErrorCode =
   | "invocation_evicted"
   | "invocation_not_active"
   | "invocation_not_found"
+  | "protocol_version_mismatch"
   | "route_ambiguous"
   | "route_unavailable"
   | "output_unparseable"

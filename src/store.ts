@@ -14,6 +14,7 @@ import {
   type InvocationEvent,
   type InvocationOutcome,
   type InvocationRecord,
+  type InvocationTombstone,
   type InvocationState,
   type JsonValue,
   type ObservedIdentity,
@@ -29,6 +30,12 @@ import { BridgeError } from "./errors.js";
 interface PersistedState {
   readonly storageVersion: 1;
   readonly invocations: readonly InvocationRecord[];
+  readonly tombstones: readonly InvocationTombstone[];
+}
+
+export interface StoreSnapshot {
+  readonly invocations: readonly InvocationRecord[];
+  readonly tombstones: readonly InvocationTombstone[];
 }
 
 type UnknownRecord = Record<string, unknown>;
@@ -325,6 +332,16 @@ function parseInvocation(value: unknown, index: number): InvocationRecord {
   };
 }
 
+function parseTombstone(value: unknown, index: number): InvocationTombstone {
+  const field = `tombstones[${index}]`;
+  const source = objectValue(value, field);
+  return {
+    invocationId: requiredString(source.invocationId, `${field}.invocationId`),
+    evictedAt: requiredString(source.evictedAt, `${field}.evictedAt`),
+    reason: literal(source.reason, `${field}.reason`, ["retention"] as const),
+  };
+}
+
 function parseState(value: unknown): PersistedState {
   const source = objectValue(value, "state");
   if (source.storageVersion !== 1 || !Array.isArray(source.invocations)) {
@@ -333,6 +350,11 @@ function parseState(value: unknown): PersistedState {
   return {
     storageVersion: 1,
     invocations: source.invocations.map(parseInvocation),
+    tombstones: source.tombstones === undefined
+      ? []
+      : Array.isArray(source.tombstones)
+        ? source.tombstones.map(parseTombstone)
+        : corrupt("tombstones must be an array."),
   };
 }
 
@@ -348,13 +370,13 @@ export class InvocationStore {
     return this.#stateFile;
   }
 
-  async load(): Promise<readonly InvocationRecord[]> {
+  async load(): Promise<StoreSnapshot> {
     let text: string;
     try {
       text = await readFile(this.#stateFile, "utf8");
     } catch (error) {
       if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
-        return [];
+        return { invocations: [], tombstones: [] };
       }
       throw error;
     }
@@ -369,13 +391,15 @@ export class InvocationStore {
         retryable: false,
       }, { cause: error });
     }
-    return parseState(decoded).invocations;
+    const state = parseState(decoded);
+    return { invocations: state.invocations, tombstones: state.tombstones };
   }
 
-  async save(invocations: readonly InvocationRecord[]): Promise<void> {
+  async save(invocations: readonly InvocationRecord[], tombstones: readonly InvocationTombstone[] = []): Promise<void> {
     const state: PersistedState = {
       storageVersion: 1,
       invocations,
+      tombstones,
     };
     const serialized = `${JSON.stringify(state, null, 2)}\n`;
     const work = async (): Promise<void> => {

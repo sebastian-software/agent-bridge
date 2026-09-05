@@ -3,7 +3,7 @@ import { createConnection, createServer, type Server, type Socket } from "node:n
 import { dirname } from "node:path";
 
 import { Broker } from "./broker.js";
-import { parseOperationRequest, type OperationResponse } from "./contract.js";
+import { IPC_PROTOCOL_VERSION, parseOperationRequest, type OperationResponse } from "./contract.js";
 import { BridgeError, errorDetail, type BridgeErrorCode } from "./errors.js";
 
 const MAX_MESSAGE_BYTES = 1_048_576;
@@ -14,8 +14,14 @@ const BRIDGE_ERROR_CODES: ReadonlySet<string> = new Set<BridgeErrorCode>([
   "invocation_evicted",
   "invocation_not_active",
   "invocation_not_found",
+  "protocol_version_mismatch",
   "route_ambiguous",
   "route_unavailable",
+  "auth_required",
+  "harness_failed",
+  "output_unparseable",
+  "unsupported_capability",
+  "version_unqualified",
   "unsupported_operation",
   "broker_unavailable",
   "internal_error",
@@ -195,7 +201,19 @@ export class BrokerServer {
         retryable: false,
       }, { cause: error });
     }
-    const request = parseOperationRequest(decoded);
+    let request;
+    try {
+      request = parseOperationRequest(decoded);
+    } catch (error) {
+      const id = typeof decoded === "object" && decoded !== null && !Array.isArray(decoded)
+        && "id" in decoded && typeof decoded.id === "string"
+        ? decoded.id
+        : "unknown";
+      return {
+        response: { id, ok: false, error: errorDetail(error) },
+        shutdown: false,
+      };
+    }
     try {
       const result = await this.#broker.execute(request.operation, request.params);
       return {
@@ -235,7 +253,7 @@ export class IpcClient {
       let received = "";
       socket.setEncoding("utf8");
       socket.once("connect", () => {
-        socket.write(`${JSON.stringify({ id, operation, params })}\n`);
+        socket.write(`${JSON.stringify({ protocolVersion: IPC_PROTOCOL_VERSION, id, operation, params })}\n`);
       });
       socket.on("data", (chunk: string) => {
         received += chunk;
