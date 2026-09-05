@@ -7,9 +7,9 @@
 
 The first release needs asynchronous streaming, live follow-up input, local IPC,
 process supervision, JSON contracts, and native integrations with Claude Code
-and Codex. Anthropic's official Agent SDK supports TypeScript and exposes a
-streaming input model suitable for a long-lived delegate. Codex exposes an
-official TypeScript SDK and a schema-generating app-server protocol.
+and Codex. The first adapter qualification uses their installed CLIs through
+bounded JSONL subprocesses. Richer SDK/app-server interfaces remain future
+options, but are not required to ship the local broker.
 
 Rust would provide stronger low-level process control and single-binary
 distribution, but it lacks equally direct supported SDK integrations for the
@@ -29,9 +29,8 @@ changing the caller-facing protocol.
 
 ## Consequences
 
-- The Claude adapter can use the official Agent SDK directly.
-- The Codex adapter can consume generated TypeScript or JSON schemas from the
-  installed app-server version.
+- The Claude and Codex adapters use reviewed argument-array subprocesses and
+  retain the same versioned bridge contract.
 - Distribution initially requires Node.js rather than promising a standalone
   native executable.
 - Unix sockets and Unix process-group behavior are part of the first

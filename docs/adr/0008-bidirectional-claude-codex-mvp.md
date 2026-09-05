@@ -14,9 +14,8 @@ adapter would prove process invocation but not the host-neutral product claim.
 
 The first MVP contains two real delegate adapters:
 
-- Claude Code through the official Claude Agent SDK and the user's installed
-  Claude Code executable;
-- Codex through its installed app-server and version-matched generated schema.
+- Claude Code through its installed CLI's headless JSONL contract;
+- Codex through its installed CLI's headless JSONL contract.
 
 Both use the same selector, route, invocation, event, outcome, and effect
 contracts. A deterministic fake harness remains the primary automated test
@@ -30,7 +29,7 @@ the self-describing CLI and orchestrate invocations through the broker.
 - The MVP proves Codex to Claude and Claude to Codex delegation.
 - Adapter differences remain capability-gated; feature parity is not required
   when a native harness cannot support a capability.
-- The delivery plan must budget separately for Claude SDK event normalization
-  and Codex app-server protocol/version qualification.
+- The delivery plan budgets separately for Claude and Codex JSONL event
+  normalization and version qualification.
 - Open-weight, OCR, vision, and other capability adapters follow the same SPI
   after the two initial adapters establish it.
