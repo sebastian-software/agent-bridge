@@ -232,6 +232,12 @@ function parseOutcome(
   if (!Array.isArray(source.effects)) {
     corrupt(`${field}.effects must be an array.`);
   }
+  const effectObservation = source.effectObservation === undefined
+    ? { complete: true, diagnostics: [] }
+    : objectValue(source.effectObservation, `${field}.effectObservation`);
+  if (typeof effectObservation.complete !== "boolean") {
+    corrupt(`${field}.effectObservation.complete must be a boolean.`);
+  }
   return {
     schemaVersion: SCHEMA_VERSION,
     invocationId,
@@ -245,6 +251,10 @@ function parseOutcome(
     content: parseContentParts(source.content, `${field}.content`),
     artifacts: parseContentParts(source.artifacts, `${field}.artifacts`),
     effects: source.effects.map((effect, index) => parseEffect(effect, `${field}.effects[${index}]`)),
+    effectObservation: {
+      complete: effectObservation.complete,
+      diagnostics: stringList(effectObservation.diagnostics ?? [], `${field}.effectObservation.diagnostics`),
+    },
     observedIdentity: parseObservedIdentity(source.observedIdentity, `${field}.observedIdentity`),
     policy,
     ...(startedAt === undefined ? {} : { startedAt }),

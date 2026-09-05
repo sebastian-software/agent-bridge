@@ -4,7 +4,7 @@
   "title": "Agent Bridge invocation outcome",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "invocationId", "status", "content", "artifacts", "effects", "observedIdentity", "policy", "completedAt"],
+  "required": ["schemaVersion", "invocationId", "status", "content", "artifacts", "effects", "effectObservation", "observedIdentity", "policy", "completedAt"],
   "properties": {
     "schemaVersion": { "const": "1.0" },
     "invocationId": { "type": "string", "minLength": 1 },
@@ -22,6 +22,15 @@
           "kind": { "enum": ["created", "deleted", "modified", "renamed", "unknown"] },
           "evidence": { "enum": ["git-status", "harness-reported"] }
         }
+      }
+    },
+    "effectObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["complete", "diagnostics"],
+      "properties": {
+        "complete": { "type": "boolean" },
+        "diagnostics": { "type": "array", "items": { "type": "string" } }
       }
     },
     "observedIdentity": { "type": "object" },
