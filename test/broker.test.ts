@@ -5,7 +5,9 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { Broker } from "../src/broker.js";
-import type { StartInvocationRequest, StartInvocationResult } from "../src/contract.js";
+import type { ObservedIdentity, RouteDescriptor, StartInvocationRequest, StartInvocationResult } from "../src/contract.js";
+import { AdapterRegistry } from "../src/adapters/registry.js";
+import type { Adapter, AdapterRunContext, AdapterRunResult } from "../src/adapters/types.js";
 import { BridgeError } from "../src/errors.js";
 import type { BrokerPaths } from "../src/paths.js";
 
@@ -51,6 +53,56 @@ async function waitForTerminal(broker: Broker, invocationId: string): Promise<Re
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
   assert.fail("Invocation did not become terminal.");
+}
+
+class InteractiveAdapter implements Adapter {
+  readonly id = "interactive";
+
+  async discover(): Promise<readonly RouteDescriptor[]> {
+    return [{
+      routeId: "interactive:test",
+      provider: "agent-bridge",
+      model: "interactive",
+      efforts: ["low", "medium", "high"],
+      via: "interactive",
+      adapter: this.id,
+      harnessVersion: "1.0.0",
+      authenticationMode: "none",
+      capabilities: ["core.input.text", "core.output.text"],
+      interactionStrategies: ["orchestrator"],
+      assurance: "none",
+      runtimeIdentityEvidence: "verified",
+      readiness: "ready",
+      qualification: [{
+        qualificationId: "interactive-v1",
+        testedAt: "2026-08-27T00:00:00.000Z",
+        claim: "Deterministic interactive fixture for broker tests.",
+      }],
+      diagnostics: [],
+    }];
+  }
+
+  async run(context: AdapterRunContext): Promise<AdapterRunResult> {
+    await context.emit({
+      category: "input_required",
+      inputRequest: { requestId: "permission-1", kind: "permission", prompt: "Allow the fixture?" },
+    });
+    assert.ok(context.awaitInput);
+    const response = await context.awaitInput("permission-1", context.signal);
+    await context.emit({ category: "output", content: [{ type: "text", text: response.decision }] });
+    const identity: ObservedIdentity = {
+      provider: { value: "agent-bridge", evidence: "verified", source: "interactive-fixture" },
+      model: { value: "interactive", evidence: "verified", source: "interactive-fixture" },
+      harnessVersion: { value: "1.0.0", evidence: "verified", source: "interactive-fixture" },
+      nativeSessionId: { evidence: "unverified" },
+    };
+    return {
+      content: [{ type: "text", text: response.decision }],
+      artifacts: [],
+      effects: [],
+      observedIdentity: identity,
+    };
+  }
 }
 
 test("broker runs asynchronously, persists events, and deduplicates starts", async () => {
@@ -112,6 +164,41 @@ test("broker cancels active adapter work before producing a terminal outcome", a
     const terminal = await waitForTerminal(broker, started.invocationId);
     assert.equal(stateOf(terminal), "cancelled");
     assert.ok("outcome" in terminal);
+  } finally {
+    await broker.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("broker resumes an invocation after an orchestrator input response", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-bridge-input-"));
+  const broker = new Broker(paths(root), { registry: new AdapterRegistry([new InteractiveAdapter()]) });
+  await broker.initialize();
+  try {
+    const started = await broker.start(request(root, "interactive", {
+      selector: {
+        provider: "agent-bridge",
+        model: "interactive",
+        via: "interactive",
+        requiredCapabilities: ["core.input.text"],
+      },
+    }));
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      if (stateOf(await broker.inspect(started.invocationId)) === "waiting_for_input") {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(stateOf(await broker.inspect(started.invocationId)), "waiting_for_input");
+    const response = await broker.execute("invocation.respond", {
+      invocationId: started.invocationId,
+      requestId: "permission-1",
+      decision: "allow",
+    }) as { readonly accepted: boolean };
+    assert.equal(response.accepted, true);
+    const terminal = await waitForTerminal(broker, started.invocationId);
+    assert.equal(stateOf(terminal), "succeeded");
+    assert.deepEqual((terminal.outcome as { content: unknown }).content, [{ type: "text", text: "allow" }]);
   } finally {
     await broker.close();
     await rm(root, { recursive: true, force: true });

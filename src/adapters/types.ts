@@ -1,6 +1,8 @@
 import type {
   ContentPart,
   EventCategory,
+  InputRequest,
+  InputResponse,
   JsonValue,
   ObservedIdentity,
   ResolvedRoute,
@@ -18,6 +20,7 @@ export interface AdapterEvent {
   readonly effects?: readonly WorkspaceEffect[];
   readonly usage?: Usage;
   readonly failure?: { readonly code: string; readonly message: string };
+  readonly inputRequest?: InputRequest;
 }
 
 export interface AdapterRunContext {
@@ -26,6 +29,7 @@ export interface AdapterRunContext {
   readonly route: ResolvedRoute;
   readonly signal: AbortSignal;
   readonly emit: (event: AdapterEvent) => Promise<void>;
+  readonly awaitInput?: (requestId: string, signal?: AbortSignal) => Promise<Pick<InputResponse, "decision">>;
 }
 
 export interface AdapterRunResult {

@@ -86,6 +86,59 @@ class StdinProcessAdapter extends ProcessAdapter {
   }
 }
 
+class InteractiveProcessAdapter extends ProcessAdapter {
+  readonly id = "interactive-process";
+
+  async discover(): Promise<readonly RouteDescriptor[]> {
+    return [];
+  }
+
+  protected command(): CommandSpec {
+    const script = [
+      "process.stdin.setEncoding('utf8');",
+      "let input = '';",
+      "process.stdin.on('data', chunk => { input += chunk; if (input.includes('control_response')) {",
+      "process.stdout.write(JSON.stringify({type:'assistant',message:{content:[{type:'text',text:'approved'}]}})+'\\n');",
+      "process.stdout.write(JSON.stringify({type:'result',result:'approved'})+'\\n');",
+      "process.exit(0); } });",
+      "process.stdout.write(JSON.stringify({type:'control_request',request_id:'perm_1',request:{subtype:'can_use_tool',tool_name:'Write',message:'Allow Write?'}})+'\\n');",
+    ].join(" ");
+    return {
+      executable: process.execPath,
+      args: ["-e", script],
+      stdin: "initial input\\n",
+      keepStdinOpen: true,
+    };
+  }
+
+  protected normalizeNative(
+    value: Record<string, JsonValue>,
+    state: { identity: ObservedIdentity; content: ContentAccumulator },
+  ): AdapterEvent | undefined {
+    if (value.type === "control_request") {
+      return {
+        category: "input_required",
+        inputRequest: {
+          requestId: "perm_1",
+          kind: "permission",
+          prompt: "Allow Write?",
+          toolName: "Write",
+        },
+        native: value,
+      };
+    }
+    if (value.type === "assistant") {
+      state.content.add("approved");
+      return { category: "output", content: [{ type: "text", text: "approved" }], native: value };
+    }
+    if (value.type === "result") {
+      state.content.setFinal("approved");
+      return { category: "lifecycle", native: value };
+    }
+    return undefined;
+  }
+}
+
 class InspectableClaudeAdapter extends ClaudeAdapter {
   normalize(value: Record<string, JsonValue>, state: { identity: ObservedIdentity; content: ContentAccumulator }): AdapterEvent | undefined {
     return this.normalizeNative(value, state);
@@ -172,6 +225,24 @@ test("process adapter sends prompt on stdin and filters denied environment varia
   assert.equal(events.at(-1)?.native?.env, null);
 });
 
+test("process adapter completes a bidirectional permission exchange", async () => {
+  const adapter = new InteractiveProcessAdapter();
+  const events: AdapterEvent[] = [];
+  const result = await adapter.run({
+    invocationId: "inv_interactive",
+    request: request(process.cwd()),
+    route: route(adapter.id, process.execPath),
+    signal: new AbortController().signal,
+    emit: async (event) => { events.push(event); },
+    awaitInput: async (requestId) => {
+      assert.equal(requestId, "perm_1");
+      return { decision: "allow" };
+    },
+  });
+  assert.deepEqual(result.content, [{ type: "text", text: "approved" }]);
+  assert.equal(events.some((event) => event.category === "input_required"), true);
+});
+
 test("Claude keeps the final result once and captures reported usage", () => {
   const adapter = new InspectableClaudeAdapter();
   const state = nativeState();
@@ -181,6 +252,22 @@ test("Claude keeps the final result once and captures reported usage", () => {
   assert.equal(result?.category, "usage");
   assert.deepEqual(state.content.parts, [{ type: "text", text: "pong" }]);
   assert.equal(result?.usage?.inputTokens, 3);
+});
+
+test("Claude maps native permission requests to an input request", () => {
+  const adapter = new InspectableClaudeAdapter();
+  const event = adapter.normalize({
+    type: "control_request",
+    request_id: "req_123",
+    request: { subtype: "can_use_tool", tool_name: "Bash", message: "Run the command?" },
+  }, nativeState());
+  assert.equal(event?.category, "input_required");
+  assert.deepEqual(event?.inputRequest, {
+    requestId: "req_123",
+    kind: "permission",
+    prompt: "Run the command?",
+    toolName: "Bash",
+  });
 });
 
 test("Codex excludes reasoning from answer content and reports file effects", () => {

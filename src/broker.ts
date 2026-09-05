@@ -10,6 +10,7 @@ import {
   TERMINAL_STATES,
   parseEventsParams,
   parseInvocationIdParams,
+  parseRespondParams,
   parseWaitParams,
   parseStartInvocationRequest,
   type EventsResult,
@@ -17,6 +18,7 @@ import {
   type InvocationEvent,
   type InvocationOutcome,
   type InvocationRecord,
+  type InputResponse,
   type InvocationState,
   type InvocationTombstone,
   type ObservedIdentity,
@@ -96,6 +98,8 @@ export class Broker {
   readonly #runs = new Map<string, Promise<void>>();
   readonly #workspaceLocks = new Map<string, string>();
   readonly #beforeSnapshots = new Map<string, WorkspaceSnapshot>();
+  readonly #inputWaiters = new Map<string, Map<string, (response: Pick<InputResponse, "decision">) => void>>();
+  readonly #inputResponses = new Map<string, Pick<InputResponse, "decision">>();
   readonly #tombstones = new Map<string, InvocationTombstone>();
   readonly #retention: {
     readonly completedMs: number;
@@ -166,6 +170,8 @@ export class Broker {
     }
     await Promise.allSettled(this.#runs.values());
     await this.#mutationTail;
+    this.#inputWaiters.clear();
+    this.#inputResponses.clear();
   }
 
   async execute(operation: string, params: unknown): Promise<unknown> {
@@ -194,8 +200,9 @@ export class Broker {
         return this.events(parseEventsParams(params));
       case "invocation.cancel":
         return this.cancel(parseInvocationIdParams(params).invocationId);
-      case "invocation.send":
       case "invocation.respond":
+        return this.respond(parseRespondParams(params));
+      case "invocation.send":
       case "invocation.continue":
       case "invocation.delete":
         throw new BridgeError({
@@ -527,6 +534,7 @@ export class Broker {
         route: current.resolvedRoute,
         signal: controller.signal,
         emit: (event) => this.#appendAdapterEvent(invocationId, event),
+        awaitInput: (requestId, signal) => this.#awaitInput(invocationId, requestId, signal),
       });
       const latest = this.#requireRecord(invocationId);
       if (latest.state === "cancelling" || controller.signal.aborted) {
@@ -561,6 +569,7 @@ export class Broker {
         clearTimeout(timeout);
       }
       this.#controllers.delete(invocationId);
+      this.#inputWaiters.delete(invocationId);
     }
   }
 
@@ -600,12 +609,23 @@ export class Broker {
         timestamp,
         category: event.category,
         ...(event.content === undefined ? {} : { content: event.content }),
-        ...(event.data === undefined ? {} : { data: event.data }),
+        ...(event.data === undefined && event.inputRequest === undefined ? {} : {
+          data: {
+            ...(event.data ?? {}),
+            ...(event.inputRequest === undefined ? {} : {
+              requestId: event.inputRequest.requestId,
+              kind: event.inputRequest.kind,
+              prompt: event.inputRequest.prompt,
+              ...(event.inputRequest.toolName === undefined ? {} : { toolName: event.inputRequest.toolName }),
+            }),
+          },
+        }),
         provenance: { source: "adapter", adapter: current.resolvedRoute.adapter },
         ...(event.native === undefined ? {} : { native: event.native }),
       };
       let updated: InvocationRecord = {
         ...current,
+        ...(event.category === "input_required" ? { state: "waiting_for_input" as const } : {}),
         updatedAt: timestamp,
         events: [...current.events, appended],
       };
@@ -618,6 +638,79 @@ export class Broker {
       }
       this.#records.set(invocationId, updated);
       return { value: undefined, changed: true };
+    });
+  }
+
+  async respond(response: InputResponse): Promise<Readonly<Record<string, unknown>>> {
+    const result = await this.#mutate(() => {
+      const current = this.#requireRecord(response.invocationId);
+      if (current.state !== "waiting_for_input") {
+        throw new BridgeError({
+          code: "invocation_not_active",
+          message: `Invocation ${response.invocationId} is not waiting for input.`,
+          retryable: false,
+        });
+      }
+      const pendingRequest = [...current.events]
+        .reverse()
+        .find((event) => event.category === "input_required");
+      if (pendingRequest?.data?.requestId !== response.requestId) {
+        throw new BridgeError({
+          code: "invalid_request",
+          message: `Request ${response.requestId} is not the pending input request for invocation ${response.invocationId}.`,
+          retryable: false,
+          details: { invocationId: response.invocationId, requestId: response.requestId },
+        });
+      }
+      const timestamp = new Date().toISOString();
+      const withEvent = this.#appendBridgeEvent(current, "lifecycle", {
+        state: "running",
+        reason: "caller_response",
+        requestId: response.requestId,
+        decision: response.decision,
+      }, timestamp);
+      this.#records.set(response.invocationId, {
+        ...withEvent,
+        state: "running",
+        updatedAt: timestamp,
+      });
+      return {
+        value: { invocationId: response.invocationId, requestId: response.requestId, accepted: true, state: "running" },
+        changed: true,
+      };
+    });
+    const key = `${response.invocationId}:${response.requestId}`;
+    const waiter = this.#inputWaiters.get(response.invocationId)?.get(response.requestId);
+    if (waiter !== undefined) {
+      this.#inputWaiters.get(response.invocationId)?.delete(response.requestId);
+      waiter({ decision: response.decision });
+    } else {
+      this.#inputResponses.set(key, { decision: response.decision });
+    }
+    return result;
+  }
+
+  async #awaitInput(invocationId: string, requestId: string, signal?: AbortSignal): Promise<Pick<InputResponse, "decision">> {
+    const key = `${invocationId}:${requestId}`;
+    const response = this.#inputResponses.get(key);
+    if (response !== undefined) {
+      this.#inputResponses.delete(key);
+      return response;
+    }
+    return new Promise((resolve) => {
+      const waiters = this.#inputWaiters.get(invocationId) ?? new Map();
+      const finish = (decision: Pick<InputResponse, "decision">): void => {
+        waiters.delete(requestId);
+        signal?.removeEventListener("abort", onAbort);
+        resolve(decision);
+      };
+      const onAbort = (): void => finish({ decision: "deny" });
+      waiters.set(requestId, finish);
+      this.#inputWaiters.set(invocationId, waiters);
+      signal?.addEventListener("abort", onAbort, { once: true });
+      if (signal?.aborted === true) {
+        onAbort();
+      }
     });
   }
 

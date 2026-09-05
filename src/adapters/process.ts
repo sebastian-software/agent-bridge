@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
 
-import type { JsonValue, ObservedIdentity, ObservedValue, ResolvedRoute, StartInvocationRequest, Usage, WorkspaceEffect } from "../contract.js";
+import type { InputResponse, JsonValue, ObservedIdentity, ObservedValue, ResolvedRoute, StartInvocationRequest, Usage, WorkspaceEffect } from "../contract.js";
 import { BridgeError } from "../errors.js";
 import type { Adapter, AdapterEvent, AdapterRunContext, AdapterRunResult } from "./types.js";
 
@@ -14,6 +14,7 @@ export interface CommandSpec {
   readonly env?: NodeJS.ProcessEnv;
   readonly envDenyList?: readonly string[];
   readonly stdin?: string;
+  readonly keepStdinOpen?: boolean;
 }
 
 function textContent(request: StartInvocationRequest): string {
@@ -127,7 +128,13 @@ export abstract class ProcessAdapter implements Adapter {
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     });
-    child.stdin?.end(command.stdin ?? "");
+    if (command.keepStdinOpen === true) {
+      if (command.stdin !== undefined) {
+        child.stdin?.write(command.stdin);
+      }
+    } else {
+      child.stdin?.end(command.stdin ?? "");
+    }
     const stderr: string[] = [];
     child.stderr?.setEncoding("utf8");
     child.stderr?.on("data", (chunk: string) => {
@@ -202,7 +209,40 @@ export abstract class ProcessAdapter implements Adapter {
             if (event.failure !== undefined) {
               state.failure = event.failure;
             }
-            await context.emit(event);
+            if (event.inputRequest !== undefined) {
+              await context.emit({
+                ...event,
+                category: "input_required",
+                data: {
+                  ...(event.data ?? {}),
+                  requestId: event.inputRequest.requestId,
+                  kind: event.inputRequest.kind,
+                  prompt: event.inputRequest.prompt,
+                  ...(event.inputRequest.toolName === undefined ? {} : { toolName: event.inputRequest.toolName }),
+                },
+              });
+              if (context.awaitInput === undefined || child.stdin === null) {
+                throw new BridgeError({
+                  code: "unsupported_capability",
+                  message: "The adapter reported an input request but no response channel is available.",
+                  retryable: false,
+                });
+              }
+              const response: Pick<InputResponse, "decision"> = await context.awaitInput(event.inputRequest.requestId, context.signal);
+              if (context.signal.aborted) {
+                throw abortError();
+              }
+              child.stdin.write(`${JSON.stringify({
+                type: "control_response",
+                response: {
+                  subtype: "success",
+                  request_id: event.inputRequest.requestId,
+                  response: { behavior: response.decision },
+                },
+              })}\n`);
+            } else {
+              await context.emit(event);
+            }
           }
         }
       }

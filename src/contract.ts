@@ -185,6 +185,19 @@ export interface Usage {
   readonly source: string;
 }
 
+export interface InputRequest {
+  readonly requestId: string;
+  readonly kind: "permission";
+  readonly prompt: string;
+  readonly toolName?: string;
+}
+
+export interface InputResponse {
+  readonly invocationId: string;
+  readonly requestId: string;
+  readonly decision: "allow" | "deny";
+}
+
 export interface InvocationOutcome {
   readonly schemaVersion: typeof SCHEMA_VERSION;
   readonly invocationId: string;
@@ -470,6 +483,15 @@ export function parseInvocationIdParams(value: unknown): { readonly invocationId
   const source = record(value, "params");
   return {
     invocationId: stringValue(source.invocationId, "params.invocationId", { nonEmpty: true }),
+  };
+}
+
+export function parseRespondParams(value: unknown): InputResponse {
+  const source = record(value, "params");
+  return {
+    invocationId: stringValue(source.invocationId, "params.invocationId", { nonEmpty: true }),
+    requestId: stringValue(source.requestId, "params.requestId", { nonEmpty: true }),
+    decision: oneOf(source.decision, "params.decision", ["allow", "deny"] as const),
   };
 }
 
