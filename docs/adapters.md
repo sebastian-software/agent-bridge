@@ -29,6 +29,11 @@ and terminal error handling.
   directories; and
 - a precise `qualificationClaim` describing the tested native contract.
 
+Model entries also declare one canonical native model ID and optional request
+aliases. Discovery publishes one route for the canonical ID and one for each
+alias; resolution keeps the requested ID in `model` while passing
+`canonicalModel` to the harness.
+
 Discovery records the absolute executable, observed version, authentication
 readiness, diagnostics, and a qualification record. Missing executables are
 unavailable; out-of-range versions are unqualified. Neither is silently
@@ -78,6 +83,9 @@ qualified.
 
 - Pin the command and argument contract used by the adapter.
 - Record the tested harness version and a semver range, not only a major.
+- Record a stable qualification ID, test date, test-suite path, and the exact
+  test commit or tag in the manifest. Discovery adds the observed installed
+  version to the claim without changing the static `testedAt` evidence.
 - Verify authentication without exposing credentials or placing them in argv.
 - Exercise every advertised model, effort, capability, and interaction mode.
 - Verify stdin behavior, bounded native output, identity evidence, usage, and

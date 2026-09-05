@@ -32,12 +32,33 @@ const MANIFEST = {
   authArgs: ["auth", "status"],
   qualifiedVersionRange: ">=2.1.0 <3.0.0",
   authenticationMode: "claude-native",
-  models: ["opus", "sonnet", "haiku"].map((model) => ({
-    model,
+  models: [
+    {
+      model: "claude-opus-4-8",
+      aliases: ["opus", "claude-opus-4-8"],
+    },
+    {
+      model: "claude-sonnet-5",
+      aliases: ["sonnet", "claude-sonnet-5"],
+    },
+    {
+      model: "claude-haiku-4-5-20251001",
+      aliases: ["haiku", "claude-haiku-4-5"],
+    },
+  ].map((model) => ({
+    ...model,
+    canonicalModel: model.model,
     efforts: ["low", "medium", "high", "max"],
     capabilities: ["core.input.text", "core.output.text", "core.streaming.events"],
     interactionStrategies: ["deny", "orchestrator", "unattended"] as const,
   })),
+  qualification: {
+    qualificationId: "claude-code-v2-stream-json",
+    testedAt: "2026-09-05T22:04:14+02:00",
+    harnessVersion: "2.1.0",
+    testSuite: "test/adapters.test.ts",
+    testCommit: "6940a5ed02c0247e472dd93a15624a15d9689367",
+  },
   qualificationClaim:
     "Claude Code v2 native print-mode stream-json contract with model, effort, and permission mapping.",
   policySupport: {
