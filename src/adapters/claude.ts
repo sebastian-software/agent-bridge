@@ -40,6 +40,9 @@ function permissionModeFor(strategy: StartInvocationRequest["interactionStrategy
   if (strategy === "deny") {
     return "dontAsk";
   }
+  if (strategy === "orchestrator") {
+    return "default";
+  }
   if (policy.filesystem === "read-only") {
     return "plan";
   }
@@ -95,7 +98,7 @@ function commandArgs(context: AdapterRunContext): readonly string[] {
     args.push("--disallowedTools", "Bash");
   }
   if (context.request.interactionStrategy === "orchestrator") {
-    args.push("--input-format", "stream-json");
+    args.push("--input-format", "stream-json", "--permission-prompt-tool", "stdio");
   }
   return args;
 }
@@ -263,6 +266,7 @@ export class ClaudeAdapter extends ProcessAdapter {
             kind: "permission",
             prompt,
             ...(toolName === undefined ? {} : { toolName }),
+            ...(request.input === undefined ? {} : { input: request.input as JsonValue }),
           },
           native: value,
         };

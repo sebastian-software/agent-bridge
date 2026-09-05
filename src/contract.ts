@@ -182,6 +182,8 @@ export interface InputRequest {
   readonly kind: "permission";
   readonly prompt: string;
   readonly toolName?: string;
+  /** Original tool input, kept transiently for native permission responses. */
+  readonly input?: JsonValue;
 }
 
 export interface InputResponse {
