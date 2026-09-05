@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { ClaudeAdapter } from "../src/adapters/claude.js";
 import { CodexAdapter } from "../src/adapters/codex.js";
+import { parseVersion, satisfiesVersionRange } from "../src/adapters/discovery.js";
 import { ContentAccumulator, ProcessAdapter, type CommandSpec } from "../src/adapters/process.js";
 import type { JsonValue, ObservedIdentity, ResolvedRoute, RouteDescriptor } from "../src/contract.js";
 import type { AdapterEvent, AdapterRunContext } from "../src/adapters/types.js";
@@ -94,6 +95,10 @@ class InspectableClaudeAdapter extends ClaudeAdapter {
 class InspectableCodexAdapter extends CodexAdapter {
   normalize(value: Record<string, JsonValue>, state: { identity: ObservedIdentity; content: ContentAccumulator }): AdapterEvent | undefined {
     return this.normalizeNative(value, state);
+  }
+
+  commandFor(context: AdapterRunContext): CommandSpec {
+    return this.command(context);
   }
 }
 
@@ -189,4 +194,47 @@ test("Codex excludes reasoning from answer content and reports file effects", ()
   assert.equal(effect?.effects?.[0]?.evidence, "harness-reported");
   assert.deepEqual(state.content.parts, [{ type: "text", text: "answer" }]);
   assert.equal(answer?.content?.[0]?.type, "text");
+});
+
+test("version qualification accepts ranges instead of only a major number", () => {
+  const qualified = parseVersion("codex-cli 0.149.1");
+  const old = parseVersion("codex-cli 0.148.9");
+  assert.ok(qualified !== undefined && satisfiesVersionRange(qualified, ">=0.149.0 <1.0.0"));
+  assert.ok(old !== undefined && !satisfiesVersionRange(old, ">=0.149.0 <1.0.0"));
+});
+
+test("policy resolution rejects unsupported fields and records exact controls", () => {
+  const claude = new ClaudeAdapter({ executable: process.execPath });
+  const claudeRoute: RouteDescriptor = {
+    routeId: "claude:test",
+    provider: "anthropic",
+    model: "haiku",
+    efforts: ["low", "medium", "high", "max"],
+    via: "claude-code",
+    adapter: "claude",
+    harnessVersion: "2.1.235",
+    authenticationMode: "test",
+    capabilities: [],
+    interactionStrategies: ["deny"],
+    assurance: "native",
+    runtimeIdentityEvidence: "unverified",
+    readiness: "ready",
+    qualification: [],
+    diagnostics: [],
+  };
+  const unsupported = claude.resolvePolicy({ ...request(process.cwd()), requestedPolicy: { minimumAssurance: "none", network: "deny" } }, claudeRoute);
+  assert.equal(unsupported.supported, false);
+  assert.ok(unsupported.unsupported.includes("requestedPolicy.network"));
+
+  const codex = new InspectableCodexAdapter();
+  const codexRequest = { ...request(process.cwd()), selector: { ...request(process.cwd()).selector, effort: "max" } };
+  const command = codex.commandFor({
+    invocationId: "inv_policy",
+    request: codexRequest,
+    route: { ...route("codex", process.execPath), effort: "max" },
+    signal: new AbortController().signal,
+    emit: async () => {},
+  });
+  assert.ok(command.args.includes("model_reasoning_effort=xhigh"));
+  assert.equal(command.stdin, "hello");
 });

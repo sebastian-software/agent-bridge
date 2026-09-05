@@ -53,9 +53,19 @@ export class AdapterRegistry {
   async resolve(request: StartInvocationRequest): Promise<{
     readonly route: ResolvedRoute;
     readonly descriptor: RouteDescriptor;
+    readonly effectiveNativePolicy: Readonly<Record<string, import("../contract.js").JsonValue>>;
   }> {
     const routes = await this.discover();
-    const candidates = routes.filter((route) => {
+    const evaluated = routes.map((route) => {
+      const adapter = this.#adapters.get(route.adapter);
+      const policy = adapter?.resolvePolicy?.(request, route) ?? {
+        supported: true,
+        unsupported: [],
+        effectiveNativePolicy: { adapter: route.adapter, controls: [] },
+      };
+      return { route, policy };
+    });
+    const candidates = evaluated.filter(({ route, policy }) => {
       const selector = request.selector;
       return route.readiness === "ready"
         && route.provider === selector.provider
@@ -66,7 +76,8 @@ export class AdapterRegistry {
         && route.interactionStrategies.includes(request.interactionStrategy)
         && (selector.minimumObservedEvidence === undefined
           || EVIDENCE_RANK[route.runtimeIdentityEvidence] >= EVIDENCE_RANK[selector.minimumObservedEvidence])
-        && ASSURANCE_RANK[route.assurance] >= ASSURANCE_RANK[request.requestedPolicy.minimumAssurance];
+        && ASSURANCE_RANK[route.assurance] >= ASSURANCE_RANK[request.requestedPolicy.minimumAssurance]
+        && policy.supported;
     });
 
     if (candidates.length === 0) {
@@ -78,6 +89,9 @@ export class AdapterRegistry {
           requested: request.selector,
           minimumAssurance: request.requestedPolicy.minimumAssurance,
           candidates: routes,
+          unsupportedPolicies: evaluated
+            .filter(({ policy }) => !policy.supported)
+            .flatMap(({ route, policy }) => policy.unsupported.map((field) => ({ routeId: route.routeId, field }))),
         },
       });
     }
@@ -86,12 +100,12 @@ export class AdapterRegistry {
         code: "route_ambiguous",
         message: "More than one qualified route matches the request. Add a via selector or a more specific capability requirement.",
         retryable: false,
-        details: { candidates },
+        details: { candidates: candidates.map(({ route }) => route) },
       });
     }
 
-    const descriptor = candidates[0];
-    if (descriptor === undefined) {
+    const candidate = candidates[0];
+    if (candidate === undefined) {
       throw new BridgeError({
         code: "internal_error",
         message: "Route resolution produced no candidate.",
@@ -99,20 +113,21 @@ export class AdapterRegistry {
       });
     }
     return {
-      descriptor,
+      descriptor: candidate.route,
       route: {
-        routeId: descriptor.routeId,
-        ...(descriptor.executable === undefined ? {} : { executable: descriptor.executable }),
-        adapter: descriptor.adapter,
-        harnessVersion: descriptor.harnessVersion,
-        authenticationMode: descriptor.authenticationMode,
-        provider: descriptor.provider,
-        model: descriptor.model,
+        routeId: candidate.route.routeId,
+        ...(candidate.route.executable === undefined ? {} : { executable: candidate.route.executable }),
+        adapter: candidate.route.adapter,
+        harnessVersion: candidate.route.harnessVersion,
+        authenticationMode: candidate.route.authenticationMode,
+        provider: candidate.route.provider,
+        model: candidate.route.model,
         ...(request.selector.effort === undefined ? {} : { effort: request.selector.effort }),
-        via: descriptor.via,
-        capabilities: descriptor.capabilities,
-        qualification: descriptor.qualification,
+        via: candidate.route.via,
+        capabilities: candidate.route.capabilities,
+        qualification: candidate.route.qualification,
       },
+      effectiveNativePolicy: candidate.policy.effectiveNativePolicy,
     };
   }
 }
