@@ -150,7 +150,7 @@ export async function observeWorkspaceEffects(
     const newIndex = effects.indexOf(match);
     effects.splice(Math.max(oldIndex, newIndex), 1);
     effects.splice(Math.min(oldIndex, newIndex), 1);
-    effects.push({ path: `${oldEffect.path} -> ${match.path}`, kind: "renamed", evidence: "git-status" });
+    effects.push({ path: match.path, previousPath: oldEffect.path, kind: "renamed", evidence: "git-status" });
   }
 
   try {
@@ -162,7 +162,7 @@ export async function observeWorkspaceEffects(
       if (oldIndex !== -1 && newIndex !== -1) {
         effects.splice(Math.max(oldIndex, newIndex), 1);
         effects.splice(Math.min(oldIndex, newIndex), 1);
-        effects.push({ path: `${oldPath} -> ${newPath}`, kind: "renamed", evidence: "git-status" });
+        effects.push({ path: newPath, previousPath: oldPath, kind: "renamed", evidence: "git-status" });
       }
     }
   } catch (error) {

@@ -19,6 +19,7 @@
         "required": ["path", "kind", "evidence"],
         "properties": {
           "path": { "type": "string", "minLength": 1 },
+          "previousPath": { "type": "string", "minLength": 1 },
           "kind": { "enum": ["created", "deleted", "modified", "renamed", "unknown"] },
           "evidence": { "enum": ["git-status", "harness-reported"] }
         }

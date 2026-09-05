@@ -38,7 +38,7 @@ test("Git observation reports creates, modifications, deletes, renames, and igno
     assert.deepEqual(observation.effects, [
       { path: "created.txt", kind: "created", evidence: "git-status" },
       { path: "tracked.txt", kind: "modified", evidence: "git-status" },
-      { path: "deleted.txt -> renamed.txt", kind: "renamed", evidence: "git-status" },
+      { path: "renamed.txt", previousPath: "deleted.txt", kind: "renamed", evidence: "git-status" },
     ]);
     assert.ok(!observation.effects.some((effect) => effect.path === "ignored.txt"));
     assert.equal(await readFile(join(root, "renamed.txt"), "utf8"), "delete me\n");
