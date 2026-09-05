@@ -1,4 +1,4 @@
-import { appendFile, chmod, lstat, mkdir, rename, stat, unlink } from "node:fs/promises";
+import { chmod, lstat, mkdir, unlink } from "node:fs/promises";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
 import { dirname } from "node:path";
 
@@ -11,9 +11,9 @@ import {
 } from "./contract.js";
 import { BridgeError, type BridgeErrorCode, errorDetail } from "./errors.js";
 import { ensurePrivateDirectory } from "./paths.js";
+import { writeBrokerLog } from "./log.js";
 
 const MAX_MESSAGE_BYTES = 1_048_576;
-const MAX_LOG_BYTES = 1_048_576;
 
 const BRIDGE_ERROR_CODES: ReadonlySet<string> = new Set<BridgeErrorCode>([
   "invalid_request",
@@ -138,7 +138,7 @@ export class BrokerServer {
       server.listen(this.#socketPath);
     });
     await chmod(this.#socketPath, 0o600);
-    await this.#writeLog(`broker started pid=${String(process.pid)}`);
+    await this.#writeLog("info", `broker started pid=${String(process.pid)}`);
     this.#scheduleIdleCheck();
   }
 
@@ -155,7 +155,7 @@ export class BrokerServer {
       clearTimeout(this.#idleTimer);
       this.#idleTimer = undefined;
     }
-    await this.#writeLog(`broker stopping pid=${String(process.pid)}`);
+    await this.#writeLog("info", `broker stopping pid=${String(process.pid)}`);
     for (const socket of this.#sockets) {
       socket.destroy();
     }
@@ -275,7 +275,10 @@ export class BrokerServer {
     socket.end(`${JSON.stringify(response)}\n`, () => {
       if (shutdown) {
         this.stop().catch((error: unknown) => {
-          process.emitWarning(`Failed to stop broker: ${error instanceof Error ? error.message : "unknown error"}`);
+          void this.#writeLog(
+            "error",
+            `Failed to stop broker: ${error instanceof Error ? error.message : "unknown error"}`,
+          );
         });
       }
     });
@@ -291,7 +294,8 @@ export class BrokerServer {
         const active = this.#broker.status().activeInvocations;
         if (active === 0 && Date.now() - this.#lastRequestAt >= this.#idleShutdownMs) {
           this.stop().catch((error: unknown) => {
-            process.emitWarning(
+            void this.#writeLog(
+              "error",
               `Failed to stop idle broker: ${error instanceof Error ? error.message : "unknown error"}`,
             );
           });
@@ -304,23 +308,8 @@ export class BrokerServer {
     this.#idleTimer.unref();
   }
 
-  async #writeLog(message: string): Promise<void> {
-    try {
-      await mkdir(dirname(this.#logFile), { recursive: true, mode: 0o700 });
-      try {
-        const info = await stat(this.#logFile);
-        if (info.size >= MAX_LOG_BYTES) {
-          await rename(this.#logFile, `${this.#logFile}.1`).catch(() => undefined);
-        }
-      } catch (error) {
-        if (!(typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT")) {
-          return;
-        }
-      }
-      await appendFile(this.#logFile, `${new Date().toISOString()} ${message}\n`, { encoding: "utf8", mode: 0o600 });
-    } catch {
-      // Logging must never prevent the broker from serving requests.
-    }
+  async #writeLog(level: "warn" | "error" | "info", message: string): Promise<void> {
+    await writeBrokerLog(this.#logFile, level, message);
   }
 }
 

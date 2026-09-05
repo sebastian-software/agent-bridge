@@ -17,6 +17,8 @@ import { IpcClient } from "./ipc.js";
 import { brokerPaths } from "./paths.js";
 import { PACKAGE_VERSION } from "./version.js";
 
+const MAX_STARTUP_DIAGNOSTIC_BYTES = 4 * 1024;
+
 export interface InspectionResult {
   readonly schemaVersion: string;
   readonly invocationId: string;
@@ -267,9 +269,17 @@ export class AgentBridgeClient {
     const cliPath = fileURLToPath(new URL("./cli.js", import.meta.url));
     const child = spawn(process.execPath, [cliPath, "broker", "serve"], {
       detached: true,
-      stdio: "ignore",
+      stdio: ["ignore", "ignore", "pipe"],
       env: { ...process.env, AGENT_BRIDGE_DAEMON: "1" },
     });
+    let startupStderr = "";
+    child.stderr?.setEncoding("utf8");
+    child.stderr?.on("data", (chunk: string) => {
+      if (Buffer.byteLength(startupStderr, "utf8") < MAX_STARTUP_DIAGNOSTIC_BYTES) {
+        startupStderr += chunk.slice(0, MAX_STARTUP_DIAGNOSTIC_BYTES);
+      }
+    });
+    child.stderr?.on("error", () => undefined);
     child.unref();
     let lastError: unknown;
     for (let attempt = 0; attempt < 50; attempt += 1) {
@@ -283,10 +293,16 @@ export class AgentBridgeClient {
         }
       }
     }
+    const startupDiagnostic = startupStderr
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find((line) => line !== "");
     throw new BridgeError(
       {
         code: "broker_unavailable",
-        message: `The broker did not become ready at ${this.#socketPath}.`,
+        message: `The broker did not become ready at ${this.#socketPath}.${
+          startupDiagnostic === undefined ? "" : ` Startup error: ${startupDiagnostic}`
+        }`,
         retryable: true,
       },
       { cause: lastError },

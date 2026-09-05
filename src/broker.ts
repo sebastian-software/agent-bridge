@@ -40,6 +40,7 @@ import { describeContract } from "./operations.js";
 import type { BrokerPaths } from "./paths.js";
 import { ensurePrivateDirectory } from "./paths.js";
 import { InvocationStore } from "./store.js";
+import { writeBrokerLog } from "./log.js";
 import { canonicalJson, messageFrom, sha256 } from "./util.js";
 import { PACKAGE_VERSION } from "./version.js";
 
@@ -175,6 +176,7 @@ export class Broker {
   };
   readonly #effectLimits: { readonly maxFiles: number; readonly maxBytes: number };
   readonly #terminationGraceMs: number;
+  readonly #logFile: string;
   readonly #startedAt = new Date().toISOString();
   #mutationTail: Promise<void> = Promise.resolve();
 
@@ -188,6 +190,7 @@ export class Broker {
         readonly maxBytes?: number;
       };
       readonly diagnosticMode?: boolean;
+      readonly logFile?: string;
     },
   ) {
     this.#paths = paths;
@@ -208,6 +211,7 @@ export class Broker {
     this.#diagnosticMode = this.#config.diagnosticMode;
     this.#effectLimits = { maxFiles: this.#config.effectsMaxFiles, maxBytes: this.#config.effectsMaxBytes };
     this.#terminationGraceMs = this.#config.terminationGraceMs;
+    this.#logFile = options?.logFile ?? `${paths.stateDirectory}/broker.log`;
   }
 
   async initialize(): Promise<void> {
@@ -641,7 +645,7 @@ export class Broker {
         try {
           await this.#failUnexpected(invocationId, error);
         } catch (nested) {
-          process.emitWarning(`Failed to record invocation crash: ${messageFrom(nested)}`);
+          this.#log("error", `Failed to record invocation crash: ${messageFrom(nested)}`);
         }
       })
       .finally(() => {
@@ -692,7 +696,7 @@ export class Broker {
         timedOut = true;
         this.#markTimingOut(invocationId).then(
           () => controller.abort(),
-          (error: unknown) => process.emitWarning(`Failed to record invocation timeout: ${messageFrom(error)}`),
+          (error: unknown) => this.#log("error", `Failed to record invocation timeout: ${messageFrom(error)}`),
         );
       }, current.request.timeoutMs);
       timeout.unref();
@@ -1051,6 +1055,10 @@ export class Broker {
       observedIdentity: unverifiedIdentity(),
       error: { code: "broker_internal_error", message: messageFrom(error) },
     });
+  }
+
+  #log(level: "warn" | "error" | "info", message: string): void {
+    void writeBrokerLog(this.#logFile, level, message);
   }
 
   #appendBridgeEvent(
