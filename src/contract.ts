@@ -590,6 +590,7 @@ export function parseEventsParams(value: unknown): {
 }
 
 export function parseInvocationListParams(value: unknown): {
+  readonly active?: boolean;
   readonly state?: InvocationState;
   readonly callerCorrelationId?: string;
   readonly since?: string;
@@ -597,6 +598,10 @@ export function parseInvocationListParams(value: unknown): {
   readonly includeTombstones: boolean;
 } {
   const source = record(value, "params");
+  const active = source.active === undefined ? undefined : source.active;
+  if (active !== undefined && typeof active !== "boolean") {
+    invalid("params.active must be a boolean.");
+  }
   const state =
     source.state === undefined
       ? undefined
@@ -625,6 +630,7 @@ export function parseInvocationListParams(value: unknown): {
     invalid("params.includeTombstones must be a boolean.");
   }
   return {
+    ...(active === undefined ? {} : { active }),
     ...(state === undefined ? {} : { state }),
     ...(callerCorrelationId === undefined ? {} : { callerCorrelationId }),
     ...(since === undefined ? {} : { since }),

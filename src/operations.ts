@@ -97,6 +97,7 @@ export const OPERATION_DEFINITIONS: readonly OperationDefinition[] = [
       type: "object",
       additionalProperties: false,
       properties: {
+        active: { type: "boolean" },
         state: {
           enum: [
             "queued",

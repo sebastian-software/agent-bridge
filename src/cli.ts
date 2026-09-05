@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { readFile } from "node:fs/promises";
+import { open, readFile } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 
 import { Broker } from "./broker.js";
@@ -258,6 +258,9 @@ function eventSummary(event: unknown): string {
     if (typeof data.state === "string") {
       return `${category}: ${data.state}`;
     }
+    if (typeof data.phase === "string") {
+      return `${category}: ${data.phase}`;
+    }
     if (typeof data.message === "string") {
       return `${category}: ${data.message}`;
     }
@@ -269,6 +272,34 @@ function eventSummary(event: unknown): string {
     }
   }
   return category;
+}
+
+async function readLogDelta(path: string, offset: number): Promise<number> {
+  try {
+    const file = await open(path, "r");
+    try {
+      const size = (await file.stat()).size;
+      const start = Math.min(offset, size);
+      const buffer = Buffer.alloc(64 * 1024);
+      let position = start;
+      while (position < size) {
+        const { bytesRead } = await file.read(buffer, 0, Math.min(buffer.length, size - position), position);
+        if (bytesRead === 0) {
+          break;
+        }
+        process.stdout.write(buffer.subarray(0, bytesRead));
+        position += bytesRead;
+      }
+      return position;
+    } finally {
+      await file.close();
+    }
+  } catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
+      return 0;
+    }
+    throw error;
+  }
 }
 
 async function promptAndInput(parsed: ParsedArguments): Promise<readonly Record<string, unknown>[]> {
@@ -535,11 +566,7 @@ async function runCommand(argv: readonly string[]): Promise<void> {
       return;
     }
     if (action === "stop") {
-      const paths = brokerPaths();
-      output(
-        await new IpcClient(paths.socketPath).request("system.shutdown", { force: parsed.options.has("force") }),
-        json,
-      );
+      output(await requestRunningBroker("system.shutdown", { force: parsed.options.has("force") }), json);
       return;
     }
     if (action === "status") {
@@ -552,18 +579,7 @@ async function runCommand(argv: readonly string[]): Promise<void> {
       if (parsed.options.has("follow")) {
         let offset = 0;
         while (true) {
-          let text = "";
-          try {
-            text = await readFile(`${paths.stateDirectory}/broker.log`, "utf8");
-          } catch (error) {
-            if (!(typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT")) {
-              throw error;
-            }
-          }
-          if (text.length > offset) {
-            process.stdout.write(text.slice(offset));
-            offset = text.length;
-          }
+          offset = await readLogDelta(`${paths.stateDirectory}/broker.log`, offset);
           await delay(250);
         }
       }
@@ -656,18 +672,10 @@ async function runCommand(argv: readonly string[]): Promise<void> {
   if (command === "list") {
     const correlation = option(parsed, "correlation");
     const list = await client.list({
+      ...(parsed.options.has("active") ? { active: true } : {}),
       ...(correlation === undefined ? {} : { callerCorrelationId: correlation }),
-      ...(parsed.options.has("active") ? {} : {}),
     });
-    const filtered = parsed.options.has("active")
-      ? {
-          ...list,
-          invocations: list.invocations.filter(
-            (entry) => !["cancelled", "failed", "interrupted", "succeeded", "timed_out"].includes(entry.state),
-          ),
-        }
-      : list;
-    json ? output(filtered, true) : process.stdout.write(`${summaryTable(filtered)}\n`);
+    json ? output(list, true) : process.stdout.write(`${summaryTable(list)}\n`);
     return;
   }
   if (command === "inspect" || command === "get") {

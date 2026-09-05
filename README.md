@@ -43,8 +43,10 @@ agent-bridge run --provider agent-bridge --model fake-echo --via fake \
 
 The first client autostarts one user-owned broker. The broker supervises the
 selected harness process, persists ordered events, and records a terminal
-outcome. The default socket is `$XDG_RUNTIME_DIR/broker.sock` when that
-variable is set, otherwise a private platform-temporary directory is used;
+outcome. The default socket is `$XDG_RUNTIME_DIR/agent-bridge/broker.sock`
+when that variable is set; clients continue to read the legacy
+`$XDG_RUNTIME_DIR/broker.sock` for one release. Otherwise a private
+platform-temporary directory is used;
 state lives in `~/.local/state/agent-bridge`. Override
 them with `AGENT_BRIDGE_RUNTIME_DIR`, `AGENT_BRIDGE_STATE_DIR`, or
 `AGENT_BRIDGE_SOCKET_PATH`.

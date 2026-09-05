@@ -120,11 +120,16 @@ function activeInvocations(value: unknown): number {
 }
 
 export class AgentBridgeClient {
-  readonly #socketPath: string;
+  #socketPath: string;
+  #legacySocketPath: string | undefined;
   readonly #autostart: boolean;
+  #brokerVersionChecked = false;
+  #cachedBrokerStatus: unknown;
 
   constructor(options: ClientOptions = {}) {
-    this.#socketPath = options.socketPath ?? brokerPaths().socketPath;
+    const paths = brokerPaths();
+    this.#socketPath = options.socketPath ?? paths.socketPath;
+    this.#legacySocketPath = options.socketPath === undefined ? paths.legacySocketPath : undefined;
     this.#autostart = options.autostart ?? true;
   }
 
@@ -194,6 +199,7 @@ export class AgentBridgeClient {
 
   list(
     options: {
+      readonly active?: boolean;
       readonly state?: InvocationState;
       readonly callerCorrelationId?: string;
       readonly since?: string;
@@ -202,6 +208,7 @@ export class AgentBridgeClient {
     } = {},
   ): Promise<InvocationListResult> {
     return this.#request("invocation.list", {
+      ...(options.active === undefined ? {} : { active: options.active }),
       ...(options.state === undefined ? {} : { state: options.state }),
       ...(options.callerCorrelationId === undefined ? {} : { callerCorrelationId: options.callerCorrelationId }),
       ...(options.since === undefined ? {} : { since: options.since }),
@@ -238,25 +245,35 @@ export class AgentBridgeClient {
     params: unknown,
     allowAutostart = this.#autostart,
   ): Promise<OperationResultMap[K]> {
+    const request = (client: IpcClient): Promise<OperationResultMap[K]> => this.#requestVia(client, operation, params);
     const client = new IpcClient(this.#socketPath);
     try {
-      if (operation !== "system.status" && operation !== "system.shutdown") {
-        const status = await client.request("system.status", {});
-        const version = brokerVersion(status);
-        if (version !== undefined && version !== PACKAGE_VERSION) {
-          if (activeInvocations(status) > 0) {
-            throw new BridgeError({
-              code: "broker_unavailable",
-              message: `Broker version ${version} is still serving active invocations.`,
-              retryable: false,
-            });
+      return await request(client);
+    } catch (error) {
+      if (
+        this.#legacySocketPath !== undefined &&
+        error instanceof BridgeError &&
+        error.code === "broker_unavailable" &&
+        error.retryable
+      ) {
+        const legacyPath = this.#legacySocketPath;
+        try {
+          this.#brokerVersionChecked = false;
+          this.#cachedBrokerStatus = undefined;
+          const result = await request(new IpcClient(legacyPath));
+          this.#socketPath = legacyPath;
+          this.#legacySocketPath = undefined;
+          return result;
+        } catch (legacyError) {
+          if (
+            !(legacyError instanceof BridgeError) ||
+            legacyError.code !== "broker_unavailable" ||
+            !legacyError.retryable
+          ) {
+            throw legacyError;
           }
-          await client.request("system.shutdown", {});
-          await delay(100);
         }
       }
-      return (await client.request(operation, params)) as OperationResultMap[K];
-    } catch (error) {
       if (
         !allowAutostart ||
         !(error instanceof BridgeError) ||
@@ -286,7 +303,10 @@ export class AgentBridgeClient {
     for (let attempt = 0; attempt < 50; attempt += 1) {
       await delay(50);
       try {
-        return (await client.request(operation, params)) as OperationResultMap[K];
+        const result = (await client.request(operation, params)) as OperationResultMap[K];
+        this.#brokerVersionChecked = true;
+        this.#cachedBrokerStatus = { packageVersion: PACKAGE_VERSION, activeInvocations: 0 };
+        return result;
       } catch (error) {
         lastError = error;
         if (!(error instanceof BridgeError) || error.code !== "broker_unavailable") {
@@ -308,6 +328,32 @@ export class AgentBridgeClient {
       },
       { cause: lastError },
     );
+  }
+
+  async #requestVia<K extends keyof OperationResultMap>(
+    client: IpcClient,
+    operation: K,
+    params: unknown,
+  ): Promise<OperationResultMap[K]> {
+    if (operation !== "system.status" && operation !== "system.shutdown") {
+      if (!this.#brokerVersionChecked) {
+        this.#cachedBrokerStatus = await client.request("system.status", {});
+        this.#brokerVersionChecked = true;
+      }
+      const version = brokerVersion(this.#cachedBrokerStatus);
+      if (version !== undefined && version !== PACKAGE_VERSION) {
+        if (activeInvocations(this.#cachedBrokerStatus) > 0) {
+          throw new BridgeError({
+            code: "broker_unavailable",
+            message: `Broker version ${version} is still serving active invocations.`,
+            retryable: false,
+          });
+        }
+        await client.request("system.shutdown", {});
+        await delay(100);
+      }
+    }
+    return (await client.request(operation, params)) as OperationResultMap[K];
   }
 }
 

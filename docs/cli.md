@@ -8,7 +8,7 @@ command that needs a broker starts the user-owned daemon automatically.
 
 | Command | Purpose |
 | --- | --- |
-| `describe` | Contract, operation, route, and retention metadata |
+| `describe` | Contract, operation, broker, and retention metadata |
 | `routes [--refresh]` | Qualified route discovery |
 | `start` | Start one asynchronous invocation and print its ID |
 | `run` | Start, follow, and return one invocation result |
@@ -68,7 +68,8 @@ agent-bridge list --active --correlation build-42 --json
 ```
 
 The list operation can also filter by `state`, `since`, and `limit` through the
-generic `request` command. Tombstones are included only when explicitly
+generic `request` command. `--active` is applied by the broker and returns only
+non-terminal invocations. Tombstones are included only when explicitly
 requested as `includeTombstones: true`.
 
 ## Broker and diagnostics

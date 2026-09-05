@@ -510,6 +510,7 @@ export class Broker {
   }
 
   async list(params: {
+    readonly active?: boolean;
     readonly state?: InvocationState;
     readonly callerCorrelationId?: string;
     readonly since?: string;
@@ -519,6 +520,7 @@ export class Broker {
     await this.#mutationTail;
     const since = params.since === undefined ? undefined : Date.parse(params.since);
     const invocations = [...this.#records.values()]
+      .filter((record) => params.active !== true || !TERMINAL_STATES.has(record.state))
       .filter((record) => params.state === undefined || record.state === params.state)
       .filter(
         (record) =>
@@ -1060,12 +1062,13 @@ export class Broker {
     const output = record.events.flatMap((event) => (event.category === "output" ? (event.content ?? []) : []));
     const usageEvent = [...record.events].reverse().find((event) => event.category === "usage");
     const usage = usageEvent === undefined ? undefined : usageFromEvent(usageEvent.data?.usage);
+    const effectiveUsage = partial.usage ?? usage;
     return {
       content: partial.content ?? output,
       artifacts: partial.artifacts ?? [],
       effects: partial.effects ?? [],
       observedIdentity: partial.observedIdentity ?? unverifiedIdentity(),
-      ...(partial.usage === undefined && usage === undefined ? {} : { usage: partial.usage ?? usage! }),
+      ...(effectiveUsage === undefined ? {} : { usage: effectiveUsage }),
     };
   }
 
