@@ -57,7 +57,7 @@ const MANIFEST = {
     testedAt: "2026-09-05T22:04:14+02:00",
     harnessVersion: "2.1.0",
     testSuite: "test/adapters.test.ts",
-    testCommit: "6940a5ed02c0247e472dd93a15624a15d9689367",
+    testCommit: "2473c44fc41befe82847287b13af53245c008a39",
   },
   qualificationClaim:
     "Claude Code v2 native print-mode stream-json contract with model, effort, and permission mapping.",

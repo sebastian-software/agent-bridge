@@ -29,7 +29,7 @@ const MANIFEST = {
     testedAt: "2026-09-05T22:04:14+02:00",
     harnessVersion: "0.149.0",
     testSuite: "test/adapters.test.ts",
-    testCommit: "6940a5ed02c0247e472dd93a15624a15d9689367",
+    testCommit: "2473c44fc41befe82847287b13af53245c008a39",
   },
   qualificationClaim: "Codex CLI exec JSONL contract with native model, sandbox, approval, and workspace mapping.",
   policySupport: {

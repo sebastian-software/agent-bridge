@@ -218,7 +218,7 @@ test("Codex discovery exposes canonical model IDs and documented family aliases"
   assert.equal(routes.length, 6);
   const alias = routes.find((candidate) => candidate.model === "gpt-5-codex");
   assert.equal(alias?.canonicalModel, "gpt-5.3-codex");
-  assert.match(alias?.qualification[0]?.claim ?? "", /6940a5ed02c0247e472dd93a15624a15d9689367/);
+  assert.match(alias?.qualification[0]?.claim ?? "", /2473c44fc41befe82847287b13af53245c008a39/);
 });
 
 test("route discovery fails closed for an unqualified harness version", async () => {
