@@ -1,0 +1,167 @@
+import assert from "node:assert/strict";
+import { execFile as execFileCallback, spawn, type ChildProcess } from "node:child_process";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { basename, join } from "node:path";
+import { promisify } from "node:util";
+import test from "node:test";
+
+import { IpcClient } from "../src/ipc.js";
+
+const execFile = promisify(execFileCallback);
+const cliPath = join(process.cwd(), "dist", "src", "cli.js");
+
+function testEnvironment(root: string): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    AGENT_BRIDGE_RUNTIME_DIR: join(root, "run"),
+    AGENT_BRIDGE_STATE_DIR: join(root, "state"),
+    AGENT_BRIDGE_SOCKET_PATH: join(tmpdir(), `${basename(root)}.sock`),
+  };
+}
+
+async function waitForBroker(client: IpcClient): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    try {
+      await client.request("system.describe", {});
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  }
+  assert.fail(`Broker did not become ready: ${String(lastError)}`);
+}
+
+function childExit(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve, reject) => {
+    child.once("exit", () => resolve());
+    child.once("error", reject);
+  });
+}
+
+function invocationIdFrom(stdout: string): string {
+  const value = JSON.parse(stdout) as unknown;
+  if (typeof value !== "object" || value === null || !("invocationId" in value) || typeof value.invocationId !== "string") {
+    assert.fail("Expected a CLI result with an invocationId.");
+  }
+  return value.invocationId;
+}
+
+test("CLI discovers, starts, follows, and inspects through the Unix socket", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-bridge-cli-"));
+  const env = testEnvironment(root);
+  const broker = spawn(process.execPath, [cliPath, "broker", "serve"], {
+    env,
+    stdio: "ignore",
+  });
+  const client = new IpcClient(env.AGENT_BRIDGE_SOCKET_PATH ?? "");
+  try {
+    await waitForBroker(client);
+    const described = await execFile(process.execPath, [cliPath, "describe", "--json"], { env });
+    const description = JSON.parse(described.stdout) as { operationsVersion?: unknown };
+    assert.equal(description.operationsVersion, "1.0");
+
+    try {
+      await execFile(process.execPath, [cliPath, "start", "--provider", "agent-bridge", "--json"], { env });
+      assert.fail("Invalid CLI input should fail.");
+    } catch (error) {
+      if (!(error instanceof Error) || !("stderr" in error) || typeof error.stderr !== "string") {
+        assert.fail("Expected a process error with captured stderr.");
+      }
+      const failure = JSON.parse(error.stderr) as { error?: { code?: unknown } };
+      assert.equal(failure.error?.code, "invalid_request");
+    }
+
+    const started = await execFile(process.execPath, [
+      cliPath,
+      "start",
+      "--provider",
+      "agent-bridge",
+      "--model",
+      "fake-echo",
+      "--via",
+      "fake",
+      "--text",
+      "hello from CLI",
+      "--cwd",
+      root,
+      "--json",
+    ], { env });
+    const invocationId = invocationIdFrom(started.stdout);
+
+    const followed = await execFile(process.execPath, [
+      cliPath,
+      "events",
+      invocationId,
+      "--follow",
+      "--json",
+    ], { env });
+    const eventLines = followed.stdout.trim().split("\n").filter(Boolean);
+    assert.ok(eventLines.length >= 5);
+    const terminalEvent = JSON.parse(eventLines.at(-1) ?? "null") as { data?: { state?: string } };
+    assert.equal(terminalEvent.data?.state, "succeeded");
+
+    const inspected = await execFile(process.execPath, [cliPath, "inspect", invocationId, "--json"], { env });
+    const inspection = JSON.parse(inspected.stdout) as { state?: unknown };
+    assert.equal(inspection.state, "succeeded");
+  } finally {
+    try {
+      await execFile(process.execPath, [cliPath, "broker", "stop", "--json"], { env });
+    } catch {
+      broker.kill("SIGTERM");
+    }
+    await childExit(broker);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a real broker crash is reconciled as interrupted after restart", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-bridge-crash-"));
+  const env = testEnvironment(root);
+  const socketPath = env.AGENT_BRIDGE_SOCKET_PATH ?? "";
+  let broker = spawn(process.execPath, [cliPath, "broker", "serve"], { env, stdio: "ignore" });
+  try {
+    await waitForBroker(new IpcClient(socketPath));
+    const started = await execFile(process.execPath, [
+      cliPath,
+      "start",
+      "--provider",
+      "agent-bridge",
+      "--model",
+      "fake-slow",
+      "--text",
+      "survive caller disconnect",
+      "--cwd",
+      root,
+      "--json",
+    ], { env });
+    const invocationId = invocationIdFrom(started.stdout);
+
+    broker.kill("SIGKILL");
+    await childExit(broker);
+
+    broker = spawn(process.execPath, [cliPath, "broker", "serve"], { env, stdio: "ignore" });
+    const client = new IpcClient(socketPath);
+    await waitForBroker(client);
+    const inspected = await client.request("invocation.inspect", { invocationId });
+    if (typeof inspected !== "object" || inspected === null || !("state" in inspected)) {
+      assert.fail("Expected an inspection result with state.");
+    }
+    assert.equal(inspected.state, "interrupted");
+  } finally {
+    if (broker.exitCode === null && broker.signalCode === null) {
+      try {
+        await execFile(process.execPath, [cliPath, "broker", "stop", "--json"], { env });
+      } catch {
+        broker.kill("SIGTERM");
+      }
+      await childExit(broker);
+    }
+    await rm(root, { recursive: true, force: true });
+  }
+});
