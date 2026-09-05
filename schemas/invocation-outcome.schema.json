@@ -33,6 +33,21 @@
         "diagnostics": { "type": "array", "items": { "type": "string" } }
       }
     },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidence", "source"],
+      "properties": {
+        "inputTokens": { "type": "integer", "minimum": 0 },
+        "outputTokens": { "type": "integer", "minimum": 0 },
+        "cacheReadTokens": { "type": "integer", "minimum": 0 },
+        "cacheWriteTokens": { "type": "integer", "minimum": 0 },
+        "turns": { "type": "integer", "minimum": 0 },
+        "costUsd": { "type": "number", "minimum": 0 },
+        "evidence": { "const": "reported" },
+        "source": { "type": "string", "minLength": 1 }
+      }
+    },
     "observedIdentity": { "type": "object" },
     "policy": { "type": "object" },
     "startedAt": { "type": "string", "format": "date-time" },

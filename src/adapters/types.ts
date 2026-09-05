@@ -6,6 +6,7 @@ import type {
   ResolvedRoute,
   RouteDescriptor,
   StartInvocationRequest,
+  Usage,
   WorkspaceEffect,
 } from "../contract.js";
 
@@ -14,6 +15,9 @@ export interface AdapterEvent {
   readonly content?: readonly ContentPart[];
   readonly data?: Readonly<Record<string, JsonValue>>;
   readonly native?: Readonly<Record<string, JsonValue>>;
+  readonly effects?: readonly WorkspaceEffect[];
+  readonly usage?: Usage;
+  readonly failure?: { readonly code: string; readonly message: string };
 }
 
 export interface AdapterRunContext {
@@ -29,6 +33,7 @@ export interface AdapterRunResult {
   readonly artifacts: readonly ContentPart[];
   readonly effects: readonly WorkspaceEffect[];
   readonly observedIdentity: ObservedIdentity;
+  readonly usage?: Usage;
 }
 
 export interface Adapter {

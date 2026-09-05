@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
 
-import type { JsonValue, ObservedIdentity, ObservedValue, ResolvedRoute, StartInvocationRequest } from "../contract.js";
+import type { JsonValue, ObservedIdentity, ObservedValue, ResolvedRoute, StartInvocationRequest, Usage, WorkspaceEffect } from "../contract.js";
 import { BridgeError } from "../errors.js";
 import type { Adapter, AdapterEvent, AdapterRunContext, AdapterRunResult } from "./types.js";
 
@@ -12,6 +12,8 @@ export interface CommandSpec {
   readonly executable: string;
   readonly args: readonly string[];
   readonly env?: NodeJS.ProcessEnv;
+  readonly envDenyList?: readonly string[];
+  readonly stdin?: string;
 }
 
 function textContent(request: StartInvocationRequest): string {
@@ -113,13 +115,19 @@ export abstract class ProcessAdapter implements Adapter {
 
   async run(context: AdapterRunContext): Promise<AdapterRunResult> {
     const command = this.command(context);
+    const deniedEnvironment = new Set(command.envDenyList ?? []);
+    const environment = Object.fromEntries(
+      Object.entries({ ...process.env, ...command.env })
+        .filter(([key]) => !key.startsWith("AGENT_BRIDGE_") && !deniedEnvironment.has(key)),
+    );
     const child = spawn(command.executable, [...command.args], {
       cwd: context.request.workingDirectory,
-      env: { ...process.env, ...command.env },
+      env: environment,
       detached: process.platform !== "win32",
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     });
+    child.stdin?.end(command.stdin ?? "");
     const stderr: string[] = [];
     child.stderr?.setEncoding("utf8");
     child.stderr?.on("data", (chunk: string) => {
@@ -131,6 +139,9 @@ export abstract class ProcessAdapter implements Adapter {
     const state = {
       identity: identity(context.route.provider, context.route.harnessVersion),
       content: new ContentAccumulator(),
+      effects: [] as WorkspaceEffect[],
+      usage: undefined as Usage | undefined,
+      failure: undefined as AdapterEvent["failure"],
     };
     let terminationTimer: NodeJS.Timeout | undefined;
     let terminationStarted = false;
@@ -147,6 +158,14 @@ export abstract class ProcessAdapter implements Adapter {
     context.signal.addEventListener("abort", onAbort, { once: true });
 
     try {
+      await context.emit({
+        category: "activity",
+        data: { phase: "process_started" },
+        native: {
+          command: { executable: command.executable, args: [...command.args] },
+          deniedEnvironment: [...deniedEnvironment].sort(),
+        },
+      });
       const lines = child.stdout === null ? undefined : createInterface({ input: child.stdout });
       if (lines !== undefined) {
         for await (const line of lines) {
@@ -174,6 +193,15 @@ export abstract class ProcessAdapter implements Adapter {
           }
           const event = this.normalizeNative(native, state);
           if (event !== undefined) {
+            if (event.effects !== undefined) {
+              state.effects.push(...event.effects);
+            }
+            if (event.usage !== undefined) {
+              state.usage = event.usage;
+            }
+            if (event.failure !== undefined) {
+              state.failure = event.failure;
+            }
             await context.emit(event);
           }
         }
@@ -184,6 +212,14 @@ export abstract class ProcessAdapter implements Adapter {
       });
       if (context.signal.aborted) {
         throw abortError();
+      }
+      if (state.failure !== undefined) {
+        throw new BridgeError({
+          code: "harness_failed",
+          message: state.failure.message,
+          retryable: false,
+          details: { nativeCode: state.failure.code },
+        });
       }
       if (exit.code !== 0) {
         const diagnostic = stderr.join("").trim();
@@ -199,8 +235,9 @@ export abstract class ProcessAdapter implements Adapter {
       return {
         content: state.content.parts,
         artifacts: [],
-        effects: [],
+        effects: state.effects,
         observedIdentity: state.identity,
+        ...(state.usage === undefined ? {} : { usage: state.usage }),
       };
     } finally {
       context.signal.removeEventListener("abort", onAbort);
@@ -214,12 +251,23 @@ export abstract class ProcessAdapter implements Adapter {
   }
 }
 
-class ContentAccumulator {
-  readonly parts: Array<{ readonly type: "text"; readonly text: string }> = [];
+export class ContentAccumulator {
+  readonly #fallback: Array<{ readonly type: "text"; readonly text: string }> = [];
+  #final: string | undefined;
+
+  get parts(): readonly { readonly type: "text"; readonly text: string }[] {
+    return this.#final === undefined ? this.#fallback : [{ type: "text", text: this.#final }];
+  }
 
   add(text: string): void {
     if (text !== "") {
-      this.parts.push({ type: "text", text });
+      this.#fallback.push({ type: "text", text });
+    }
+  }
+
+  setFinal(text: string): void {
+    if (text !== "") {
+      this.#final = text;
     }
   }
 }

@@ -1,4 +1,4 @@
-import type { JsonValue, RouteDescriptor } from "../contract.js";
+import type { JsonValue, RouteDescriptor, Usage, WorkspaceEffect } from "../contract.js";
 import { BridgeError } from "../errors.js";
 import { discoverManifestRoutes, type DiscoveryProbe } from "./discovery.js";
 import { ProcessAdapter, promptFor, type CommandSpec } from "./process.js";
@@ -35,7 +35,6 @@ function permissionMode(context: AdapterRunContext): string {
 function commandArgs(context: AdapterRunContext): readonly string[] {
   const args = [
     "-p",
-    promptFor(context),
     "--output-format",
     "stream-json",
     "--verbose",
@@ -54,6 +53,49 @@ function commandArgs(context: AdapterRunContext): readonly string[] {
     args.push("--disallowedTools", "Bash");
   }
   return args;
+}
+
+function usageFrom(value: unknown): Usage | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const source = value as Record<string, unknown>;
+  const numberValue = (candidate: unknown): number | undefined => typeof candidate === "number" && Number.isFinite(candidate) && candidate >= 0 ? candidate : undefined;
+  const inputTokens = numberValue(source.input_tokens);
+  const outputTokens = numberValue(source.output_tokens);
+  const cacheReadTokens = numberValue(source.cache_read_input_tokens);
+  const cacheWriteTokens = numberValue(source.cache_creation_input_tokens);
+  const costUsd = numberValue(source.total_cost_usd);
+  const turns = numberValue(source.num_turns);
+  if ([inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, costUsd, turns].every((item) => item === undefined)) {
+    return undefined;
+  }
+  return {
+    ...(inputTokens === undefined ? {} : { inputTokens }),
+    ...(outputTokens === undefined ? {} : { outputTokens }),
+    ...(cacheReadTokens === undefined ? {} : { cacheReadTokens }),
+    ...(cacheWriteTokens === undefined ? {} : { cacheWriteTokens }),
+    ...(turns === undefined ? {} : { turns }),
+    ...(costUsd === undefined ? {} : { costUsd }),
+    evidence: "reported",
+    source: "claude-stream",
+  };
+}
+
+function effectFromTool(block: unknown): WorkspaceEffect | undefined {
+  if (typeof block !== "object" || block === null || Array.isArray(block)) {
+    return undefined;
+  }
+  const source = block as Record<string, unknown>;
+  if (source.type !== "tool_use" || !["Edit", "MultiEdit", "Write", "NotebookEdit"].includes(String(source.name))) {
+    return undefined;
+  }
+  const input = typeof source.input === "object" && source.input !== null && !Array.isArray(source.input)
+    ? source.input as Record<string, unknown>
+    : {};
+  const path = [input.file_path, input.path, input.notebook_path]
+    .find((candidate): candidate is string => typeof candidate === "string" && candidate !== "");
+  return path === undefined ? undefined : { path, kind: "modified", evidence: "harness-reported" };
 }
 
 function textFromMessage(value: unknown): string | undefined {
@@ -101,12 +143,17 @@ export class ClaudeAdapter extends ProcessAdapter {
         retryable: false,
       });
     }
-    return { executable, args: commandArgs(context) };
+    return {
+      executable,
+      args: commandArgs(context),
+      stdin: promptFor(context),
+      envDenyList: ["CLAUDECODE", "CLAUDE_CODE", "CLAUDE_CODE_SESSION_ID"],
+    };
   }
 
   protected normalizeNative(
     value: Record<string, JsonValue>,
-    state: { identity: import("../contract.js").ObservedIdentity; content: { add(text: string): void } },
+    state: { identity: import("../contract.js").ObservedIdentity; content: { add(text: string): void; setFinal(text: string): void } },
   ): AdapterEvent | undefined {
     const type = typeof value.type === "string" ? value.type : "unknown";
     const sessionId = typeof value.session_id === "string" ? value.session_id : undefined;
@@ -120,18 +167,43 @@ export class ClaudeAdapter extends ProcessAdapter {
     }
     if (type === "assistant") {
       const text = textFromMessage(value.message);
+      const blocks = typeof value.message === "object" && value.message !== null && "content" in value.message && Array.isArray(value.message.content)
+        ? value.message.content
+        : [];
+      const effects = blocks.map(effectFromTool).filter((effect): effect is WorkspaceEffect => effect !== undefined);
       if (text !== undefined) {
-        state.content.add(text);
-        return { category: "output", content: [{ type: "text", text }], native: value };
+        return {
+          category: "output",
+          content: [{ type: "text", text }],
+          ...(effects.length === 0 ? {} : { effects }),
+          native: value,
+        };
+      }
+      if (effects.length > 0) {
+        return { category: "effect", effects, native: value };
       }
     }
     if (type === "result") {
       const text = typeof value.result === "string" ? value.result : undefined;
       if (text !== undefined) {
-        state.content.add(text);
-        return { category: "output", content: [{ type: "text", text }], native: value };
+        state.content.setFinal(text);
       }
-      return { category: "lifecycle", data: { state: "native_result" }, native: value };
+      const usage = usageFrom({
+        ...(typeof value.usage === "object" && value.usage !== null ? value.usage : {}),
+        total_cost_usd: value.total_cost_usd,
+        num_turns: value.num_turns,
+      });
+      const isError = value.is_error === true || (typeof value.subtype === "string" && value.subtype.startsWith("error_"));
+      return {
+        category: usage === undefined ? "lifecycle" : "usage",
+        data: { state: "native_result", ...(usage === undefined ? {} : { usage: { ...usage } }) },
+        ...(usage === undefined ? {} : { usage }),
+        ...(isError ? { failure: {
+          code: typeof value.subtype === "string" ? value.subtype : "native_error",
+          message: typeof value.result === "string" ? value.result : "Claude reported an unsuccessful result.",
+        } } : {}),
+        native: value,
+      };
     }
     if (type === "system") {
       return { category: "activity", data: { phase: "native_system" }, native: value };

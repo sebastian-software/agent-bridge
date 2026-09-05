@@ -607,11 +607,19 @@ export class Broker {
         provenance: { source: "adapter", adapter: current.resolvedRoute.adapter },
         ...(event.native === undefined ? {} : { native: event.native }),
       };
-      this.#records.set(invocationId, {
+      let updated: InvocationRecord = {
         ...current,
         updatedAt: timestamp,
         events: [...current.events, appended],
-      });
+      };
+      for (const effect of event.effects ?? []) {
+        updated = this.#appendBridgeEvent(updated, "effect", {
+          path: effect.path,
+          kind: effect.kind,
+          evidence: effect.evidence,
+        }, timestamp);
+      }
+      this.#records.set(invocationId, updated);
       return { value: undefined, changed: true };
     });
   }
@@ -696,6 +704,7 @@ export class Broker {
       artifacts: result.artifacts ?? [],
       effects: result.effects ?? [],
       effectObservation: result.effectObservation ?? { complete: true, diagnostics: [] },
+      ...(result.usage === undefined ? {} : { usage: result.usage }),
       observedIdentity: result.observedIdentity,
       policy: record.policy,
       ...(record.startedAt === undefined ? {} : { startedAt: record.startedAt }),
