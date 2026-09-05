@@ -165,6 +165,7 @@ export interface InvocationEvent {
 
 export interface WorkspaceEffect {
   readonly path: string;
+  readonly previousPath?: string;
   readonly kind: "created" | "deleted" | "modified" | "renamed" | "unknown";
   readonly evidence: "git-status" | "harness-reported";
 }

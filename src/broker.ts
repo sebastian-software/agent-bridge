@@ -21,6 +21,7 @@ import {
   type InputResponse,
   type InvocationState,
   type InvocationTombstone,
+  type JsonValue,
   type ObservedIdentity,
   type PolicyEvidence,
   type StartInvocationRequest,
@@ -89,6 +90,33 @@ function eventAfterCursor(events: readonly InvocationEvent[], cursor: string | u
   return events.slice(sequence);
 }
 
+const MAX_PERSISTED_NATIVE_BYTES = 16 * 1024;
+
+function persistedNative(
+  native: Readonly<Record<string, JsonValue>>,
+  diagnosticMode: boolean,
+): Readonly<Record<string, JsonValue>> {
+  const serialized = JSON.stringify(native);
+  const byteSize = Buffer.byteLength(serialized, "utf8");
+  if (diagnosticMode && byteSize <= MAX_PERSISTED_NATIVE_BYTES) {
+    return native;
+  }
+  const summary: Record<string, JsonValue> = {
+    type: typeof native.type === "string" ? native.type : "unknown",
+    byteSize,
+  };
+  for (const key of ["session_id", "model", "subtype", "request_id"] as const) {
+    const value = native[key];
+    if (typeof value === "string") {
+      summary[key] = value;
+    }
+  }
+  if (byteSize > MAX_PERSISTED_NATIVE_BYTES) {
+    summary.truncated = true;
+  }
+  return summary;
+}
+
 export class Broker {
   readonly #paths: BrokerPaths;
   readonly #store: InvocationStore;
@@ -101,6 +129,7 @@ export class Broker {
   readonly #inputWaiters = new Map<string, Map<string, (response: Pick<InputResponse, "decision">) => void>>();
   readonly #inputResponses = new Map<string, Pick<InputResponse, "decision">>();
   readonly #tombstones = new Map<string, InvocationTombstone>();
+  readonly #diagnosticMode: boolean;
   readonly #retention: {
     readonly completedMs: number;
     readonly maxBytes: number;
@@ -113,6 +142,7 @@ export class Broker {
       readonly completedMs?: number;
       readonly maxBytes?: number;
     };
+    readonly diagnosticMode?: boolean;
   }) {
     this.#paths = paths;
     this.#store = new InvocationStore(paths.stateFile);
@@ -121,6 +151,7 @@ export class Broker {
       completedMs: options?.retention?.completedMs ?? 7 * 24 * 60 * 60 * 1000,
       maxBytes: options?.retention?.maxBytes ?? 1_073_741_824,
     };
+    this.#diagnosticMode = options?.diagnosticMode ?? false;
   }
 
   async initialize(): Promise<void> {
@@ -229,12 +260,16 @@ export class Broker {
         stateFile: this.#store.path,
       },
       retention: {
-        completedDays: 7,
-        completedBytes: 1_073_741_824,
+        completedDays: this.#retention.completedMs / (24 * 60 * 60 * 1000),
+        completedBytes: this.#retention.maxBytes,
         evictionGranularity: "invocation",
         implemented: true,
         tombstones: true,
         workspaceConcurrency: "reject",
+      },
+      diagnostics: {
+        diagnosticMode: this.#diagnosticMode,
+        nativePayloadMaxBytes: MAX_PERSISTED_NATIVE_BYTES,
       },
     };
   }
@@ -250,6 +285,7 @@ export class Broker {
       activeInvocations: records.filter((record) => !TERMINAL_STATES.has(record.state)).length,
       retainedInvocations: records.length,
       tombstones: this.#tombstones.size,
+      diagnosticMode: this.#diagnosticMode,
     };
   }
 
@@ -621,7 +657,7 @@ export class Broker {
           },
         }),
         provenance: { source: "adapter", adapter: current.resolvedRoute.adapter },
-        ...(event.native === undefined ? {} : { native: event.native }),
+        ...(event.native === undefined ? {} : { native: persistedNative(event.native, this.#diagnosticMode) }),
       };
       let updated: InvocationRecord = {
         ...current,
@@ -632,6 +668,7 @@ export class Broker {
       for (const effect of event.effects ?? []) {
         updated = this.#appendBridgeEvent(updated, "effect", {
           path: effect.path,
+          ...(effect.previousPath === undefined ? {} : { previousPath: effect.previousPath }),
           kind: effect.kind,
           evidence: effect.evidence,
         }, timestamp);
@@ -744,6 +781,7 @@ export class Broker {
       for (const effect of observed.effects) {
         withEvent = this.#appendBridgeEvent(withEvent, "effect", {
           path: effect.path,
+          ...(effect.previousPath === undefined ? {} : { previousPath: effect.previousPath }),
           kind: effect.kind,
           evidence: effect.evidence,
         }, completedAt);

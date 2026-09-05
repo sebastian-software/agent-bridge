@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -105,6 +105,49 @@ class InteractiveAdapter implements Adapter {
   }
 }
 
+class NativePayloadAdapter implements Adapter {
+  readonly id = "native-payload";
+
+  async discover(): Promise<readonly RouteDescriptor[]> {
+    return [{
+      routeId: "native-payload:test",
+      provider: "agent-bridge",
+      model: "native-payload",
+      efforts: ["high"],
+      via: "native-payload",
+      adapter: this.id,
+      harnessVersion: "1.0.0",
+      authenticationMode: "none",
+      capabilities: ["core.input.text", "core.output.text"],
+      interactionStrategies: ["deny"],
+      assurance: "none",
+      runtimeIdentityEvidence: "verified",
+      readiness: "ready",
+      qualification: [{ qualificationId: "native-v1", testedAt: "2026-08-27T00:00:00.000Z", claim: "Native payload fixture." }],
+      diagnostics: [],
+    }];
+  }
+
+  async run(context: AdapterRunContext): Promise<AdapterRunResult> {
+    await context.emit({
+      category: "output",
+      content: [{ type: "text", text: "done" }],
+      native: { type: "assistant", model: "fixture", secret: "do-not-persist" },
+    });
+    return {
+      content: [{ type: "text", text: "done" }],
+      artifacts: [],
+      effects: [],
+      observedIdentity: {
+        provider: { value: "agent-bridge", evidence: "verified", source: "native-fixture" },
+        model: { value: "native-payload", evidence: "verified", source: "native-fixture" },
+        harnessVersion: { value: "1.0.0", evidence: "verified", source: "native-fixture" },
+        nativeSessionId: { evidence: "unverified" },
+      },
+    };
+  }
+}
+
 test("broker runs asynchronously, persists events, and deduplicates starts", async () => {
   const root = await mkdtemp(join(tmpdir(), "agent-bridge-broker-"));
   const broker = new Broker(paths(root));
@@ -141,6 +184,29 @@ test("broker runs asynchronously, persists events, and deduplicates starts", asy
       })),
       (error: unknown) => error instanceof BridgeError && error.code === "invocation_conflict",
     );
+  } finally {
+    await broker.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("store persists invocation metadata and events in separate files", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-bridge-store-layout-"));
+  const broker = new Broker(paths(root));
+  await broker.initialize();
+  try {
+    const started = await broker.start(request(root, "fake-echo"));
+    await waitForTerminal(broker, started.invocationId);
+    const manifest = JSON.parse(await readFile(paths(root).stateFile, "utf8")) as { storageVersion?: unknown; format?: unknown };
+    assert.deepEqual(manifest, { storageVersion: 2, format: "directory-v1" });
+    const invocationDirectory = join(paths(root).stateDirectory, "invocations", encodeURIComponent(started.invocationId));
+    const metadata = JSON.parse(await readFile(join(invocationDirectory, "meta.json"), "utf8")) as { events?: unknown; outcome?: unknown; state?: unknown };
+    assert.equal(metadata.events, undefined);
+    assert.equal(metadata.outcome, undefined);
+    assert.equal(metadata.state, "succeeded");
+    const eventLines = (await readFile(join(invocationDirectory, "events.jsonl"), "utf8")).trim().split("\n");
+    assert.equal(eventLines.length, (await broker.events({ invocationId: started.invocationId })).events.length);
+    assert.ok(await readFile(join(invocationDirectory, "outcome.json"), "utf8"));
   } finally {
     await broker.close();
     await rm(root, { recursive: true, force: true });
@@ -202,6 +268,64 @@ test("broker resumes an invocation after an orchestrator input response", async 
   } finally {
     await broker.close();
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("broker keeps native payloads bounded unless diagnostic mode is enabled", async () => {
+  const regularRoot = await mkdtemp(join(tmpdir(), "agent-bridge-native-regular-"));
+  const diagnosticRoot = await mkdtemp(join(tmpdir(), "agent-bridge-native-diagnostic-"));
+  const run = async (root: string, diagnosticMode: boolean): Promise<Readonly<Record<string, unknown>>> => {
+    const broker = new Broker(paths(root), {
+      registry: new AdapterRegistry([new NativePayloadAdapter()]),
+      diagnosticMode,
+    });
+    await broker.initialize();
+    try {
+      const started = await broker.start(request(root, "native-payload", {
+        selector: {
+          provider: "agent-bridge",
+          model: "native-payload",
+          via: "native-payload",
+          effort: "high",
+          requiredCapabilities: ["core.input.text"],
+        },
+        interactionStrategy: "deny",
+      }));
+      return await waitForTerminal(broker, started.invocationId);
+    } finally {
+      await broker.close();
+    }
+  };
+  try {
+    const regular = await run(regularRoot, false);
+    const diagnostic = await run(diagnosticRoot, true);
+    const regularEvent = (regular.outcome as { content: unknown }).content;
+    assert.deepEqual(regularEvent, [{ type: "text", text: "done" }]);
+    const regularEvents = await (async () => {
+      const broker = new Broker(paths(regularRoot), { diagnosticMode: false });
+      await broker.initialize();
+      try {
+        return broker.events({ invocationId: (regular as { invocationId: string }).invocationId });
+      } finally {
+        await broker.close();
+      }
+    })();
+    const regularNative = regularEvents.events.find((event) => event.category === "output")?.native;
+    assert.equal(regularNative?.secret, undefined);
+    const diagnosticEvents = await (async () => {
+      const broker = new Broker(paths(diagnosticRoot), { diagnosticMode: true });
+      await broker.initialize();
+      try {
+        return broker.events({ invocationId: (diagnostic as { invocationId: string }).invocationId });
+      } finally {
+        await broker.close();
+      }
+    })();
+    const diagnosticNative = diagnosticEvents.events.find((event) => event.category === "output")?.native;
+    assert.equal(diagnosticNative?.secret, "do-not-persist");
+  } finally {
+    await rm(regularRoot, { recursive: true, force: true });
+    await rm(diagnosticRoot, { recursive: true, force: true });
   }
 });
 
@@ -269,9 +393,7 @@ test("restart reconciliation marks a persisted active snapshot interrupted", asy
       }
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
-    const snapshot = await readFile(paths(liveRoot).stateFile, "utf8");
-    await mkdir(paths(restartRoot).stateDirectory, { recursive: true });
-    await writeFile(paths(restartRoot).stateFile, snapshot, "utf8");
+    await cp(paths(liveRoot).stateDirectory, paths(restartRoot).stateDirectory, { recursive: true });
   } finally {
     await liveBroker.close();
   }

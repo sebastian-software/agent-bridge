@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import {
@@ -199,8 +199,10 @@ function parsePolicy(value: unknown, field: string, requestPolicy: PolicyEvidenc
 
 function parseEffect(value: unknown, field: string): WorkspaceEffect {
   const source = objectValue(value, field);
+  const previousPath = optionalString(source.previousPath, `${field}.previousPath`);
   return {
     path: requiredString(source.path, `${field}.path`),
+    ...(previousPath === undefined ? {} : { previousPath }),
     kind: literal(source.kind, `${field}.kind`, ["created", "deleted", "modified", "renamed", "unknown"] as const),
     evidence: literal(source.evidence, `${field}.evidence`, ["git-status", "harness-reported"] as const),
   };
@@ -395,10 +397,17 @@ function parseState(value: unknown): PersistedState {
 
 export class InvocationStore {
   readonly #stateFile: string;
+  readonly #stateDirectory: string;
+  readonly #invocationsDirectory: string;
+  readonly #tombstonesFile: string;
+  readonly #knownSequences = new Map<string, number>();
   #writeTail: Promise<void> = Promise.resolve();
 
   constructor(stateFile: string) {
     this.#stateFile = stateFile;
+    this.#stateDirectory = dirname(stateFile);
+    this.#invocationsDirectory = join(this.#stateDirectory, "invocations");
+    this.#tombstonesFile = join(this.#stateDirectory, "tombstones.json");
   }
 
   get path(): string {
@@ -406,12 +415,12 @@ export class InvocationStore {
   }
 
   async load(): Promise<StoreSnapshot> {
-    let text: string;
+    let text: string | undefined;
     try {
       text = await readFile(this.#stateFile, "utf8");
     } catch (error) {
       if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
-        return { invocations: [], tombstones: [] };
+        return this.#loadDirectory();
       }
       throw error;
     }
@@ -426,26 +435,171 @@ export class InvocationStore {
         retryable: false,
       }, { cause: error });
     }
+    if (typeof decoded === "object" && decoded !== null && !Array.isArray(decoded)
+      && "storageVersion" in decoded && decoded.storageVersion === 2) {
+      return this.#loadDirectory();
+    }
     const state = parseState(decoded);
+    await this.#ensureDirectories();
+    await this.#writeRecords(state.invocations);
+    await this.#writeTombstones(state.tombstones);
+    await this.#writeManifest();
     return { invocations: state.invocations, tombstones: state.tombstones };
   }
 
   async save(invocations: readonly InvocationRecord[], tombstones: readonly InvocationTombstone[] = []): Promise<void> {
-    const state: PersistedState = {
-      storageVersion: 1,
-      invocations,
-      tombstones,
-    };
-    const serialized = `${JSON.stringify(state, null, 2)}\n`;
     const work = async (): Promise<void> => {
-      const directory = dirname(this.#stateFile);
-      await mkdir(directory, { recursive: true, mode: 0o700 });
-      const temporaryFile = join(directory, `.state-${randomUUID()}.tmp`);
-      await writeFile(temporaryFile, serialized, { encoding: "utf8", mode: 0o600 });
-      await rename(temporaryFile, this.#stateFile);
+      await this.#ensureDirectories();
+      await this.#writeRecords(invocations);
+      const retained = new Set(invocations.map((record) => record.invocationId));
+      for (const invocationId of [...this.#knownSequences.keys()]) {
+        if (retained.has(invocationId)) {
+          continue;
+        }
+        await rm(this.#invocationDirectory(invocationId), { recursive: true, force: true });
+        this.#knownSequences.delete(invocationId);
+      }
+      await this.#writeTombstones(tombstones);
+      await this.#writeManifest();
     };
     const scheduled = this.#writeTail.then(work, work);
     this.#writeTail = scheduled;
     await scheduled;
+  }
+
+  async #loadDirectory(): Promise<StoreSnapshot> {
+    const invocations: InvocationRecord[] = [];
+    let entries;
+    try {
+      entries = await readdir(this.#invocationsDirectory, { withFileTypes: true });
+    } catch (error) {
+      if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
+        return { invocations: [], tombstones: [] };
+      }
+      throw error;
+    }
+    for (const entry of entries.filter((candidate) => candidate.isDirectory()).sort((left, right) => left.name.localeCompare(right.name))) {
+      const invocationId = decodeURIComponent(entry.name);
+      const directory = this.#invocationDirectory(invocationId);
+      const metadata = objectValue(await this.#readJson(join(directory, "meta.json"), `meta for ${invocationId}`), `meta for ${invocationId}`);
+      const events = await this.#readEvents(join(directory, "events.jsonl"), invocationId);
+      let outcome: unknown;
+      try {
+        outcome = await this.#readJson(join(directory, "outcome.json"), `outcome for ${invocationId}`);
+      } catch (error) {
+        if (!(typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT")) {
+          throw error;
+        }
+      }
+      invocations.push(parseInvocation({
+        ...metadata,
+        events,
+        ...(outcome === undefined ? {} : { outcome }),
+      }, invocations.length));
+      this.#knownSequences.set(invocationId, events.length);
+    }
+    let tombstones: readonly InvocationTombstone[] = [];
+    try {
+      const source = objectValue(await this.#readJson(this.#tombstonesFile, "tombstones"), "tombstones");
+      if (!Array.isArray(source.tombstones)) {
+        corrupt("tombstones.tombstones must be an array.");
+      }
+      tombstones = source.tombstones.map(parseTombstone);
+    } catch (error) {
+      if (!(typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT")) {
+        throw error;
+      }
+    }
+    return { invocations, tombstones };
+  }
+
+  async #ensureDirectories(): Promise<void> {
+    await mkdir(this.#stateDirectory, { recursive: true, mode: 0o700 });
+    await mkdir(this.#invocationsDirectory, { recursive: true, mode: 0o700 });
+  }
+
+  #invocationDirectory(invocationId: string): string {
+    return join(this.#invocationsDirectory, encodeURIComponent(invocationId));
+  }
+
+  async #writeRecords(invocations: readonly InvocationRecord[]): Promise<void> {
+    for (const record of invocations) {
+      const directory = this.#invocationDirectory(record.invocationId);
+      await mkdir(directory, { recursive: true, mode: 0o700 });
+      let previousSequence = this.#knownSequences.get(record.invocationId) ?? 0;
+      if (record.events.length < previousSequence) {
+        await writeFile(join(directory, "events.jsonl"), "", { encoding: "utf8", mode: 0o600 });
+        previousSequence = 0;
+      }
+      if (record.events.length > previousSequence) {
+        const events = record.events.slice(previousSequence);
+        await appendFile(join(directory, "events.jsonl"), `${events.map((event) => JSON.stringify(event)).join("\n")}\n`, { encoding: "utf8", mode: 0o600 });
+      }
+      const { events: _events, outcome: _outcome, ...metadata } = record;
+      await this.#writeJson(join(directory, "meta.json"), metadata);
+      if (record.outcome === undefined) {
+        await rm(join(directory, "outcome.json"), { force: true });
+      } else {
+        await this.#writeJson(join(directory, "outcome.json"), record.outcome);
+      }
+      this.#knownSequences.set(record.invocationId, record.events.length);
+    }
+  }
+
+  async #writeTombstones(tombstones: readonly InvocationTombstone[]): Promise<void> {
+    await this.#writeJson(this.#tombstonesFile, { storageVersion: 2, tombstones });
+  }
+
+  async #writeManifest(): Promise<void> {
+    await this.#writeJson(this.#stateFile, { storageVersion: 2, format: "directory-v1" });
+  }
+
+  async #writeJson(path: string, value: unknown): Promise<void> {
+    const temporaryFile = join(dirname(path), `.state-${randomUUID()}.tmp`);
+    await writeFile(temporaryFile, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+    await rename(temporaryFile, path);
+  }
+
+  async #readJson(path: string, field: string): Promise<unknown> {
+    let text: string;
+    try {
+      text = await readFile(path, "utf8");
+    } catch (error) {
+      throw error;
+    }
+    try {
+      return JSON.parse(text) as unknown;
+    } catch (error) {
+      throw new BridgeError({
+        code: "internal_error",
+        message: `Persisted broker ${field} is not valid JSON.`,
+        retryable: false,
+      }, { cause: error });
+    }
+  }
+
+  async #readEvents(path: string, invocationId: string): Promise<readonly InvocationEvent[]> {
+    let text: string;
+    try {
+      text = await readFile(path, "utf8");
+    } catch (error) {
+      if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
+        return [];
+      }
+      throw error;
+    }
+    return text.split(/\r?\n/).filter((line) => line !== "").map((line, index) => {
+      let decoded: unknown;
+      try {
+        decoded = JSON.parse(line) as unknown;
+      } catch (error) {
+        throw new BridgeError({
+          code: "internal_error",
+          message: `Persisted events for ${invocationId} are not valid JSON.`,
+          retryable: false,
+        }, { cause: error });
+      }
+      return parseEvent(decoded, `events[${index}]`, invocationId, index + 1);
+    });
   }
 }
