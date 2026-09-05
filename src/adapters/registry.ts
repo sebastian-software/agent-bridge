@@ -25,9 +25,12 @@ const EVIDENCE_RANK: Readonly<Record<EvidenceStatus, number>> = {
   verified: 3,
 };
 
+const DISCOVERY_TTL_MS = 60_000;
+
 export class AdapterRegistry {
   readonly #adapters: ReadonlyMap<string, Adapter>;
   readonly #catalogPath: string;
+  #discoveryCache: { readonly expiresAt: number; readonly routes: readonly RouteDescriptor[] } | undefined;
 
   constructor(
     adapters: readonly Adapter[] = [new FakeAdapter(), new ClaudeAdapter(), new CodexAdapter()],
@@ -49,12 +52,20 @@ export class AdapterRegistry {
     return adapter;
   }
 
-  async discover(): Promise<readonly RouteDescriptor[]> {
+  async discover(options: { readonly refresh?: boolean } = {}): Promise<readonly RouteDescriptor[]> {
+    if (options.refresh !== true && this.#discoveryCache !== undefined && this.#discoveryCache.expiresAt > Date.now()) {
+      return this.#discoveryCache.routes;
+    }
     const routeGroups = await Promise.all(
       [...this.#adapters.values()].map((adapter) => adapter.discover()),
     );
     const catalog = await loadUserModelCatalog(this.#catalogPath);
-    return [...applyUserModelCatalog(routeGroups.flat(), catalog)].sort((left, right) => left.routeId.localeCompare(right.routeId));
+    const discoveredAt = new Date().toISOString();
+    const routes = [...applyUserModelCatalog(routeGroups.flat(), catalog)]
+      .map((route) => ({ ...route, discoveredAt }))
+      .sort((left, right) => left.routeId.localeCompare(right.routeId));
+    this.#discoveryCache = { expiresAt: Date.now() + DISCOVERY_TTL_MS, routes };
+    return routes;
   }
 
   async resolve(request: StartInvocationRequest): Promise<{

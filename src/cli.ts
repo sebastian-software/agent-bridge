@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { readFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
@@ -9,12 +10,14 @@ import { BridgeError, errorDetail } from "./errors.js";
 import { BrokerServer, IpcClient } from "./ipc.js";
 import { McpServer } from "./mcp.js";
 import { brokerPaths } from "./paths.js";
+import { loadBrokerConfig, type BrokerConfigValues } from "./config.js";
+import { PACKAGE_VERSION } from "./version.js";
 
 const HELP = `agent-bridge — local harness delegation gateway
 
 Usage:
   agent-bridge describe [--json]
-  agent-bridge routes [--json]
+  agent-bridge routes [--refresh] [--json]
   agent-bridge start --provider <id> --model <id> --text <text> [options]
   agent-bridge inspect <invocation-id> [--json]
   agent-bridge get <invocation-id> [--json]
@@ -23,8 +26,10 @@ Usage:
   agent-bridge events <invocation-id> [--after <cursor>] [--follow] [--json]
   agent-bridge cancel <invocation-id> [--json]
   agent-bridge request <operation> [--params <json>] [--json]
-  agent-bridge broker serve
+  agent-bridge broker serve [configuration flags]
   agent-bridge broker status [--json]
+  agent-bridge broker logs [--follow] [--json]
+  agent-bridge broker restart [--force] [--json]
   agent-bridge broker stop [--force] [--json]
   agent-bridge mcp serve
 
@@ -39,6 +44,15 @@ Start options:
   --idempotency-key <key>       Deduplicate an equivalent start request
   --correlation-id <id>         Opaque caller-owned correlation value
 
+Broker configuration flags:
+  --retention-completed-days <n>  Completed invocation retention
+  --retention-max-bytes <n>      Retained state byte budget
+  --diagnostic-mode              Persist bounded native diagnostics in full
+  --idle-shutdown-minutes <n>    Idle broker shutdown delay; zero disables
+  --effects-max-files <n>        Workspace snapshot file limit
+  --effects-max-bytes <n>        Workspace snapshot byte limit
+  --termination-grace-ms <n>     Grace period before force-killing a process
+
 Environment:
   AGENT_BRIDGE_RUNTIME_DIR      Override the user runtime directory
   AGENT_BRIDGE_STATE_DIR        Override the persisted state directory
@@ -50,7 +64,7 @@ interface ParsedArguments {
   readonly options: ReadonlyMap<string, readonly string[]>;
 }
 
-const BOOLEAN_OPTIONS = new Set(["follow", "help", "json"]);
+const BOOLEAN_OPTIONS = new Set(["diagnostic-mode", "follow", "force", "help", "json", "refresh"]);
 
 function parseArguments(args: readonly string[]): ParsedArguments {
   const positionals: string[] = [];
@@ -134,6 +148,21 @@ function positiveInteger(value: string | undefined, name: string): number | unde
   return parsed;
 }
 
+function nonNegativeInteger(value: string | undefined, name: string): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    throw new BridgeError({
+      code: "invalid_request",
+      message: `--${name} must be a non-negative integer.`,
+      retryable: false,
+    });
+  }
+  return parsed;
+}
+
 function boundedPositiveInteger(value: string | undefined, name: string, maximum: number): number | undefined {
   const parsed = positiveInteger(value, name);
   if (parsed !== undefined && parsed > maximum) {
@@ -189,11 +218,12 @@ async function readStandardInput(): Promise<string> {
   return result;
 }
 
-async function startBroker(): Promise<void> {
+async function startBroker(configOverrides: Partial<BrokerConfigValues> = {}): Promise<void> {
   const paths = brokerPaths();
-  const broker = new Broker(paths);
+  const config = await loadBrokerConfig(configOverrides);
+  const broker = new Broker(paths, { config });
   await broker.initialize();
-  const server = new BrokerServer(broker, paths.socketPath, paths.runtimeDirectory);
+  const server = new BrokerServer(broker, paths.socketPath, paths.runtimeDirectory, config.idleShutdownMinutes, `${paths.stateDirectory}/broker.log`);
   await server.start();
   if (process.env.AGENT_BRIDGE_DAEMON !== "1") {
     process.stderr.write(`agent-bridge broker listening at ${paths.socketPath}\n`);
@@ -210,6 +240,24 @@ async function requestBroker(operation: string, params: unknown): Promise<unknow
   const paths = brokerPaths();
   const client = new IpcClient(paths.socketPath);
   try {
+    if (operation !== "system.status" && operation !== "system.shutdown") {
+      const status = await client.request("system.status", {});
+      if (typeof status === "object" && status !== null && !Array.isArray(status)) {
+        const brokerVersion = "packageVersion" in status && typeof status.packageVersion === "string" ? status.packageVersion : undefined;
+        const activeInvocations = "activeInvocations" in status && typeof status.activeInvocations === "number" ? status.activeInvocations : 0;
+        if (brokerVersion !== PACKAGE_VERSION) {
+          if (activeInvocations > 0) {
+            throw new BridgeError({
+              code: "broker_unavailable",
+              message: `Broker version ${brokerVersion ?? "unknown"} is still serving ${String(activeInvocations)} active invocation(s). Retry after they finish or stop it with --force.`,
+              retryable: false,
+            });
+          }
+          await client.request("system.shutdown", {});
+          await delay(100);
+        }
+      }
+    }
     return await client.request(operation, params);
   } catch (error) {
     if (!(error instanceof BridgeError) || error.code !== "broker_unavailable" || !error.retryable) {
@@ -242,6 +290,18 @@ async function requestBroker(operation: string, params: unknown): Promise<unknow
     message: `The broker did not become ready at ${paths.socketPath}.`,
     retryable: true,
   }, { cause: lastError });
+}
+
+async function requestRunningBroker(operation: string, params: unknown): Promise<unknown> {
+  const paths = brokerPaths();
+  try {
+    return await new IpcClient(paths.socketPath).request(operation, params);
+  } catch (error) {
+    if (error instanceof BridgeError && error.code === "broker_unavailable") {
+      return { running: false, socketPath: paths.socketPath };
+    }
+    throw error;
+  }
 }
 
 async function startMcp(): Promise<void> {
@@ -288,7 +348,21 @@ async function runCommand(argv: readonly string[]): Promise<void> {
   if (command === "broker") {
     const action = positional(parsed, 0, "broker action");
     if (action === "serve") {
-      await startBroker();
+      const overrides: { -readonly [Key in keyof BrokerConfigValues]?: BrokerConfigValues[Key] } = {};
+      const retentionCompletedDays = nonNegativeInteger(option(parsed, "retention-completed-days"), "retention-completed-days");
+      const retentionMaxBytes = positiveInteger(option(parsed, "retention-max-bytes"), "retention-max-bytes");
+      const idleShutdownMinutes = nonNegativeInteger(option(parsed, "idle-shutdown-minutes"), "idle-shutdown-minutes");
+      const effectsMaxFiles = positiveInteger(option(parsed, "effects-max-files"), "effects-max-files");
+      const effectsMaxBytes = positiveInteger(option(parsed, "effects-max-bytes"), "effects-max-bytes");
+      const terminationGraceMs = positiveInteger(option(parsed, "termination-grace-ms"), "termination-grace-ms");
+      if (retentionCompletedDays !== undefined) overrides.retentionCompletedDays = retentionCompletedDays;
+      if (retentionMaxBytes !== undefined) overrides.retentionMaxBytes = retentionMaxBytes;
+      if (parsed.options.has("diagnostic-mode")) overrides.diagnosticMode = true;
+      if (idleShutdownMinutes !== undefined) overrides.idleShutdownMinutes = idleShutdownMinutes;
+      if (effectsMaxFiles !== undefined) overrides.effectsMaxFiles = effectsMaxFiles;
+      if (effectsMaxBytes !== undefined) overrides.effectsMaxBytes = effectsMaxBytes;
+      if (terminationGraceMs !== undefined) overrides.terminationGraceMs = terminationGraceMs;
+      await startBroker(overrides);
       return;
     }
     if (action === "stop") {
@@ -297,6 +371,43 @@ async function runCommand(argv: readonly string[]): Promise<void> {
       return;
     }
     if (action === "status") {
+      output(await requestRunningBroker("system.status", {}), json);
+      return;
+    }
+    if (action === "logs") {
+      const paths = brokerPaths();
+      if (parsed.options.has("follow")) {
+        let offset = 0;
+        while (true) {
+          let text = "";
+          try {
+            text = await readFile(`${paths.stateDirectory}/broker.log`, "utf8");
+          } catch (error) {
+            if (!(typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT")) {
+              throw error;
+            }
+          }
+          if (text.length > offset) {
+            process.stdout.write(text.slice(offset));
+            offset = text.length;
+          }
+          await delay(250);
+        }
+      }
+      try {
+        output(await readFile(`${paths.stateDirectory}/broker.log`, "utf8"), json);
+      } catch (error) {
+        if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
+          output("", json);
+          return;
+        }
+        throw error;
+      }
+      return;
+    }
+    if (action === "restart") {
+      await requestRunningBroker("system.shutdown", { force: parsed.options.has("force") });
+      await delay(100);
       output(await requestBroker("system.status", {}), json);
       return;
     }
@@ -325,7 +436,7 @@ async function runCommand(argv: readonly string[]): Promise<void> {
     return;
   }
   if (command === "routes") {
-    output(await requestBroker("route.discover", {}), json);
+    output(await requestBroker("route.discover", { refresh: parsed.options.has("refresh") }), json);
     return;
   }
   if (command === "start") {

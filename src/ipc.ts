@@ -1,4 +1,4 @@
-import { lstat, mkdir, chmod, unlink } from "node:fs/promises";
+import { appendFile, lstat, mkdir, chmod, rename, stat, unlink } from "node:fs/promises";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
 import { dirname } from "node:path";
 
@@ -8,6 +8,7 @@ import { BridgeError, errorDetail, type BridgeErrorCode } from "./errors.js";
 import { ensurePrivateDirectory } from "./paths.js";
 
 const MAX_MESSAGE_BYTES = 1_048_576;
+const MAX_LOG_BYTES = 1_048_576;
 
 const BRIDGE_ERROR_CODES: ReadonlySet<string> = new Set<BridgeErrorCode>([
   "invalid_request",
@@ -59,6 +60,10 @@ export class BrokerServer {
   readonly #broker: Broker;
   readonly #socketPath: string;
   readonly #runtimeDirectory: string;
+  readonly #idleShutdownMs: number;
+  readonly #logFile: string;
+  #idleTimer: NodeJS.Timeout | undefined;
+  #lastRequestAt = Date.now();
   readonly #sockets = new Set<Socket>();
   #server: Server | undefined;
   #stopPromise: Promise<void> | undefined;
@@ -67,10 +72,12 @@ export class BrokerServer {
     this.#resolveClosed = resolve;
   });
 
-  constructor(broker: Broker, socketPath: string, runtimeDirectory = dirname(socketPath)) {
+  constructor(broker: Broker, socketPath: string, runtimeDirectory = dirname(socketPath), idleShutdownMinutes = 0, logFile?: string) {
     this.#broker = broker;
     this.#socketPath = socketPath;
     this.#runtimeDirectory = runtimeDirectory;
+    this.#idleShutdownMs = idleShutdownMinutes * 60 * 1000;
+    this.#logFile = logFile ?? `${dirname(socketPath)}/broker.log`;
   }
 
   get closed(): Promise<void> {
@@ -119,6 +126,8 @@ export class BrokerServer {
       server.listen(this.#socketPath);
     });
     await chmod(this.#socketPath, 0o600);
+    await this.#writeLog(`broker started pid=${String(process.pid)}`);
+    this.#scheduleIdleCheck();
   }
 
   async stop(): Promise<void> {
@@ -130,6 +139,11 @@ export class BrokerServer {
   }
 
   async #stop(): Promise<void> {
+    if (this.#idleTimer !== undefined) {
+      clearTimeout(this.#idleTimer);
+      this.#idleTimer = undefined;
+    }
+    await this.#writeLog(`broker stopping pid=${String(process.pid)}`);
     for (const socket of this.#sockets) {
       socket.destroy();
     }
@@ -195,6 +209,7 @@ export class BrokerServer {
   }
 
   async #handle(line: string): Promise<{ readonly response: OperationResponse; readonly shutdown: boolean }> {
+    this.#lastRequestAt = Date.now();
     let decoded: unknown;
     try {
       decoded = JSON.parse(line) as unknown;
@@ -240,6 +255,43 @@ export class BrokerServer {
         });
       }
     });
+  }
+
+  #scheduleIdleCheck(): void {
+    if (this.#idleShutdownMs <= 0) {
+      return;
+    }
+    this.#idleTimer = setTimeout(() => {
+      this.#idleTimer = undefined;
+      const active = this.#broker.status().activeInvocations;
+      if (active === 0 && Date.now() - this.#lastRequestAt >= this.#idleShutdownMs) {
+        this.stop().catch((error: unknown) => {
+          process.emitWarning(`Failed to stop idle broker: ${error instanceof Error ? error.message : "unknown error"}`);
+        });
+        return;
+      }
+      this.#scheduleIdleCheck();
+    }, Math.max(100, this.#idleShutdownMs));
+    this.#idleTimer.unref();
+  }
+
+  async #writeLog(message: string): Promise<void> {
+    try {
+      await mkdir(dirname(this.#logFile), { recursive: true, mode: 0o700 });
+      try {
+        const info = await stat(this.#logFile);
+        if (info.size >= MAX_LOG_BYTES) {
+          await rename(this.#logFile, `${this.#logFile}.1`).catch(() => undefined);
+        }
+      } catch (error) {
+        if (!(typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT")) {
+          return;
+        }
+      }
+      await appendFile(this.#logFile, `${new Date().toISOString()} ${message}\n`, { encoding: "utf8", mode: 0o600 });
+    } catch {
+      // Logging must never prevent the broker from serving requests.
+    }
   }
 }
 

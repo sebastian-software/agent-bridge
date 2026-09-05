@@ -158,7 +158,7 @@ export abstract class ProcessAdapter implements Adapter {
       }
       terminationStarted = true;
       killProcessGroup(child, "SIGINT");
-      terminationTimer = setTimeout(() => killProcessGroup(child, "SIGKILL"), TERMINATION_GRACE_MS);
+      terminationTimer = setTimeout(() => killProcessGroup(child, "SIGKILL"), context.terminationGraceMs ?? TERMINATION_GRACE_MS);
       terminationTimer.unref();
     };
     const onAbort = (): void => terminate();

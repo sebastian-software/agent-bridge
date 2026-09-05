@@ -40,8 +40,8 @@ export const OPERATION_DEFINITIONS: readonly OperationDefinition[] = [
     summary: "Gracefully stop the user-owned local broker.",
     availability: "implemented",
     cli: ["broker stop --json"],
-    input: { type: "object", additionalProperties: false },
-    output: { type: "object", required: ["accepted"] },
+    input: { type: "object", additionalProperties: false, properties: { force: { type: "boolean" } } },
+    output: { type: "object", required: ["accepted", "force", "activeInvocations"] },
   },
   {
     name: "system.status",
@@ -56,7 +56,7 @@ export const OPERATION_DEFINITIONS: readonly OperationDefinition[] = [
     summary: "List adapter-qualified routes and their readiness evidence.",
     availability: "implemented",
     cli: ["routes --json"],
-    input: { type: "object", additionalProperties: false },
+    input: { type: "object", additionalProperties: false, properties: { refresh: { type: "boolean" } } },
     output: { type: "object", required: ["routes"] },
   },
   {
