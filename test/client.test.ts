@@ -3,9 +3,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-
-import { createClient } from "../src/client.js";
 import { Broker } from "../src/broker.js";
+import { createClient } from "../src/client.js";
 import { BrokerServer } from "../src/ipc.js";
 import type { BrokerPaths } from "../src/paths.js";
 

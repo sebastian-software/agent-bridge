@@ -7,7 +7,7 @@ const args = process.argv.slice(2);
 
 function option(name, fallback) {
   const index = args.indexOf(name);
-  return index === -1 ? fallback : args[index + 1] ?? fallback;
+  return index === -1 ? fallback : (args[index + 1] ?? fallback);
 }
 
 function emit(event) {
@@ -22,11 +22,20 @@ const model = option("--model", "fake-echo");
 process.on("SIGINT", () => process.exit(130));
 process.on("SIGTERM", () => process.exit(143));
 
-if (!["success", "failure", "timeout", "malformed", "truncated", "effects", "cancel", "identity-absent", "slow"].includes(scenario)) {
+if (
+  !["success", "failure", "timeout", "malformed", "truncated", "effects", "cancel", "identity-absent", "slow"].includes(
+    scenario,
+  )
+) {
   console.error(`unknown scenario: ${scenario}`);
   process.exitCode = 2;
 } else {
-  emit({ type: "init", provider: "agent-bridge", model: scenario === "identity-absent" ? undefined : model, harnessVersion: "1.0.0" });
+  emit({
+    type: "init",
+    provider: "agent-bridge",
+    model: scenario === "identity-absent" ? undefined : model,
+    harnessVersion: "1.0.0",
+  });
   emit({ type: "progress", step: 1, total: scenario === "slow" ? 8 : 2 });
 
   if (scenario === "malformed") {

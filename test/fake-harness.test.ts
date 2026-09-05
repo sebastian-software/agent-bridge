@@ -3,20 +3,26 @@ import { execFile as execFileCallback, spawn } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
 import test from "node:test";
+import { promisify } from "node:util";
 
 const execFile = promisify(execFileCallback);
 const harnessPath = join(process.cwd(), "scripts", "fake-harness.mjs");
 
 function events(stdout: string): readonly Record<string, unknown>[] {
-  return stdout.split("\n").filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>);
+  return stdout
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
 test("fake harness emits a deterministic native-style success stream", async () => {
   const result = await execFile(process.execPath, [harnessPath, "--scenario", "success", "--text", "hello"]);
   assert.equal(result.stderr, "");
-  assert.deepEqual(events(result.stdout).map((event) => event.type), ["init", "progress", "assistant", "result"]);
+  assert.deepEqual(
+    events(result.stdout).map((event) => event.type),
+    ["init", "progress", "assistant", "result"],
+  );
   assert.equal(events(result.stdout).at(-1)?.status, "completed");
 });
 

@@ -97,7 +97,19 @@ export const OPERATION_DEFINITIONS: readonly OperationDefinition[] = [
       type: "object",
       additionalProperties: false,
       properties: {
-        state: { enum: ["queued", "running", "waiting_for_input", "cancelling", "cancelled", "failed", "interrupted", "succeeded", "timed_out"] },
+        state: {
+          enum: [
+            "queued",
+            "running",
+            "waiting_for_input",
+            "cancelling",
+            "cancelled",
+            "failed",
+            "interrupted",
+            "succeeded",
+            "timed_out",
+          ],
+        },
         callerCorrelationId: { type: "string", minLength: 1 },
         since: { type: "string", format: "date-time" },
         limit: { type: "integer", minimum: 1, maximum: 1000 },
@@ -151,7 +163,11 @@ export const OPERATION_DEFINITIONS: readonly OperationDefinition[] = [
     summary: "Answer a pending Claude permission request in orchestrator mode.",
     availability: "implemented",
     cli: ["request invocation.respond --params <json> --json"],
-    input: { type: "object", required: ["invocationId", "requestId", "decision"], properties: { decision: { enum: ["allow", "deny"] } } },
+    input: {
+      type: "object",
+      required: ["invocationId", "requestId", "decision"],
+      properties: { decision: { enum: ["allow", "deny"] } },
+    },
     output: { type: "object", required: ["invocationId", "requestId", "accepted"] },
   },
   {

@@ -1,27 +1,29 @@
 import { randomUUID } from "node:crypto";
-import { appendFile, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import type { Dirent } from "node:fs";
 import { dirname, join } from "node:path";
 
 import {
-  SCHEMA_VERSION,
-  TERMINAL_STATES,
-  isJsonValue,
-  parseContentParts,
-  parseStartInvocationRequest,
   type Assurance,
   type EventCategory,
   type EvidenceStatus,
   type InvocationEvent,
   type InvocationOutcome,
   type InvocationRecord,
-  type InvocationTombstone,
   type InvocationState,
+  type InvocationTombstone,
+  isJsonValue,
   type JsonValue,
   type ObservedIdentity,
   type ObservedValue,
   type PolicyEvidence,
+  parseContentParts,
+  parseStartInvocationRequest,
   type QualificationEvidence,
   type ResolvedRoute,
+  SCHEMA_VERSION,
+  type StartInvocationRequest,
+  TERMINAL_STATES,
   type TerminalStatus,
   type Usage,
   type WorkspaceEffect,
@@ -248,18 +250,14 @@ function parseEvent(value: unknown, field: string, invocationId: string, expecte
   };
 }
 
-function parseOutcome(
-  value: unknown,
-  field: string,
-  invocationId: string,
-  policy: PolicyEvidence,
-): InvocationOutcome {
+function parseOutcome(value: unknown, field: string, invocationId: string, policy: PolicyEvidence): InvocationOutcome {
   const source = objectValue(value, field);
   if (source.schemaVersion !== SCHEMA_VERSION || source.invocationId !== invocationId) {
     corrupt(`${field} identity does not match its invocation.`);
   }
   const startedAt = optionalString(source.startedAt, `${field}.startedAt`);
-  const durationMs = source.durationMs === undefined ? undefined : finiteNumber(source.durationMs, `${field}.durationMs`);
+  const durationMs =
+    source.durationMs === undefined ? undefined : finiteNumber(source.durationMs, `${field}.durationMs`);
   if (durationMs !== undefined && durationMs < 0) {
     corrupt(`${field}.durationMs must not be negative.`);
   }
@@ -274,9 +272,10 @@ function parseOutcome(
   if (!Array.isArray(source.effects)) {
     corrupt(`${field}.effects must be an array.`);
   }
-  const effectObservation = source.effectObservation === undefined
-    ? { complete: true, diagnostics: [] }
-    : objectValue(source.effectObservation, `${field}.effectObservation`);
+  const effectObservation =
+    source.effectObservation === undefined
+      ? { complete: true, diagnostics: [] }
+      : objectValue(source.effectObservation, `${field}.effectObservation`);
   if (typeof effectObservation.complete !== "boolean") {
     corrupt(`${field}.effectObservation.complete must be a boolean.`);
   }
@@ -315,15 +314,18 @@ function parseInvocation(value: unknown, index: number): InvocationRecord {
     corrupt(`${field}.schemaVersion is unsupported.`);
   }
   const invocationId = requiredString(source.invocationId, `${field}.invocationId`);
-  let request;
+  let request: StartInvocationRequest;
   try {
     request = parseStartInvocationRequest(source.request);
   } catch (error) {
-    throw new BridgeError({
-      code: "internal_error",
-      message: `Persisted broker state is invalid: ${field}.request failed validation.`,
-      retryable: false,
-    }, { cause: error });
+    throw new BridgeError(
+      {
+        code: "internal_error",
+        message: `Persisted broker state is invalid: ${field}.request failed validation.`,
+        retryable: false,
+      },
+      { cause: error },
+    );
   }
   const resolvedRoute = parseResolvedRoute(source.resolvedRoute, `${field}.resolvedRoute`);
   const policy = parsePolicy(source.policy, `${field}.policy`, request.requestedPolicy);
@@ -341,10 +343,11 @@ function parseInvocation(value: unknown, index: number): InvocationRecord {
   if (!Array.isArray(source.events)) {
     corrupt(`${field}.events must be an array.`);
   }
-  const events = source.events.map((event, eventIndex) => parseEvent(event, `${field}.events[${eventIndex}]`, invocationId, eventIndex + 1));
-  const outcome = source.outcome === undefined
-    ? undefined
-    : parseOutcome(source.outcome, `${field}.outcome`, invocationId, policy);
+  const events = source.events.map((event, eventIndex) =>
+    parseEvent(event, `${field}.events[${eventIndex}]`, invocationId, eventIndex + 1),
+  );
+  const outcome =
+    source.outcome === undefined ? undefined : parseOutcome(source.outcome, `${field}.outcome`, invocationId, policy);
   if (TERMINAL_STATES.has(state) !== (outcome !== undefined)) {
     corrupt(`${field} must have exactly one outcome if and only if it is terminal.`);
   }
@@ -387,11 +390,12 @@ function parseState(value: unknown): PersistedState {
   return {
     storageVersion: 1,
     invocations: source.invocations.map(parseInvocation),
-    tombstones: source.tombstones === undefined
-      ? []
-      : Array.isArray(source.tombstones)
-        ? source.tombstones.map(parseTombstone)
-        : corrupt("tombstones must be an array."),
+    tombstones:
+      source.tombstones === undefined
+        ? []
+        : Array.isArray(source.tombstones)
+          ? source.tombstones.map(parseTombstone)
+          : corrupt("tombstones must be an array."),
   };
 }
 
@@ -433,14 +437,22 @@ export class InvocationStore {
     try {
       decoded = JSON.parse(text) as unknown;
     } catch (error) {
-      throw new BridgeError({
-        code: "internal_error",
-        message: "Persisted broker state is not valid JSON.",
-        retryable: false,
-      }, { cause: error });
+      throw new BridgeError(
+        {
+          code: "internal_error",
+          message: "Persisted broker state is not valid JSON.",
+          retryable: false,
+        },
+        { cause: error },
+      );
     }
-    if (typeof decoded === "object" && decoded !== null && !Array.isArray(decoded)
-      && "storageVersion" in decoded && decoded.storageVersion === 2) {
+    if (
+      typeof decoded === "object" &&
+      decoded !== null &&
+      !Array.isArray(decoded) &&
+      "storageVersion" in decoded &&
+      decoded.storageVersion === 2
+    ) {
       return this.#loadDirectory();
     }
     const state = parseState(decoded);
@@ -473,7 +485,7 @@ export class InvocationStore {
 
   async #loadDirectory(): Promise<StoreSnapshot> {
     const invocations: InvocationRecord[] = [];
-    let entries;
+    let entries: Dirent<string>[];
     try {
       entries = await readdir(this.#invocationsDirectory, { withFileTypes: true });
     } catch (error) {
@@ -482,10 +494,15 @@ export class InvocationStore {
       }
       throw error;
     }
-    for (const entry of entries.filter((candidate) => candidate.isDirectory()).sort((left, right) => left.name.localeCompare(right.name))) {
+    for (const entry of entries
+      .filter((candidate) => candidate.isDirectory())
+      .sort((left, right) => left.name.localeCompare(right.name))) {
       const invocationId = decodeURIComponent(entry.name);
       const directory = this.#invocationDirectory(invocationId);
-      const metadata = objectValue(await this.#readJson(join(directory, "meta.json"), `meta for ${invocationId}`), `meta for ${invocationId}`);
+      const metadata = objectValue(
+        await this.#readJson(join(directory, "meta.json"), `meta for ${invocationId}`),
+        `meta for ${invocationId}`,
+      );
       const events = await this.#readEvents(join(directory, "events.jsonl"), invocationId);
       let outcome: unknown;
       try {
@@ -495,11 +512,16 @@ export class InvocationStore {
           throw error;
         }
       }
-      invocations.push(parseInvocation({
-        ...metadata,
-        events,
-        ...(outcome === undefined ? {} : { outcome }),
-      }, invocations.length));
+      invocations.push(
+        parseInvocation(
+          {
+            ...metadata,
+            events,
+            ...(outcome === undefined ? {} : { outcome }),
+          },
+          invocations.length,
+        ),
+      );
       this.#knownSequences.set(invocationId, events.length);
     }
     let tombstones: readonly InvocationTombstone[] = [];
@@ -537,7 +559,11 @@ export class InvocationStore {
       }
       if (record.events.length > previousSequence) {
         const events = record.events.slice(previousSequence);
-        await appendFile(join(directory, "events.jsonl"), `${events.map((event) => JSON.stringify(event)).join("\n")}\n`, { encoding: "utf8", mode: 0o600 });
+        await appendFile(
+          join(directory, "events.jsonl"),
+          `${events.map((event) => JSON.stringify(event)).join("\n")}\n`,
+          { encoding: "utf8", mode: 0o600 },
+        );
       }
       const { events: _events, outcome: _outcome, ...metadata } = record;
       await this.#writeJson(join(directory, "meta.json"), metadata);
@@ -565,20 +591,18 @@ export class InvocationStore {
   }
 
   async #readJson(path: string, field: string): Promise<unknown> {
-    let text: string;
-    try {
-      text = await readFile(path, "utf8");
-    } catch (error) {
-      throw error;
-    }
+    const text = await readFile(path, "utf8");
     try {
       return JSON.parse(text) as unknown;
     } catch (error) {
-      throw new BridgeError({
-        code: "internal_error",
-        message: `Persisted broker ${field} is not valid JSON.`,
-        retryable: false,
-      }, { cause: error });
+      throw new BridgeError(
+        {
+          code: "internal_error",
+          message: `Persisted broker ${field} is not valid JSON.`,
+          retryable: false,
+        },
+        { cause: error },
+      );
     }
   }
 
@@ -592,18 +616,24 @@ export class InvocationStore {
       }
       throw error;
     }
-    return text.split(/\r?\n/).filter((line) => line !== "").map((line, index) => {
-      let decoded: unknown;
-      try {
-        decoded = JSON.parse(line) as unknown;
-      } catch (error) {
-        throw new BridgeError({
-          code: "internal_error",
-          message: `Persisted events for ${invocationId} are not valid JSON.`,
-          retryable: false,
-        }, { cause: error });
-      }
-      return parseEvent(decoded, `events[${index}]`, invocationId, index + 1);
-    });
+    return text
+      .split(/\r?\n/)
+      .filter((line) => line !== "")
+      .map((line, index) => {
+        let decoded: unknown;
+        try {
+          decoded = JSON.parse(line) as unknown;
+        } catch (error) {
+          throw new BridgeError(
+            {
+              code: "internal_error",
+              message: `Persisted events for ${invocationId} are not valid JSON.`,
+              retryable: false,
+            },
+            { cause: error },
+          );
+        }
+        return parseEvent(decoded, `events[${index}]`, invocationId, index + 1);
+      });
   }
 }

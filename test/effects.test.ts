@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { execFile as execFileCallback } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
 import test from "node:test";
+import { promisify } from "node:util";
 
 import { captureWorkspaceSnapshot, observeWorkspaceEffects } from "../src/effects.js";
 

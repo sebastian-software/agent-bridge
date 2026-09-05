@@ -4,9 +4,9 @@ import test from "node:test";
 import { ClaudeAdapter } from "../src/adapters/claude.js";
 import { CodexAdapter } from "../src/adapters/codex.js";
 import { parseVersion, satisfiesVersionRange } from "../src/adapters/discovery.js";
-import { ContentAccumulator, ProcessAdapter, type CommandSpec } from "../src/adapters/process.js";
-import type { JsonValue, ObservedIdentity, ResolvedRoute, RouteDescriptor } from "../src/contract.js";
+import { type CommandSpec, ContentAccumulator, ProcessAdapter } from "../src/adapters/process.js";
 import type { AdapterEvent, AdapterRunContext } from "../src/adapters/types.js";
+import type { JsonValue, ObservedIdentity, ResolvedRoute, RouteDescriptor } from "../src/contract.js";
 
 const route = (adapter: string, executable: string): ResolvedRoute => ({
   routeId: `${adapter}:test`,
@@ -36,7 +36,7 @@ class TestProcessAdapter extends ProcessAdapter {
     return [];
   }
 
-  protected command(context: AdapterRunContext): CommandSpec {
+  protected command(_context: AdapterRunContext): CommandSpec {
     return {
       executable: process.execPath,
       args: ["-e", "console.log(JSON.stringify({type:'assistant',message:{content:[{type:'text',text:'hello'}]}}))"],
@@ -47,12 +47,17 @@ class TestProcessAdapter extends ProcessAdapter {
     value: Record<string, JsonValue>,
     state: { identity: ObservedIdentity; content: { add(text: string): void } },
   ): AdapterEvent {
-    const text = typeof value.message === "object" && value.message !== null
-      && "content" in value.message && Array.isArray(value.message.content)
-      && typeof value.message.content[0] === "object" && value.message.content[0] !== null
-      && "text" in value.message.content[0] && typeof value.message.content[0].text === "string"
-      ? value.message.content[0].text
-      : "";
+    const text =
+      typeof value.message === "object" &&
+      value.message !== null &&
+      "content" in value.message &&
+      Array.isArray(value.message.content) &&
+      typeof value.message.content[0] === "object" &&
+      value.message.content[0] !== null &&
+      "text" in value.message.content[0] &&
+      typeof value.message.content[0].text === "string"
+        ? value.message.content[0].text
+        : "";
     state.content.add(text);
     return { category: "output", content: [{ type: "text", text }], native: value };
   }
@@ -68,7 +73,10 @@ class StdinProcessAdapter extends ProcessAdapter {
   protected command(): CommandSpec {
     return {
       executable: process.execPath,
-      args: ["-e", "process.stdin.setEncoding('utf8'); let s=''; process.stdin.on('data', c => s += c); process.stdin.on('end', () => console.log(JSON.stringify({type:'assistant',message:{content:[{type:'text',text:s}]},env:process.env.TEST_DENIED ?? null})))"],
+      args: [
+        "-e",
+        "process.stdin.setEncoding('utf8'); let s=''; process.stdin.on('data', c => s += c); process.stdin.on('end', () => console.log(JSON.stringify({type:'assistant',message:{content:[{type:'text',text:s}]},env:process.env.TEST_DENIED ?? null})))",
+      ],
       stdin: "prompt from stdin",
       env: { TEST_DENIED: "must-not-leak" },
       envDenyList: ["TEST_DENIED"],
@@ -140,13 +148,19 @@ class InteractiveProcessAdapter extends ProcessAdapter {
 }
 
 class InspectableClaudeAdapter extends ClaudeAdapter {
-  normalize(value: Record<string, JsonValue>, state: { identity: ObservedIdentity; content: ContentAccumulator }): AdapterEvent | undefined {
+  normalize(
+    value: Record<string, JsonValue>,
+    state: { identity: ObservedIdentity; content: ContentAccumulator },
+  ): AdapterEvent | undefined {
     return this.normalizeNative(value, state);
   }
 }
 
 class InspectableCodexAdapter extends CodexAdapter {
-  normalize(value: Record<string, JsonValue>, state: { identity: ObservedIdentity; content: ContentAccumulator }): AdapterEvent | undefined {
+  normalize(
+    value: Record<string, JsonValue>,
+    state: { identity: ObservedIdentity; content: ContentAccumulator },
+  ): AdapterEvent | undefined {
     return this.normalizeNative(value, state);
   }
 
@@ -202,7 +216,9 @@ test("process adapter normalizes JSONL output and preserves the absolute executa
     request: request(process.cwd()),
     route: route(adapter.id, process.execPath),
     signal: new AbortController().signal,
-    emit: async (event) => { events.push(event); },
+    emit: async (event) => {
+      events.push(event);
+    },
   });
   assert.deepEqual(result.content, [{ type: "text", text: "hello" }]);
   assert.equal(events.at(-1)?.category, "output");
@@ -216,7 +232,9 @@ test("process adapter sends prompt on stdin and filters denied environment varia
     request: request(process.cwd()),
     route: route(adapter.id, process.execPath),
     signal: new AbortController().signal,
-    emit: async (event) => { events.push(event); },
+    emit: async (event) => {
+      events.push(event);
+    },
   });
   assert.deepEqual(result.content, [{ type: "text", text: "prompt from stdin" }]);
   const started = events[0];
@@ -233,21 +251,32 @@ test("process adapter completes a bidirectional permission exchange", async () =
     request: request(process.cwd()),
     route: route(adapter.id, process.execPath),
     signal: new AbortController().signal,
-    emit: async (event) => { events.push(event); },
+    emit: async (event) => {
+      events.push(event);
+    },
     awaitInput: async (requestId) => {
       assert.equal(requestId, "perm_1");
       return { decision: "allow" };
     },
   });
   assert.deepEqual(result.content, [{ type: "text", text: "approved" }]);
-  assert.equal(events.some((event) => event.category === "input_required"), true);
+  assert.equal(
+    events.some((event) => event.category === "input_required"),
+    true,
+  );
 });
 
 test("Claude keeps the final result once and captures reported usage", () => {
   const adapter = new InspectableClaudeAdapter();
   const state = nativeState();
-  const assistant = adapter.normalize({ type: "assistant", message: { content: [{ type: "text", text: "pong" }] } }, state);
-  const result = adapter.normalize({ type: "result", result: "pong", usage: { input_tokens: 3, output_tokens: 2 }, total_cost_usd: 0.01 }, state);
+  const assistant = adapter.normalize(
+    { type: "assistant", message: { content: [{ type: "text", text: "pong" }] } },
+    state,
+  );
+  const result = adapter.normalize(
+    { type: "result", result: "pong", usage: { input_tokens: 3, output_tokens: 2 }, total_cost_usd: 0.01 },
+    state,
+  );
   assert.equal(assistant?.category, "output");
   assert.equal(result?.category, "usage");
   assert.deepEqual(state.content.parts, [{ type: "text", text: "pong" }]);
@@ -256,11 +285,14 @@ test("Claude keeps the final result once and captures reported usage", () => {
 
 test("Claude maps native permission requests to an input request", () => {
   const adapter = new InspectableClaudeAdapter();
-  const event = adapter.normalize({
-    type: "control_request",
-    request_id: "req_123",
-    request: { subtype: "can_use_tool", tool_name: "Bash", message: "Run the command?" },
-  }, nativeState());
+  const event = adapter.normalize(
+    {
+      type: "control_request",
+      request_id: "req_123",
+      request: { subtype: "can_use_tool", tool_name: "Bash", message: "Run the command?" },
+    },
+    nativeState(),
+  );
   assert.equal(event?.category, "input_required");
   assert.deepEqual(event?.inputRequest, {
     requestId: "req_123",
@@ -273,8 +305,14 @@ test("Claude maps native permission requests to an input request", () => {
 test("Codex excludes reasoning from answer content and reports file effects", () => {
   const adapter = new InspectableCodexAdapter();
   const state = nativeState();
-  const reasoning = adapter.normalize({ type: "item.completed", item: { type: "reasoning", text: "private thought" } }, state);
-  const effect = adapter.normalize({ type: "item.completed", item: { type: "file_change", path: "src/app.ts", kind: "modify" } }, state);
+  const reasoning = adapter.normalize(
+    { type: "item.completed", item: { type: "reasoning", text: "private thought" } },
+    state,
+  );
+  const effect = adapter.normalize(
+    { type: "item.completed", item: { type: "file_change", path: "src/app.ts", kind: "modify" } },
+    state,
+  );
   const answer = adapter.normalize({ type: "item.completed", item: { type: "agent_message", text: "answer" } }, state);
   assert.equal(reasoning?.category, "activity");
   assert.equal(reasoning?.data?.phase, "reasoning");
@@ -309,7 +347,10 @@ test("policy resolution rejects unsupported fields and records exact controls", 
     qualification: [],
     diagnostics: [],
   };
-  const unsupported = claude.resolvePolicy({ ...request(process.cwd()), requestedPolicy: { minimumAssurance: "none", network: "deny" } }, claudeRoute);
+  const unsupported = claude.resolvePolicy(
+    { ...request(process.cwd()), requestedPolicy: { minimumAssurance: "none", network: "deny" } },
+    claudeRoute,
+  );
   assert.equal(unsupported.supported, false);
   assert.ok(unsupported.unsupported.includes("requestedPolicy.network"));
 

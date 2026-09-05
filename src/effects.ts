@@ -69,7 +69,9 @@ export async function captureWorkspaceSnapshot(root: string, limits: SnapshotLim
       root,
       files: new Map(),
       complete: false,
-      diagnostics: [`Git workspace snapshot could not be read: ${error instanceof Error ? error.message : "unknown error"}`],
+      diagnostics: [
+        `Git workspace snapshot could not be read: ${error instanceof Error ? error.message : "unknown error"}`,
+      ],
     };
   }
 
@@ -83,7 +85,7 @@ export async function captureWorkspaceSnapshot(root: string, limits: SnapshotLim
     diagnostics.push(`Workspace snapshot exceeded the ${maxFiles}-file limit.`);
   }
   for (const relativePath of paths.slice(0, maxFiles)) {
-    let info;
+    let info: Awaited<ReturnType<typeof lstat>>;
     try {
       info = await lstat(`${root}/${relativePath}`);
     } catch (error) {
@@ -91,7 +93,9 @@ export async function captureWorkspaceSnapshot(root: string, limits: SnapshotLim
         continue;
       }
       complete = false;
-      diagnostics.push(`Could not stat workspace path ${relativePath}: ${error instanceof Error ? error.message : "unknown error"}`);
+      diagnostics.push(
+        `Could not stat workspace path ${relativePath}: ${error instanceof Error ? error.message : "unknown error"}`,
+      );
       continue;
     }
     if (!info.isFile()) {
@@ -132,9 +136,11 @@ export async function observeWorkspaceEffects(
       effects.push({ path, kind: "created", evidence: "git-status" });
     } else if (oldFile !== undefined && newFile === undefined) {
       effects.push({ path, kind: "deleted", evidence: "git-status" });
-    } else if (oldFile !== undefined && newFile !== undefined && (
-      oldFile.size !== newFile.size || oldFile.modifiedAt !== newFile.modifiedAt || oldFile.mode !== newFile.mode
-    )) {
+    } else if (
+      oldFile !== undefined &&
+      newFile !== undefined &&
+      (oldFile.size !== newFile.size || oldFile.modifiedAt !== newFile.modifiedAt || oldFile.mode !== newFile.mode)
+    ) {
       effects.push({ path, kind: "modified", evidence: "git-status" });
     }
   }
@@ -145,10 +151,13 @@ export async function observeWorkspaceEffects(
     const oldFingerprint = before.files.get(oldEffect.path);
     const match = created.find((newEffect) => {
       const newFingerprint = after.files.get(newEffect.path);
-      return oldFingerprint !== undefined && newFingerprint !== undefined
-        && oldFingerprint.size === newFingerprint.size
-        && oldFingerprint.modifiedAt === newFingerprint.modifiedAt
-        && oldFingerprint.mode === newFingerprint.mode;
+      return (
+        oldFingerprint !== undefined &&
+        newFingerprint !== undefined &&
+        oldFingerprint.size === newFingerprint.size &&
+        oldFingerprint.modifiedAt === newFingerprint.modifiedAt &&
+        oldFingerprint.mode === newFingerprint.mode
+      );
     });
     if (match === undefined) {
       continue;
@@ -176,7 +185,11 @@ export async function observeWorkspaceEffects(
     return {
       effects,
       complete: false,
-      diagnostics: [...before.diagnostics, ...after.diagnostics, `Git status could not be read: ${error instanceof Error ? error.message : "unknown error"}`],
+      diagnostics: [
+        ...before.diagnostics,
+        ...after.diagnostics,
+        `Git status could not be read: ${error instanceof Error ? error.message : "unknown error"}`,
+      ],
     };
   }
   return {

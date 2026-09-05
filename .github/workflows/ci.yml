@@ -34,3 +34,6 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Run repository checks
         run: pnpm check
+      - name: Audit production dependencies
+        run: pnpm audit --prod
+        continue-on-error: true

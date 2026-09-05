@@ -21,23 +21,25 @@ test("start request parsing applies honest defaults", () => {
 
 test("start request parsing rejects invalid multimodal boundaries", () => {
   assert.throws(
-    () => parseStartInvocationRequest({
-      selector: { provider: "agent-bridge", model: "fake-echo" },
-      input: [{ type: "file", path: "report.txt" }],
-      workingDirectory: "/tmp",
-    }),
+    () =>
+      parseStartInvocationRequest({
+        selector: { provider: "agent-bridge", model: "fake-echo" },
+        input: [{ type: "file", path: "report.txt" }],
+        workingDirectory: "/tmp",
+      }),
     (error: unknown) => error instanceof BridgeError && error.code === "invalid_request",
   );
 });
 
 test("start request parsing bounds timeout values", () => {
   assert.throws(
-    () => parseStartInvocationRequest({
-      selector: { provider: "agent-bridge", model: "fake-echo" },
-      input: [{ type: "text", text: "hello" }],
-      workingDirectory: "/tmp",
-      timeoutMs: 0,
-    }),
+    () =>
+      parseStartInvocationRequest({
+        selector: { provider: "agent-bridge", model: "fake-echo" },
+        input: [{ type: "text", text: "hello" }],
+        workingDirectory: "/tmp",
+        timeoutMs: 0,
+      }),
     (error: unknown) => error instanceof BridgeError && error.code === "invalid_request",
   );
 });
@@ -45,12 +47,14 @@ test("start request parsing bounds timeout values", () => {
 test("content references allow an empty file with byteSize zero", () => {
   const request = parseStartInvocationRequest({
     selector: { provider: "agent-bridge", model: "fake-echo" },
-    input: [{
-      type: "file",
-      path: "/tmp/empty.txt",
-      mimeType: "text/plain",
-      byteSize: 0,
-    }],
+    input: [
+      {
+        type: "file",
+        path: "/tmp/empty.txt",
+        mimeType: "text/plain",
+        byteSize: 0,
+      },
+    ],
     workingDirectory: "/tmp",
   });
 
@@ -67,12 +71,13 @@ test("IPC requests require the negotiated protocol version", () => {
   });
   assert.equal(request.protocolVersion, IPC_PROTOCOL_VERSION);
   assert.throws(
-    () => parseOperationRequest({
-      protocolVersion: "9.9",
-      id: "req_2",
-      operation: "system.describe",
-      params: {},
-    }),
+    () =>
+      parseOperationRequest({
+        protocolVersion: "9.9",
+        id: "req_2",
+        operation: "system.describe",
+        params: {},
+      }),
     (error: unknown) => error instanceof BridgeError && error.code === "protocol_version_mismatch",
   );
 });

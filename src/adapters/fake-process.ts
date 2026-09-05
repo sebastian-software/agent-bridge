@@ -1,10 +1,20 @@
 import { join } from "node:path";
 
-import type { JsonValue, ObservedIdentity, RouteDescriptor, StartInvocationRequest, Usage, WorkspaceEffect } from "../contract.js";
-import { ProcessAdapter, promptFor, type CommandSpec, ContentAccumulator } from "./process.js";
+import type { JsonValue, ObservedIdentity, RouteDescriptor, Usage, WorkspaceEffect } from "../contract.js";
+import { type CommandSpec, type ContentAccumulator, ProcessAdapter, promptFor } from "./process.js";
 import type { AdapterEvent, AdapterRunContext } from "./types.js";
 
-const SCENARIOS = ["success", "failure", "timeout", "malformed", "truncated", "effects", "cancel", "identity-absent", "slow"] as const;
+const SCENARIOS = [
+  "success",
+  "failure",
+  "timeout",
+  "malformed",
+  "truncated",
+  "effects",
+  "cancel",
+  "identity-absent",
+  "slow",
+] as const;
 
 function route(model: string): RouteDescriptor {
   return {
@@ -22,11 +32,13 @@ function route(model: string): RouteDescriptor {
     assurance: "none",
     runtimeIdentityEvidence: "verified",
     readiness: "ready",
-    qualification: [{
-      qualificationId: `fake-process-${model}-v1`,
-      testedAt: "2026-08-27T00:00:00.000Z",
-      claim: "Broker process-supervision fixture backed by the deterministic fake harness.",
-    }],
+    qualification: [
+      {
+        qualificationId: `fake-process-${model}-v1`,
+        testedAt: "2026-08-27T00:00:00.000Z",
+        claim: "Broker process-supervision fixture backed by the deterministic fake harness.",
+      },
+    ],
     diagnostics: ["Test fixture only; it does not call an external model."],
   };
 }
@@ -64,7 +76,15 @@ export class FakeProcessAdapter extends ProcessAdapter {
     const harness = process.env.AGENT_BRIDGE_FAKE_HARNESS_PATH ?? join(process.cwd(), "scripts", "fake-harness.mjs");
     return {
       executable: process.execPath,
-      args: [harness, "--scenario", context.route.model, "--text", promptFor(context), "--cwd", context.request.workingDirectory],
+      args: [
+        harness,
+        "--scenario",
+        context.route.model,
+        "--text",
+        promptFor(context),
+        "--cwd",
+        context.request.workingDirectory,
+      ],
     };
   }
 
@@ -76,16 +96,30 @@ export class FakeProcessAdapter extends ProcessAdapter {
     if (value.provider === "agent-bridge" || value.model !== undefined || value.harnessVersion !== undefined) {
       state.identity = {
         ...state.identity,
-        ...(typeof value.provider === "string" ? { provider: { value: value.provider, evidence: "reported", source: "fake-process" } } : {}),
-        ...(typeof value.model === "string" ? { model: { value: value.model, evidence: "reported", source: "fake-process" } } : {}),
-        ...(typeof value.harnessVersion === "string" ? { harnessVersion: { value: value.harnessVersion, evidence: "reported", source: "fake-process" } } : {}),
+        ...(typeof value.provider === "string"
+          ? { provider: { value: value.provider, evidence: "reported", source: "fake-process" } }
+          : {}),
+        ...(typeof value.model === "string"
+          ? { model: { value: value.model, evidence: "reported", source: "fake-process" } }
+          : {}),
+        ...(typeof value.harnessVersion === "string"
+          ? { harnessVersion: { value: value.harnessVersion, evidence: "reported", source: "fake-process" } }
+          : {}),
       };
     }
     if (type === "progress") {
-      return { category: "activity", data: { phase: "fake-process", ...(typeof value.step === "number" ? { step: value.step } : {}) }, native: value };
+      return {
+        category: "activity",
+        data: { phase: "fake-process", ...(typeof value.step === "number" ? { step: value.step } : {}) },
+        native: value,
+      };
     }
     if (type === "diagnostic") {
-      return { category: "diagnostic", data: { message: typeof value.message === "string" ? value.message : "fake diagnostic" }, native: value };
+      return {
+        category: "diagnostic",
+        data: { message: typeof value.message === "string" ? value.message : "fake diagnostic" },
+        native: value,
+      };
     }
     if (type === "effect") {
       const path = typeof value.path === "string" ? value.path : undefined;
