@@ -155,7 +155,7 @@ export class CodexAdapter extends ProcessAdapter {
       "--json",
       "--ephemeral",
       "--model",
-      context.route.model,
+      context.route.canonicalModel ?? context.route.model,
       "--sandbox",
       sandbox(context),
       "--cd",
