@@ -1,0 +1,115 @@
+import type {
+  Assurance,
+  EvidenceStatus,
+  ResolvedRoute,
+  RouteDescriptor,
+  StartInvocationRequest,
+} from "../contract.js";
+import { BridgeError } from "../errors.js";
+import { FakeAdapter } from "./fake.js";
+import type { Adapter } from "./types.js";
+
+const ASSURANCE_RANK: Readonly<Record<Assurance, number>> = {
+  none: 0,
+  native: 1,
+  isolated: 2,
+};
+
+const EVIDENCE_RANK: Readonly<Record<EvidenceStatus, number>> = {
+  unverified: 0,
+  inferred: 1,
+  reported: 2,
+  verified: 3,
+};
+
+export class AdapterRegistry {
+  readonly #adapters: ReadonlyMap<string, Adapter>;
+
+  constructor(adapters: readonly Adapter[] = [new FakeAdapter()]) {
+    this.#adapters = new Map(adapters.map((adapter) => [adapter.id, adapter]));
+  }
+
+  adapter(id: string): Adapter {
+    const adapter = this.#adapters.get(id);
+    if (adapter === undefined) {
+      throw new BridgeError({
+        code: "route_unavailable",
+        message: `Adapter ${id} is not registered.`,
+        retryable: false,
+      });
+    }
+    return adapter;
+  }
+
+  async discover(): Promise<readonly RouteDescriptor[]> {
+    const routeGroups = await Promise.all(
+      [...this.#adapters.values()].map((adapter) => adapter.discover()),
+    );
+    return routeGroups.flat().sort((left, right) => left.routeId.localeCompare(right.routeId));
+  }
+
+  async resolve(request: StartInvocationRequest): Promise<{
+    readonly route: ResolvedRoute;
+    readonly descriptor: RouteDescriptor;
+  }> {
+    const routes = await this.discover();
+    const candidates = routes.filter((route) => {
+      const selector = request.selector;
+      return route.readiness === "ready"
+        && route.provider === selector.provider
+        && route.model === selector.model
+        && (selector.via === undefined || route.via === selector.via)
+        && (selector.effort === undefined || route.efforts.includes(selector.effort))
+        && selector.requiredCapabilities.every((capability) => route.capabilities.includes(capability))
+        && route.interactionStrategies.includes(request.interactionStrategy)
+        && (selector.minimumObservedEvidence === undefined
+          || EVIDENCE_RANK[route.runtimeIdentityEvidence] >= EVIDENCE_RANK[selector.minimumObservedEvidence])
+        && ASSURANCE_RANK[route.assurance] >= ASSURANCE_RANK[request.requestedPolicy.minimumAssurance];
+    });
+
+    if (candidates.length === 0) {
+      throw new BridgeError({
+        code: "route_unavailable",
+        message: "No qualified route matches the requested selector, capabilities, interaction strategy, and assurance.",
+        retryable: false,
+        details: {
+          requested: request.selector,
+          minimumAssurance: request.requestedPolicy.minimumAssurance,
+          candidates: routes,
+        },
+      });
+    }
+    if (candidates.length > 1) {
+      throw new BridgeError({
+        code: "route_ambiguous",
+        message: "More than one qualified route matches the request. Add a via selector or a more specific capability requirement.",
+        retryable: false,
+        details: { candidates },
+      });
+    }
+
+    const descriptor = candidates[0];
+    if (descriptor === undefined) {
+      throw new BridgeError({
+        code: "internal_error",
+        message: "Route resolution produced no candidate.",
+        retryable: false,
+      });
+    }
+    return {
+      descriptor,
+      route: {
+        routeId: descriptor.routeId,
+        adapter: descriptor.adapter,
+        harnessVersion: descriptor.harnessVersion,
+        authenticationMode: descriptor.authenticationMode,
+        provider: descriptor.provider,
+        model: descriptor.model,
+        ...(request.selector.effort === undefined ? {} : { effort: request.selector.effort }),
+        via: descriptor.via,
+        capabilities: descriptor.capabilities,
+        qualification: descriptor.qualification,
+      },
+    };
+  }
+}

@@ -1,0 +1,452 @@
+import { BridgeError } from "./errors.js";
+
+export const SCHEMA_VERSION = "1.0" as const;
+
+export type JsonPrimitive = boolean | null | number | string;
+export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
+
+export type Assurance = "isolated" | "native" | "none";
+export type EvidenceStatus = "inferred" | "reported" | "unverified" | "verified";
+export type InteractionStrategy = "deny" | "orchestrator" | "unattended";
+export type InvocationState =
+  | "queued"
+  | "running"
+  | "waiting_for_input"
+  | "cancelling"
+  | TerminalStatus;
+export type TerminalStatus =
+  | "cancelled"
+  | "failed"
+  | "interrupted"
+  | "succeeded"
+  | "timed_out";
+
+export const TERMINAL_STATES: ReadonlySet<InvocationState> = new Set([
+  "cancelled",
+  "failed",
+  "interrupted",
+  "succeeded",
+  "timed_out",
+]);
+
+export type ContentPart =
+  | { readonly type: "text"; readonly text: string }
+  | { readonly type: "json"; readonly value: JsonValue }
+  | {
+      readonly type: "image" | "audio" | "file";
+      readonly path: string;
+      readonly mimeType: string;
+      readonly byteSize?: number;
+      readonly digest?: string;
+    }
+  | {
+      readonly type: "resource";
+      readonly uri: string;
+      readonly mimeType?: string;
+      readonly byteSize?: number;
+      readonly digest?: string;
+    };
+
+export interface DelegationSelector {
+  readonly provider: string;
+  readonly model: string;
+  readonly effort?: string;
+  readonly via?: string;
+  readonly requiredCapabilities: readonly string[];
+  readonly minimumObservedEvidence?: EvidenceStatus;
+}
+
+export interface RequestedPolicy {
+  readonly filesystem?: "inherit" | "read-only" | "workspace-write";
+  readonly commands?: "allow" | "deny" | "inherit";
+  readonly network?: "allow" | "deny" | "inherit";
+  readonly additionalDirectories?: readonly string[];
+  readonly minimumAssurance: Assurance;
+}
+
+export interface StartInvocationRequest {
+  readonly selector: DelegationSelector;
+  readonly input: readonly ContentPart[];
+  readonly workingDirectory: string;
+  readonly interactionStrategy: InteractionStrategy;
+  readonly requestedPolicy: RequestedPolicy;
+  readonly timeoutMs?: number;
+  readonly callerCorrelationId?: string;
+  readonly idempotencyKey?: string;
+}
+
+export interface QualificationEvidence {
+  readonly qualificationId: string;
+  readonly testedAt: string;
+  readonly claim: string;
+}
+
+export interface RouteDescriptor {
+  readonly routeId: string;
+  readonly provider: string;
+  readonly model: string;
+  readonly efforts: readonly string[];
+  readonly via: string;
+  readonly adapter: string;
+  readonly harnessVersion: string;
+  readonly authenticationMode: string;
+  readonly capabilities: readonly string[];
+  readonly interactionStrategies: readonly InteractionStrategy[];
+  readonly assurance: Assurance;
+  readonly runtimeIdentityEvidence: EvidenceStatus;
+  readonly readiness: "ready" | "unavailable" | "unqualified";
+  readonly qualification: readonly QualificationEvidence[];
+  readonly diagnostics: readonly string[];
+}
+
+export interface ResolvedRoute {
+  readonly routeId: string;
+  readonly adapter: string;
+  readonly harnessVersion: string;
+  readonly authenticationMode: string;
+  readonly provider: string;
+  readonly model: string;
+  readonly effort?: string;
+  readonly via: string;
+  readonly capabilities: readonly string[];
+  readonly qualification: readonly QualificationEvidence[];
+}
+
+export interface ObservedValue {
+  readonly value?: string;
+  readonly evidence: EvidenceStatus;
+  readonly source?: string;
+}
+
+export interface ObservedIdentity {
+  readonly provider: ObservedValue;
+  readonly model: ObservedValue;
+  readonly harnessVersion: ObservedValue;
+  readonly nativeSessionId: ObservedValue;
+}
+
+export interface PolicyEvidence {
+  readonly requestedPolicy: RequestedPolicy;
+  readonly effectiveNativePolicy: Readonly<Record<string, JsonValue>>;
+  readonly assurance: Assurance;
+}
+
+export type EventCategory =
+  | "activity"
+  | "diagnostic"
+  | "effect"
+  | "input_accepted"
+  | "input_required"
+  | "lifecycle"
+  | "output"
+  | "usage";
+
+export interface InvocationEvent {
+  readonly schemaVersion: typeof SCHEMA_VERSION;
+  readonly invocationId: string;
+  readonly sequence: number;
+  readonly cursor: string;
+  readonly timestamp: string;
+  readonly category: EventCategory;
+  readonly content?: readonly ContentPart[];
+  readonly data?: Readonly<Record<string, JsonValue>>;
+  readonly provenance: {
+    readonly source: "adapter" | "bridge";
+    readonly adapter?: string;
+  };
+  readonly native?: Readonly<Record<string, JsonValue>>;
+}
+
+export interface WorkspaceEffect {
+  readonly path: string;
+  readonly kind: "created" | "deleted" | "modified" | "renamed" | "unknown";
+  readonly evidence: "git-status" | "harness-reported";
+}
+
+export interface InvocationOutcome {
+  readonly schemaVersion: typeof SCHEMA_VERSION;
+  readonly invocationId: string;
+  readonly status: TerminalStatus;
+  readonly content: readonly ContentPart[];
+  readonly artifacts: readonly ContentPart[];
+  readonly effects: readonly WorkspaceEffect[];
+  readonly observedIdentity: ObservedIdentity;
+  readonly policy: PolicyEvidence;
+  readonly startedAt?: string;
+  readonly completedAt: string;
+  readonly durationMs?: number;
+  readonly error?: {
+    readonly code: string;
+    readonly message: string;
+  };
+}
+
+export interface InvocationRecord {
+  readonly schemaVersion: typeof SCHEMA_VERSION;
+  readonly invocationId: string;
+  readonly callerCorrelationId?: string;
+  readonly idempotencyKey?: string;
+  readonly requestDigest: string;
+  readonly request: StartInvocationRequest;
+  readonly resolvedRoute: ResolvedRoute;
+  readonly policy: PolicyEvidence;
+  readonly state: InvocationState;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly startedAt?: string;
+  readonly events: readonly InvocationEvent[];
+  readonly outcome?: InvocationOutcome;
+}
+
+export interface StartInvocationResult {
+  readonly invocationId: string;
+  readonly state: InvocationState;
+  readonly deduplicated: boolean;
+  readonly next: readonly string[];
+}
+
+export interface EventsResult {
+  readonly invocationId: string;
+  readonly state: InvocationState;
+  readonly events: readonly InvocationEvent[];
+  readonly nextCursor?: string;
+  readonly terminal: boolean;
+}
+
+export interface OperationRequest {
+  readonly id: string;
+  readonly operation: string;
+  readonly params: unknown;
+}
+
+export type OperationResponse =
+  | { readonly id: string; readonly ok: true; readonly result: unknown }
+  | {
+      readonly id: string;
+      readonly ok: false;
+      readonly error: {
+        readonly code: string;
+        readonly message: string;
+        readonly retryable: boolean;
+        readonly details?: Readonly<Record<string, unknown>>;
+      };
+    };
+
+type UnknownRecord = Record<string, unknown>;
+
+function invalid(message: string, details?: Readonly<Record<string, unknown>>): never {
+  throw new BridgeError({
+    code: "invalid_request",
+    message,
+    retryable: false,
+    ...(details === undefined ? {} : { details }),
+  });
+}
+
+function record(value: unknown, field: string): UnknownRecord {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    invalid(`${field} must be an object.`);
+  }
+  return value as UnknownRecord;
+}
+
+function stringValue(value: unknown, field: string, options?: { nonEmpty?: boolean }): string {
+  if (typeof value !== "string" || (options?.nonEmpty === true && value.trim() === "")) {
+    invalid(`${field} must be${options?.nonEmpty === true ? " a non-empty" : ""} string.`);
+  }
+  return value;
+}
+
+function optionalString(value: unknown, field: string): string | undefined {
+  return value === undefined ? undefined : stringValue(value, field, { nonEmpty: true });
+}
+
+function stringArray(value: unknown, field: string): readonly string[] {
+  if (!Array.isArray(value)) {
+    invalid(`${field} must be an array.`);
+  }
+  return value.map((item, index) => stringValue(item, `${field}[${index}]`, { nonEmpty: true }));
+}
+
+function oneOf<T extends string>(value: unknown, field: string, choices: readonly T[]): T {
+  if (typeof value !== "string" || !choices.includes(value as T)) {
+    invalid(`${field} must be one of: ${choices.join(", ")}.`);
+  }
+  return value as T;
+}
+
+function optionalPositiveInteger(value: unknown, field: string): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Number.isSafeInteger(value) || typeof value !== "number" || value <= 0) {
+    invalid(`${field} must be a positive integer.`);
+  }
+  return value;
+}
+
+function optionalNonNegativeInteger(value: unknown, field: string): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Number.isSafeInteger(value) || typeof value !== "number" || value < 0) {
+    invalid(`${field} must be a non-negative integer.`);
+  }
+  return value;
+}
+
+function parseContentPart(value: unknown, field: string): ContentPart {
+  const source = record(value, field);
+  const type = oneOf(source.type, `${field}.type`, ["text", "json", "image", "audio", "file", "resource"] as const);
+
+  if (type === "text") {
+    return { type, text: stringValue(source.text, `${field}.text`) };
+  }
+  if (type === "json") {
+    if (!isJsonValue(source.value)) {
+      invalid(`${field}.value must be JSON-compatible.`);
+    }
+    return { type, value: source.value };
+  }
+  if (type === "resource") {
+    const mimeType = optionalString(source.mimeType, `${field}.mimeType`);
+    const byteSize = optionalNonNegativeInteger(source.byteSize, `${field}.byteSize`);
+    const digest = optionalString(source.digest, `${field}.digest`);
+    return {
+      type,
+      uri: stringValue(source.uri, `${field}.uri`, { nonEmpty: true }),
+      ...(mimeType === undefined ? {} : { mimeType }),
+      ...(byteSize === undefined ? {} : { byteSize }),
+      ...(digest === undefined ? {} : { digest }),
+    };
+  }
+
+  const byteSize = optionalNonNegativeInteger(source.byteSize, `${field}.byteSize`);
+  const digest = optionalString(source.digest, `${field}.digest`);
+  return {
+    type,
+    path: stringValue(source.path, `${field}.path`, { nonEmpty: true }),
+    mimeType: stringValue(source.mimeType, `${field}.mimeType`, { nonEmpty: true }),
+    ...(byteSize === undefined ? {} : { byteSize }),
+    ...(digest === undefined ? {} : { digest }),
+  };
+}
+
+export function parseContentParts(value: unknown, field = "content"): readonly ContentPart[] {
+  if (!Array.isArray(value)) {
+    invalid(`${field} must be an array.`);
+  }
+  return value.map((part, index) => parseContentPart(part, `${field}[${index}]`));
+}
+
+export function isJsonValue(value: unknown): value is JsonValue {
+  if (value === null || typeof value === "boolean" || typeof value === "string") {
+    return true;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value);
+  }
+  if (Array.isArray(value)) {
+    return value.every(isJsonValue);
+  }
+  if (typeof value === "object") {
+    return Object.values(value).every(isJsonValue);
+  }
+  return false;
+}
+
+export function parseOperationRequest(value: unknown): OperationRequest {
+  const source = record(value, "request");
+  return {
+    id: stringValue(source.id, "request.id", { nonEmpty: true }),
+    operation: stringValue(source.operation, "request.operation", { nonEmpty: true }),
+    params: source.params ?? {},
+  };
+}
+
+export function parseStartInvocationRequest(value: unknown): StartInvocationRequest {
+  const source = record(value, "params");
+  const selectorSource = record(source.selector, "params.selector");
+  const policySource = source.requestedPolicy === undefined
+    ? {}
+    : record(source.requestedPolicy, "params.requestedPolicy");
+  if (!Array.isArray(source.input) || source.input.length === 0) {
+    invalid("params.input must contain at least one content part.");
+  }
+
+  const effort = optionalString(selectorSource.effort, "params.selector.effort");
+  const via = optionalString(selectorSource.via, "params.selector.via");
+  const minimumObservedEvidence = selectorSource.minimumObservedEvidence === undefined
+    ? undefined
+    : oneOf(selectorSource.minimumObservedEvidence, "params.selector.minimumObservedEvidence", ["unverified", "inferred", "reported", "verified"] as const);
+  const filesystem = policySource.filesystem === undefined
+    ? undefined
+    : oneOf(policySource.filesystem, "params.requestedPolicy.filesystem", ["inherit", "read-only", "workspace-write"] as const);
+  const commands = policySource.commands === undefined
+    ? undefined
+    : oneOf(policySource.commands, "params.requestedPolicy.commands", ["inherit", "deny", "allow"] as const);
+  const network = policySource.network === undefined
+    ? undefined
+    : oneOf(policySource.network, "params.requestedPolicy.network", ["inherit", "deny", "allow"] as const);
+  const additionalDirectories = policySource.additionalDirectories === undefined
+    ? undefined
+    : stringArray(policySource.additionalDirectories, "params.requestedPolicy.additionalDirectories");
+  const timeoutMs = optionalPositiveInteger(source.timeoutMs, "params.timeoutMs");
+  const callerCorrelationId = optionalString(source.callerCorrelationId, "params.callerCorrelationId");
+  const idempotencyKey = optionalString(source.idempotencyKey, "params.idempotencyKey");
+
+  return {
+    selector: {
+      provider: stringValue(selectorSource.provider, "params.selector.provider", { nonEmpty: true }),
+      model: stringValue(selectorSource.model, "params.selector.model", { nonEmpty: true }),
+      ...(effort === undefined ? {} : { effort }),
+      ...(via === undefined ? {} : { via }),
+      requiredCapabilities: selectorSource.requiredCapabilities === undefined
+        ? []
+        : stringArray(selectorSource.requiredCapabilities, "params.selector.requiredCapabilities"),
+      ...(minimumObservedEvidence === undefined ? {} : { minimumObservedEvidence }),
+    },
+    input: parseContentParts(source.input, "params.input"),
+    workingDirectory: stringValue(source.workingDirectory, "params.workingDirectory", { nonEmpty: true }),
+    interactionStrategy: source.interactionStrategy === undefined
+      ? "orchestrator"
+      : oneOf(source.interactionStrategy, "params.interactionStrategy", ["orchestrator", "deny", "unattended"] as const),
+    requestedPolicy: {
+      ...(filesystem === undefined ? {} : { filesystem }),
+      ...(commands === undefined ? {} : { commands }),
+      ...(network === undefined ? {} : { network }),
+      ...(additionalDirectories === undefined ? {} : { additionalDirectories }),
+      minimumAssurance: policySource.minimumAssurance === undefined
+        ? "none"
+        : oneOf(policySource.minimumAssurance, "params.requestedPolicy.minimumAssurance", ["none", "native", "isolated"] as const),
+    },
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    ...(callerCorrelationId === undefined ? {} : { callerCorrelationId }),
+    ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
+  };
+}
+
+export function parseInvocationIdParams(value: unknown): { readonly invocationId: string } {
+  const source = record(value, "params");
+  return {
+    invocationId: stringValue(source.invocationId, "params.invocationId", { nonEmpty: true }),
+  };
+}
+
+export function parseEventsParams(value: unknown): {
+  readonly invocationId: string;
+  readonly after?: string;
+  readonly waitMs?: number;
+} {
+  const source = record(value, "params");
+  const after = optionalString(source.after, "params.after");
+  const waitMs = optionalPositiveInteger(source.waitMs, "params.waitMs");
+  if (waitMs !== undefined && waitMs > 30_000) {
+    invalid("params.waitMs must not exceed 30000.");
+  }
+  return {
+    invocationId: stringValue(source.invocationId, "params.invocationId", { nonEmpty: true }),
+    ...(after === undefined ? {} : { after }),
+    ...(waitMs === undefined ? {} : { waitMs }),
+  };
+}
