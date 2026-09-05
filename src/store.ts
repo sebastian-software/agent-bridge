@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { appendFile, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import type { Dirent } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -42,6 +42,12 @@ export interface StoreSnapshot {
 }
 
 type UnknownRecord = Record<string, unknown>;
+
+interface FileSizes {
+  events: number;
+  metadata: number;
+  outcome: number;
+}
 
 function corrupt(message: string): never {
   throw new BridgeError({
@@ -346,6 +352,12 @@ function parseInvocation(value: unknown, index: number): InvocationRecord {
   const events = source.events.map((event, eventIndex) =>
     parseEvent(event, `${field}.events[${eventIndex}]`, invocationId, eventIndex + 1),
   );
+  const persistedEventCount =
+    source.eventCount === undefined ? events.length : finiteNumber(source.eventCount, `${field}.eventCount`);
+  if (!Number.isSafeInteger(persistedEventCount) || persistedEventCount < 0) {
+    corrupt(`${field}.eventCount must be a non-negative safe integer.`);
+  }
+  const eventCount = Math.max(events.length, persistedEventCount);
   const outcome =
     source.outcome === undefined ? undefined : parseOutcome(source.outcome, `${field}.outcome`, invocationId, policy);
   if (TERMINAL_STATES.has(state) !== (outcome !== undefined)) {
@@ -367,6 +379,7 @@ function parseInvocation(value: unknown, index: number): InvocationRecord {
     createdAt: requiredString(source.createdAt, `${field}.createdAt`),
     updatedAt: requiredString(source.updatedAt, `${field}.updatedAt`),
     ...(startedAt === undefined ? {} : { startedAt }),
+    eventCount,
     events,
     ...(outcome === undefined ? {} : { outcome }),
   };
@@ -405,6 +418,10 @@ export class InvocationStore {
   readonly #invocationsDirectory: string;
   readonly #tombstonesFile: string;
   readonly #knownSequences = new Map<string, number>();
+  readonly #knownRecords = new Map<string, InvocationRecord>();
+  readonly #knownSizes = new Map<string, FileSizes>();
+  #tombstonesBytes = 0;
+  #manifestBytes = 0;
   #writeTail: Promise<void> = Promise.resolve();
 
   constructor(stateFile: string) {
@@ -474,6 +491,8 @@ export class InvocationStore {
         }
         await rm(this.#invocationDirectory(invocationId), { recursive: true, force: true });
         this.#knownSequences.delete(invocationId);
+        this.#knownRecords.delete(invocationId);
+        this.#knownSizes.delete(invocationId);
       }
       await this.#writeTombstones(tombstones);
       await this.#writeManifest();
@@ -483,6 +502,24 @@ export class InvocationStore {
     await scheduled;
   }
 
+  retainedBytes(): number {
+    let total = this.#tombstonesBytes + this.#manifestBytes;
+    for (const sizes of this.#knownSizes.values()) {
+      total += sizes.events + sizes.metadata + sizes.outcome;
+    }
+    return total;
+  }
+
+  invocationBytes(invocationId: string): number {
+    const sizes = this.#knownSizes.get(invocationId);
+    return sizes === undefined ? 0 : sizes.events + sizes.metadata + sizes.outcome;
+  }
+
+  async events(invocationId: string): Promise<readonly InvocationEvent[]> {
+    await this.#writeTail;
+    return this.#readEvents(join(this.#invocationDirectory(invocationId), "events.jsonl"), invocationId);
+  }
+
   async #loadDirectory(): Promise<StoreSnapshot> {
     const invocations: InvocationRecord[] = [];
     let entries: Dirent<string>[];
@@ -490,6 +527,7 @@ export class InvocationStore {
       entries = await readdir(this.#invocationsDirectory, { withFileTypes: true });
     } catch (error) {
       if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
+        await this.#refreshAuxiliarySizes();
         return { invocations: [], tombstones: [] };
       }
       throw error;
@@ -522,7 +560,17 @@ export class InvocationStore {
           invocations.length,
         ),
       );
+      const record = invocations.at(-1);
+      if (record === undefined) {
+        corrupt(`invocation ${invocationId} could not be loaded.`);
+      }
       this.#knownSequences.set(invocationId, events.length);
+      this.#knownRecords.set(invocationId, record);
+      this.#knownSizes.set(invocationId, {
+        events: await this.#fileSize(join(directory, "events.jsonl")),
+        metadata: await this.#fileSize(join(directory, "meta.json")),
+        outcome: await this.#fileSize(join(directory, "outcome.json")),
+      });
     }
     let tombstones: readonly InvocationTombstone[] = [];
     try {
@@ -536,6 +584,7 @@ export class InvocationStore {
         throw error;
       }
     }
+    await this.#refreshAuxiliarySizes();
     return { invocations, tombstones };
   }
 
@@ -552,42 +601,72 @@ export class InvocationStore {
     for (const record of invocations) {
       const directory = this.#invocationDirectory(record.invocationId);
       await mkdir(directory, { recursive: true, mode: 0o700 });
-      let previousSequence = this.#knownSequences.get(record.invocationId) ?? 0;
-      if (record.events.length < previousSequence) {
-        await writeFile(join(directory, "events.jsonl"), "", { encoding: "utf8", mode: 0o600 });
-        previousSequence = 0;
-      }
-      if (record.events.length > previousSequence) {
-        const events = record.events.slice(previousSequence);
-        await appendFile(
-          join(directory, "events.jsonl"),
-          `${events.map((event) => JSON.stringify(event)).join("\n")}\n`,
-          { encoding: "utf8", mode: 0o600 },
-        );
+      const sizes = this.#knownSizes.get(record.invocationId) ?? { events: 0, metadata: 0, outcome: 0 };
+      const eventsPath = join(directory, "events.jsonl");
+      const eventsLoaded = record.events.length === record.eventCount;
+      if (eventsLoaded) {
+        let previousSequence = this.#knownSequences.get(record.invocationId) ?? 0;
+        if (record.events.length < previousSequence) {
+          await writeFile(eventsPath, "", { encoding: "utf8", mode: 0o600 });
+          previousSequence = 0;
+          sizes.events = 0;
+        }
+        if (record.events.length > previousSequence) {
+          const events = record.events.slice(previousSequence);
+          const serialized = `${events.map((event) => JSON.stringify(event)).join("\n")}\n`;
+          await appendFile(eventsPath, serialized, { encoding: "utf8", mode: 0o600 });
+          sizes.events += Buffer.byteLength(serialized, "utf8");
+        }
+        this.#knownSequences.set(record.invocationId, record.events.length);
       }
       const { events: _events, outcome: _outcome, ...metadata } = record;
-      await this.#writeJson(join(directory, "meta.json"), metadata);
-      if (record.outcome === undefined) {
-        await rm(join(directory, "outcome.json"), { force: true });
-      } else {
-        await this.#writeJson(join(directory, "outcome.json"), record.outcome);
+      const previous = this.#knownRecords.get(record.invocationId);
+      if (previous === undefined || metadataChanged(previous, record)) {
+        sizes.metadata = await this.#writeJson(join(directory, "meta.json"), metadata);
       }
-      this.#knownSequences.set(record.invocationId, record.events.length);
+      if (previous === undefined || previous.outcome !== record.outcome) {
+        if (record.outcome === undefined) {
+          await rm(join(directory, "outcome.json"), { force: true });
+          sizes.outcome = 0;
+        } else {
+          sizes.outcome = await this.#writeJson(join(directory, "outcome.json"), record.outcome);
+        }
+      }
+      this.#knownRecords.set(record.invocationId, record);
+      this.#knownSizes.set(record.invocationId, sizes);
     }
   }
 
   async #writeTombstones(tombstones: readonly InvocationTombstone[]): Promise<void> {
-    await this.#writeJson(this.#tombstonesFile, { storageVersion: 2, tombstones });
+    this.#tombstonesBytes = await this.#writeJson(this.#tombstonesFile, { storageVersion: 2, tombstones });
   }
 
   async #writeManifest(): Promise<void> {
-    await this.#writeJson(this.#stateFile, { storageVersion: 2, format: "directory-v1" });
+    this.#manifestBytes = await this.#writeJson(this.#stateFile, { storageVersion: 2, format: "directory-v1" });
   }
 
-  async #writeJson(path: string, value: unknown): Promise<void> {
+  async #writeJson(path: string, value: unknown): Promise<number> {
     const temporaryFile = join(dirname(path), `.state-${randomUUID()}.tmp`);
-    await writeFile(temporaryFile, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+    const serialized = `${JSON.stringify(value, null, 2)}\n`;
+    await writeFile(temporaryFile, serialized, { encoding: "utf8", mode: 0o600 });
     await rename(temporaryFile, path);
+    return Buffer.byteLength(serialized, "utf8");
+  }
+
+  async #fileSize(path: string): Promise<number> {
+    try {
+      return (await stat(path)).size;
+    } catch (error) {
+      if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
+        return 0;
+      }
+      throw error;
+    }
+  }
+
+  async #refreshAuxiliarySizes(): Promise<void> {
+    this.#tombstonesBytes = await this.#fileSize(this.#tombstonesFile);
+    this.#manifestBytes = await this.#fileSize(this.#stateFile);
   }
 
   async #readJson(path: string, field: string): Promise<unknown> {
@@ -636,4 +715,20 @@ export class InvocationStore {
         return parseEvent(decoded, `events[${index}]`, invocationId, index + 1);
       });
   }
+}
+
+function metadataChanged(previous: InvocationRecord, current: InvocationRecord): boolean {
+  return (
+    previous.schemaVersion !== current.schemaVersion ||
+    previous.invocationId !== current.invocationId ||
+    previous.callerCorrelationId !== current.callerCorrelationId ||
+    previous.idempotencyKey !== current.idempotencyKey ||
+    previous.requestDigest !== current.requestDigest ||
+    previous.request !== current.request ||
+    previous.resolvedRoute !== current.resolvedRoute ||
+    previous.policy !== current.policy ||
+    previous.state !== current.state ||
+    previous.createdAt !== current.createdAt ||
+    previous.startedAt !== current.startedAt
+  );
 }

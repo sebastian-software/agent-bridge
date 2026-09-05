@@ -227,6 +227,7 @@ export class Broker {
       .filter((record) => !TERMINAL_STATES.has(record.state))
       .map((record) => record.invocationId);
     if (activeIds.length === 0) {
+      this.#releaseCompletedEvents();
       return;
     }
     await this.#mutate(() => {
@@ -460,6 +461,7 @@ export class Broker {
         state: "queued",
         createdAt,
         updatedAt: createdAt,
+        eventCount: 0,
         events: [],
       };
       const record = this.#appendBridgeEvent(base, "lifecycle", { state: "queued" }, createdAt);
@@ -481,7 +483,8 @@ export class Broker {
   async inspect(invocationId: string): Promise<Readonly<Record<string, unknown>>> {
     await this.#mutationTail;
     const record = this.#requireRecord(invocationId);
-    const lastEvent = record.events.at(-1);
+    const events = await this.#eventsFor(record);
+    const lastEvent = events.at(-1);
     return {
       schemaVersion: SCHEMA_VERSION,
       invocationId: record.invocationId,
@@ -493,7 +496,7 @@ export class Broker {
       requested: record.request.selector,
       resolved: record.resolvedRoute,
       policy: record.policy,
-      eventCount: record.events.length,
+      eventCount: record.eventCount,
       ...(lastEvent === undefined ? {} : { lastCursor: lastEvent.cursor }),
       ...(record.outcome === undefined ? {} : { outcome: record.outcome }),
       next: TERMINAL_STATES.has(record.state) ? ["invocation.events"] : ["invocation.events", "invocation.cancel"],
@@ -585,7 +588,7 @@ export class Broker {
     while (true) {
       await this.#mutationTail;
       const record = this.#requireRecord(params.invocationId);
-      const events = eventAfterCursor(record.events, params.after);
+      const events = eventAfterCursor(await this.#eventsFor(record), params.after);
       if (events.length > 0 || TERMINAL_STATES.has(record.state) || Date.now() >= deadline) {
         const lastEvent = events.at(-1);
         return {
@@ -797,7 +800,7 @@ export class Broker {
         return { value: undefined, changed: false };
       }
       const timestamp = new Date().toISOString();
-      const sequence = current.events.length + 1;
+      const sequence = current.eventCount + 1;
       const appended: InvocationEvent = {
         schemaVersion: SCHEMA_VERSION,
         invocationId,
@@ -829,6 +832,7 @@ export class Broker {
         ...current,
         ...(event.category === "input_required" ? { state: "waiting_for_input" as const } : {}),
         updatedAt: timestamp,
+        eventCount: sequence,
         events: [...current.events, appended],
       };
       for (const effect of event.effects ?? []) {
@@ -1067,7 +1071,7 @@ export class Broker {
     data: NonNullable<InvocationEvent["data"]>,
     timestamp: string,
   ): InvocationRecord {
-    const sequence = record.events.length + 1;
+    const sequence = record.eventCount + 1;
     const event: InvocationEvent = {
       schemaVersion: SCHEMA_VERSION,
       invocationId: record.invocationId,
@@ -1080,6 +1084,7 @@ export class Broker {
     };
     return {
       ...record,
+      eventCount: record.eventCount + 1,
       events: [...record.events, event],
       updatedAt: timestamp,
     };
@@ -1143,8 +1148,11 @@ export class Broker {
     const scheduled = this.#mutationTail.then(async () => {
       const result = mutation();
       if (result.changed) {
-        this.#applyRetention();
         await this.#store.save([...this.#records.values()], [...this.#tombstones.values()]);
+        if (this.#applyRetention()) {
+          await this.#store.save([...this.#records.values()], [...this.#tombstones.values()]);
+        }
+        this.#releaseCompletedEvents();
       }
       return result.value;
     });
@@ -1155,8 +1163,10 @@ export class Broker {
     return scheduled;
   }
 
-  #applyRetention(): void {
+  #applyRetention(): boolean {
     const now = Date.now();
+    let retainedBytes = this.#store.retainedBytes();
+    let evicted = false;
     const candidates = [...this.#records.values()]
       .filter((record) => TERMINAL_STATES.has(record.state) && record.outcome !== undefined)
       .sort(
@@ -1166,11 +1176,13 @@ export class Broker {
       );
     const evict = (record: InvocationRecord): void => {
       this.#records.delete(record.invocationId);
+      retainedBytes -= this.#store.invocationBytes(record.invocationId);
       this.#tombstones.set(record.invocationId, {
         invocationId: record.invocationId,
         evictedAt: new Date(now).toISOString(),
         reason: "retention",
       });
+      evicted = true;
     };
 
     for (const record of candidates) {
@@ -1180,24 +1192,28 @@ export class Broker {
       }
     }
 
-    const serializedSize = (): number =>
-      Buffer.byteLength(
-        JSON.stringify(
-          {
-            storageVersion: 1,
-            invocations: [...this.#records.values()],
-            tombstones: [...this.#tombstones.values()],
-          },
-          null,
-          2,
-        ),
-        "utf8",
-      );
     for (const record of candidates) {
-      if (!this.#records.has(record.invocationId) || serializedSize() <= this.#retention.maxBytes) {
+      if (!this.#records.has(record.invocationId) || retainedBytes <= this.#retention.maxBytes) {
         continue;
       }
       evict(record);
+    }
+    return evicted;
+  }
+
+  async #eventsFor(record: InvocationRecord): Promise<readonly InvocationEvent[]> {
+    if (record.events.length === record.eventCount) {
+      return record.events;
+    }
+    return this.#store.events(record.invocationId);
+  }
+
+  #releaseCompletedEvents(): void {
+    for (const [invocationId, record] of this.#records) {
+      if (!TERMINAL_STATES.has(record.state) || record.events.length === 0) {
+        continue;
+      }
+      this.#records.set(invocationId, { ...record, events: [] });
     }
   }
 }
