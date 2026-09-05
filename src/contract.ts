@@ -487,6 +487,17 @@ export function parseInvocationIdParams(value: unknown): { readonly invocationId
   };
 }
 
+export function parseShutdownParams(value: unknown): { readonly force: boolean } {
+  const source = record(value, "params");
+  if (source.force === undefined) {
+    return { force: false };
+  }
+  if (typeof source.force !== "boolean") {
+    invalid("params.force must be a boolean.");
+  }
+  return { force: source.force };
+}
+
 export function parseRespondParams(value: unknown): InputResponse {
   const source = record(value, "params");
   return {

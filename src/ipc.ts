@@ -5,6 +5,7 @@ import { dirname } from "node:path";
 import { Broker } from "./broker.js";
 import { IPC_PROTOCOL_VERSION, parseOperationRequest, type OperationResponse } from "./contract.js";
 import { BridgeError, errorDetail, type BridgeErrorCode } from "./errors.js";
+import { ensurePrivateDirectory } from "./paths.js";
 
 const MAX_MESSAGE_BYTES = 1_048_576;
 
@@ -57,6 +58,7 @@ async function socketAcceptsConnections(socketPath: string): Promise<boolean> {
 export class BrokerServer {
   readonly #broker: Broker;
   readonly #socketPath: string;
+  readonly #runtimeDirectory: string;
   readonly #sockets = new Set<Socket>();
   #server: Server | undefined;
   #stopPromise: Promise<void> | undefined;
@@ -65,9 +67,10 @@ export class BrokerServer {
     this.#resolveClosed = resolve;
   });
 
-  constructor(broker: Broker, socketPath: string) {
+  constructor(broker: Broker, socketPath: string, runtimeDirectory = dirname(socketPath)) {
     this.#broker = broker;
     this.#socketPath = socketPath;
+    this.#runtimeDirectory = runtimeDirectory;
   }
 
   get closed(): Promise<void> {
@@ -75,6 +78,7 @@ export class BrokerServer {
   }
 
   async start(): Promise<void> {
+    await ensurePrivateDirectory(this.#runtimeDirectory, "runtime");
     await mkdir(dirname(this.#socketPath), { recursive: true, mode: 0o700 });
     try {
       const existing = await lstat(this.#socketPath);

@@ -25,7 +25,7 @@ Usage:
   agent-bridge request <operation> [--params <json>] [--json]
   agent-bridge broker serve
   agent-bridge broker status [--json]
-  agent-bridge broker stop [--json]
+  agent-bridge broker stop [--force] [--json]
   agent-bridge mcp serve
 
 Start options:
@@ -193,7 +193,7 @@ async function startBroker(): Promise<void> {
   const paths = brokerPaths();
   const broker = new Broker(paths);
   await broker.initialize();
-  const server = new BrokerServer(broker, paths.socketPath);
+  const server = new BrokerServer(broker, paths.socketPath, paths.runtimeDirectory);
   await server.start();
   if (process.env.AGENT_BRIDGE_DAEMON !== "1") {
     process.stderr.write(`agent-bridge broker listening at ${paths.socketPath}\n`);
@@ -293,7 +293,7 @@ async function runCommand(argv: readonly string[]): Promise<void> {
     }
     if (action === "stop") {
       const paths = brokerPaths();
-      output(await new IpcClient(paths.socketPath).request("system.shutdown", {}), json);
+      output(await new IpcClient(paths.socketPath).request("system.shutdown", { force: parsed.options.has("force") }), json);
       return;
     }
     if (action === "status") {

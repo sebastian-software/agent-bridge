@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { cp, mkdtemp, readFile, rm } from "node:fs/promises";
+import { chmod, cp, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -10,6 +10,7 @@ import { AdapterRegistry } from "../src/adapters/registry.js";
 import type { Adapter, AdapterRunContext, AdapterRunResult } from "../src/adapters/types.js";
 import { BridgeError } from "../src/errors.js";
 import type { BrokerPaths } from "../src/paths.js";
+import { ensurePrivateDirectory } from "../src/paths.js";
 
 function paths(root: string): BrokerPaths {
   return {
@@ -232,6 +233,44 @@ test("broker cancels active adapter work before producing a terminal outcome", a
     assert.ok("outcome" in terminal);
   } finally {
     await broker.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("forced broker shutdown records active invocations as interrupted", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-bridge-shutdown-"));
+  const broker = new Broker(paths(root));
+  await broker.initialize();
+  try {
+    const started = await broker.start(request(root, "fake-slow"));
+    await assert.rejects(
+      broker.execute("system.shutdown", {}),
+      (error: unknown) => error instanceof BridgeError && error.code === "invocation_conflict",
+    );
+    const accepted = await broker.execute("system.shutdown", { force: true }) as { accepted: boolean; activeInvocations: number };
+    assert.equal(accepted.accepted, true);
+    assert.equal(accepted.activeInvocations, 1);
+    await broker.close();
+    const terminal = await broker.inspect(started.invocationId);
+    assert.equal(stateOf(terminal), "interrupted");
+    assert.equal((terminal.outcome as { error?: { code?: string } }).error?.code, "broker_shutdown");
+  } finally {
+    await broker.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("private broker directories reject world-writable paths", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-bridge-private-dir-"));
+  const wide = join(root, "wide");
+  try {
+    await mkdir(wide);
+    await chmod(wide, 0o777);
+    await assert.rejects(
+      ensurePrivateDirectory(wide, "state"),
+      (error: unknown) => error instanceof BridgeError && error.code === "broker_unavailable",
+    );
+  } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
