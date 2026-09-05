@@ -30,6 +30,7 @@ export interface AdapterRunContext {
   readonly signal: AbortSignal;
   readonly emit: (event: AdapterEvent) => Promise<void>;
   readonly awaitInput?: (requestId: string, signal?: AbortSignal) => Promise<Pick<InputResponse, "decision">>;
+  readonly terminationGraceMs?: number;
 }
 
 export interface AdapterRunResult {

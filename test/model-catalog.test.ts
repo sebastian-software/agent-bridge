@@ -6,6 +6,38 @@ import test from "node:test";
 
 import { FakeAdapter } from "../src/adapters/fake.js";
 import { AdapterRegistry } from "../src/adapters/registry.js";
+import type { RouteDescriptor } from "../src/contract.js";
+import type { Adapter, AdapterRunContext, AdapterRunResult } from "../src/adapters/types.js";
+
+class CountingAdapter implements Adapter {
+  readonly id = "counting";
+  calls = 0;
+
+  async discover(): Promise<readonly RouteDescriptor[]> {
+    this.calls += 1;
+    return [{
+      routeId: "counting:test",
+      provider: "counting",
+      model: "test",
+      efforts: ["low"],
+      via: "counting",
+      adapter: this.id,
+      harnessVersion: "1.0.0",
+      authenticationMode: "none",
+      capabilities: [],
+      interactionStrategies: ["deny"],
+      assurance: "none",
+      runtimeIdentityEvidence: "verified",
+      readiness: "ready",
+      qualification: [],
+      diagnostics: [],
+    }];
+  }
+
+  async run(_context: AdapterRunContext): Promise<AdapterRunResult> {
+    throw new Error("Not used in discovery cache test.");
+  }
+}
 
 test("user model catalog adds aliases and canonical native model mappings", async () => {
   const root = await mkdtemp(join(tmpdir(), "agent-bridge-catalog-"));
@@ -45,4 +77,15 @@ test("user model catalog adds aliases and canonical native model mappings", asyn
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("adapter route discovery is cached and can be refreshed", async () => {
+  const adapter = new CountingAdapter();
+  const registry = new AdapterRegistry([adapter]);
+  const first = await registry.discover();
+  const second = await registry.discover();
+  assert.equal(adapter.calls, 1);
+  assert.equal(first[0]?.discoveredAt, second[0]?.discoveredAt);
+  await registry.discover({ refresh: true });
+  assert.equal(adapter.calls, 2);
 });

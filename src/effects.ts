@@ -8,6 +8,11 @@ const execFileAsync = promisify(execFile);
 const MAX_FILES = 10_000;
 const MAX_BYTES = 256 * 1024 * 1024;
 
+export interface SnapshotLimits {
+  readonly maxFiles?: number;
+  readonly maxBytes?: number;
+}
+
 interface FileFingerprint {
   readonly size: number;
   readonly modifiedAt: number;
@@ -53,7 +58,9 @@ function statusRenames(value: string): ReadonlyMap<string, string> {
   return renames;
 }
 
-export async function captureWorkspaceSnapshot(root: string): Promise<WorkspaceSnapshot> {
+export async function captureWorkspaceSnapshot(root: string, limits: SnapshotLimits = {}): Promise<WorkspaceSnapshot> {
+  const maxFiles = limits.maxFiles ?? MAX_FILES;
+  const maxBytes = limits.maxBytes ?? MAX_BYTES;
   let listed: string;
   try {
     listed = await git(root, ["ls-files", "--cached", "--others", "--exclude-standard", "-z"]);
@@ -71,11 +78,11 @@ export async function captureWorkspaceSnapshot(root: string): Promise<WorkspaceS
   let complete = true;
   let bytes = 0;
   const paths = pathsFromNulSeparated(listed);
-  if (paths.length > MAX_FILES) {
+  if (paths.length > maxFiles) {
     complete = false;
-    diagnostics.push(`Workspace snapshot exceeded the ${MAX_FILES}-file limit.`);
+    diagnostics.push(`Workspace snapshot exceeded the ${maxFiles}-file limit.`);
   }
-  for (const relativePath of paths.slice(0, MAX_FILES)) {
+  for (const relativePath of paths.slice(0, maxFiles)) {
     let info;
     try {
       info = await lstat(`${root}/${relativePath}`);
@@ -91,9 +98,9 @@ export async function captureWorkspaceSnapshot(root: string): Promise<WorkspaceS
       continue;
     }
     bytes += info.size;
-    if (bytes > MAX_BYTES) {
+    if (bytes > maxBytes) {
       complete = false;
-      diagnostics.push(`Workspace snapshot exceeded the ${MAX_BYTES}-byte limit.`);
+      diagnostics.push(`Workspace snapshot exceeded the ${maxBytes}-byte limit.`);
       break;
     }
     files.set(relativePath, {

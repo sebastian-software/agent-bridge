@@ -11,6 +11,7 @@ import {
   parseEventsParams,
   parseInvocationIdParams,
   parseRespondParams,
+  parseRouteDiscoverParams,
   parseShutdownParams,
   parseWaitParams,
   parseStartInvocationRequest,
@@ -36,6 +37,8 @@ import { ensurePrivateDirectory } from "./paths.js";
 import { InvocationStore } from "./store.js";
 import { captureWorkspaceSnapshot, observeWorkspaceEffects, type WorkspaceSnapshot } from "./effects.js";
 import { canonicalJson, messageFrom, sha256 } from "./util.js";
+import { brokerConfigFromValues, type BrokerConfig, type BrokerConfigValues } from "./config.js";
+import { PACKAGE_VERSION } from "./version.js";
 
 interface MutableResult<T> {
   readonly value: T;
@@ -132,15 +135,20 @@ export class Broker {
   readonly #inputResponses = new Map<string, Pick<InputResponse, "decision">>();
   readonly #tombstones = new Map<string, InvocationTombstone>();
   readonly #diagnosticMode: boolean;
+  readonly #config: BrokerConfig;
   #shutdownRequested = false;
   readonly #retention: {
     readonly completedMs: number;
     readonly maxBytes: number;
   };
+  readonly #effectLimits: { readonly maxFiles: number; readonly maxBytes: number };
+  readonly #terminationGraceMs: number;
+  readonly #startedAt = new Date().toISOString();
   #mutationTail: Promise<void> = Promise.resolve();
 
   constructor(paths: BrokerPaths, options?: {
     readonly registry?: AdapterRegistry;
+    readonly config?: BrokerConfig;
     readonly retention?: {
       readonly completedMs?: number;
       readonly maxBytes?: number;
@@ -150,11 +158,19 @@ export class Broker {
     this.#paths = paths;
     this.#store = new InvocationStore(paths.stateFile);
     this.#registry = options?.registry ?? new AdapterRegistry();
-    this.#retention = {
-      completedMs: options?.retention?.completedMs ?? 7 * 24 * 60 * 60 * 1000,
-      maxBytes: options?.retention?.maxBytes ?? 1_073_741_824,
+    const compatibility: Partial<BrokerConfigValues> = {
+      ...(options?.retention?.completedMs === undefined ? {} : { retentionCompletedDays: options.retention.completedMs / (24 * 60 * 60 * 1000) }),
+      ...(options?.retention?.maxBytes === undefined ? {} : { retentionMaxBytes: options.retention.maxBytes }),
+      ...(options?.diagnosticMode === undefined ? {} : { diagnosticMode: options.diagnosticMode }),
     };
-    this.#diagnosticMode = options?.diagnosticMode ?? false;
+    this.#config = options?.config ?? brokerConfigFromValues(compatibility);
+    this.#retention = {
+      completedMs: this.#config.retentionCompletedDays * 24 * 60 * 60 * 1000,
+      maxBytes: this.#config.retentionMaxBytes,
+    };
+    this.#diagnosticMode = this.#config.diagnosticMode;
+    this.#effectLimits = { maxFiles: this.#config.effectsMaxFiles, maxBytes: this.#config.effectsMaxBytes };
+    this.#terminationGraceMs = this.#config.terminationGraceMs;
   }
 
   async initialize(): Promise<void> {
@@ -218,7 +234,7 @@ export class Broker {
       case "system.status":
         return this.status();
       case "route.discover":
-        return { routes: await this.#registry.discover() };
+        return { routes: await this.#registry.discover(parseRouteDiscoverParams(params)) };
       case "invocation.start":
         return this.start(parseStartInvocationRequest(params));
       case "invocation.inspect":
@@ -272,10 +288,13 @@ export class Broker {
     return {
       ...describeContract(),
       broker: {
+        packageVersion: PACKAGE_VERSION,
+        startedAt: this.#startedAt,
         platform: process.platform,
         pid: process.pid,
         socketPath: this.#paths.socketPath,
         stateFile: this.#store.path,
+        logFile: `${this.#store.directory}/broker.log`,
       },
       retention: {
         completedDays: this.#retention.completedMs / (24 * 60 * 60 * 1000),
@@ -289,6 +308,7 @@ export class Broker {
         diagnosticMode: this.#diagnosticMode,
         nativePayloadMaxBytes: MAX_PERSISTED_NATIVE_BYTES,
       },
+      configuration: this.#config,
     };
   }
 
@@ -296,10 +316,15 @@ export class Broker {
     const records = [...this.#records.values()];
     return {
       ready: true,
+      running: true,
+      packageVersion: PACKAGE_VERSION,
+      startedAt: this.#startedAt,
       pid: process.pid,
       platform: process.platform,
       socketPath: this.#paths.socketPath,
       stateFile: this.#store.path,
+      logFile: `${this.#store.directory}/broker.log`,
+      idleShutdownMinutes: this.#config.idleShutdownMinutes,
       activeInvocations: records.filter((record) => !TERMINAL_STATES.has(record.state)).length,
       retainedInvocations: records.length,
       tombstones: this.#tombstones.size,
@@ -390,7 +415,7 @@ export class Broker {
     });
 
     if (!result.deduplicated) {
-      this.#beforeSnapshots.set(invocationId, await captureWorkspaceSnapshot(request.workingDirectory));
+      this.#beforeSnapshots.set(invocationId, await captureWorkspaceSnapshot(request.workingDirectory, this.#effectLimits));
       this.#launch(invocationId);
     }
     return result;
@@ -589,6 +614,7 @@ export class Broker {
         signal: controller.signal,
         emit: (event) => this.#appendAdapterEvent(invocationId, event),
         awaitInput: (requestId, signal) => this.#awaitInput(invocationId, requestId, signal),
+        terminationGraceMs: this.#terminationGraceMs,
       });
       const latest = this.#requireRecord(invocationId);
       if (latest.state === "cancelling" || controller.signal.aborted) {
@@ -783,7 +809,7 @@ export class Broker {
     const current = this.#records.get(invocationId);
     const afterSnapshot = current === undefined
       ? undefined
-      : await captureWorkspaceSnapshot(current.request.workingDirectory);
+      : await captureWorkspaceSnapshot(current.request.workingDirectory, this.#effectLimits);
     const observed = await observeWorkspaceEffects(this.#beforeSnapshots.get(invocationId), afterSnapshot ?? {
       root: current?.request.workingDirectory ?? "",
       files: new Map(),

@@ -100,6 +100,7 @@ export interface RouteDescriptor {
   readonly readiness: "ready" | "unavailable" | "unqualified";
   readonly qualification: readonly QualificationEvidence[];
   readonly diagnostics: readonly string[];
+  readonly discoveredAt?: string;
   readonly policySupport?: Readonly<Record<string, readonly string[]>>;
 }
 
@@ -485,6 +486,17 @@ export function parseInvocationIdParams(value: unknown): { readonly invocationId
   return {
     invocationId: stringValue(source.invocationId, "params.invocationId", { nonEmpty: true }),
   };
+}
+
+export function parseRouteDiscoverParams(value: unknown): { readonly refresh: boolean } {
+  const source = record(value, "params");
+  if (source.refresh === undefined) {
+    return { refresh: false };
+  }
+  if (typeof source.refresh !== "boolean") {
+    invalid("params.refresh must be a boolean.");
+  }
+  return { refresh: source.refresh };
 }
 
 export function parseShutdownParams(value: unknown): { readonly force: boolean } {
