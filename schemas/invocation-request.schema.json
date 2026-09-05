@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agent-bridge://schemas/invocation-request.schema.json",
+  "title": "Agent Bridge invocation request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["selector", "input", "workingDirectory"],
+  "properties": {
+    "selector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "model"],
+      "properties": {
+        "provider": { "type": "string", "minLength": 1 },
+        "model": { "type": "string", "minLength": 1 },
+        "effort": { "type": "string", "minLength": 1 },
+        "via": { "type": "string", "minLength": 1 },
+        "requiredCapabilities": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "minimumObservedEvidence": { "enum": ["unverified", "inferred", "reported", "verified"] }
+      }
+    },
+    "input": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/content-part" } },
+    "workingDirectory": { "type": "string", "minLength": 1 },
+    "interactionStrategy": { "enum": ["orchestrator", "deny", "unattended"] },
+    "requestedPolicy": { "$ref": "#/$defs/requested-policy" },
+    "timeoutMs": { "type": "integer", "minimum": 1 },
+    "callerCorrelationId": { "type": "string", "minLength": 1 },
+    "idempotencyKey": { "type": "string", "minLength": 1 }
+  },
+  "$defs": {
+    "content-part": {
+      "oneOf": [
+        { "type": "object", "required": ["type", "text"], "properties": { "type": { "const": "text" }, "text": { "type": "string" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "value"], "properties": { "type": { "const": "json" }, "value": {} }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "path", "mimeType"], "properties": { "type": { "enum": ["image", "audio", "file"] }, "path": { "type": "string", "minLength": 1 }, "mimeType": { "type": "string", "minLength": 1 }, "byteSize": { "type": "integer", "minimum": 0 }, "digest": { "type": "string", "minLength": 1 } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "uri"], "properties": { "type": { "const": "resource" }, "uri": { "type": "string", "minLength": 1 }, "mimeType": { "type": "string", "minLength": 1 }, "byteSize": { "type": "integer", "minimum": 0 }, "digest": { "type": "string", "minLength": 1 } }, "additionalProperties": false }
+      ]
+    },
+    "requested-policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "filesystem": { "enum": ["inherit", "read-only", "workspace-write"] },
+        "commands": { "enum": ["allow", "deny", "inherit"] },
+        "network": { "enum": ["allow", "deny", "inherit"] },
+        "additionalDirectories": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "minimumAssurance": { "enum": ["none", "native", "isolated"] }
+      }
+    }
+  }
+}

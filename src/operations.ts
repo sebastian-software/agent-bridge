@@ -13,6 +13,19 @@ export interface OperationDefinition {
 
 export const OPERATIONS_VERSION = "1.0" as const;
 
+export interface SchemaDefinition {
+  readonly name: string;
+  readonly version: typeof SCHEMA_VERSION;
+  readonly path: string;
+}
+
+export const SCHEMA_DEFINITIONS: readonly SchemaDefinition[] = [
+  { name: "invocation-request", version: SCHEMA_VERSION, path: "schemas/invocation-request.schema.json" },
+  { name: "invocation-event", version: SCHEMA_VERSION, path: "schemas/invocation-event.schema.json" },
+  { name: "invocation-outcome", version: SCHEMA_VERSION, path: "schemas/invocation-outcome.schema.json" },
+  { name: "operations", version: SCHEMA_VERSION, path: "schemas/operations.schema.json" },
+] as const;
+
 export const OPERATION_DEFINITIONS: readonly OperationDefinition[] = [
   {
     name: "system.describe",
@@ -121,6 +134,7 @@ export function describeContract(): Readonly<Record<string, unknown>> {
   return {
     schemaVersion: SCHEMA_VERSION,
     operationsVersion: OPERATIONS_VERSION,
+    schemas: SCHEMA_DEFINITIONS,
     operations: OPERATION_DEFINITIONS,
   };
 }
