@@ -1,10 +1,11 @@
-import { lstat, mkdir, chmod, unlink } from "node:fs/promises";
+import { lstat, chmod, unlink } from "node:fs/promises";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
 import { dirname } from "node:path";
 
 import { Broker } from "./broker.js";
 import { IPC_PROTOCOL_VERSION, parseOperationRequest, type OperationResponse } from "./contract.js";
 import { BridgeError, errorDetail, type BridgeErrorCode } from "./errors.js";
+import { ensurePrivateDirectory } from "./paths.js";
 
 const MAX_MESSAGE_BYTES = 1_048_576;
 
@@ -75,7 +76,7 @@ export class BrokerServer {
   }
 
   async start(): Promise<void> {
-    await mkdir(dirname(this.#socketPath), { recursive: true, mode: 0o700 });
+    await ensurePrivateDirectory(dirname(this.#socketPath), "runtime");
     try {
       const existing = await lstat(this.#socketPath);
       if (!existing.isSocket()) {

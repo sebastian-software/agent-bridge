@@ -414,6 +414,10 @@ export class InvocationStore {
     return this.#stateFile;
   }
 
+  get directory(): string {
+    return this.#stateDirectory;
+  }
+
   async load(): Promise<StoreSnapshot> {
     let text: string | undefined;
     try {

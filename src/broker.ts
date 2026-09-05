@@ -11,6 +11,7 @@ import {
   parseEventsParams,
   parseInvocationIdParams,
   parseRespondParams,
+  parseShutdownParams,
   parseWaitParams,
   parseStartInvocationRequest,
   type EventsResult,
@@ -31,6 +32,7 @@ import {
 import { BridgeError } from "./errors.js";
 import { describeContract } from "./operations.js";
 import type { BrokerPaths } from "./paths.js";
+import { ensurePrivateDirectory } from "./paths.js";
 import { InvocationStore } from "./store.js";
 import { captureWorkspaceSnapshot, observeWorkspaceEffects, type WorkspaceSnapshot } from "./effects.js";
 import { canonicalJson, messageFrom, sha256 } from "./util.js";
@@ -130,6 +132,7 @@ export class Broker {
   readonly #inputResponses = new Map<string, Pick<InputResponse, "decision">>();
   readonly #tombstones = new Map<string, InvocationTombstone>();
   readonly #diagnosticMode: boolean;
+  #shutdownRequested = false;
   readonly #retention: {
     readonly completedMs: number;
     readonly maxBytes: number;
@@ -155,6 +158,7 @@ export class Broker {
   }
 
   async initialize(): Promise<void> {
+    await ensurePrivateDirectory(this.#store.directory, "state");
     const persisted = await this.#store.load();
     for (const record of persisted.invocations) {
       this.#records.set(record.invocationId, record);
@@ -210,7 +214,7 @@ export class Broker {
       case "system.describe":
         return this.describe();
       case "system.shutdown":
-        return { accepted: true };
+        return this.shutdown(parseShutdownParams(params).force);
       case "system.status":
         return this.status();
       case "route.discover":
@@ -248,6 +252,20 @@ export class Broker {
           retryable: false,
         });
     }
+  }
+
+  async shutdown(force = false): Promise<Readonly<Record<string, unknown>>> {
+    const active = [...this.#records.values()].filter((record) => !TERMINAL_STATES.has(record.state));
+    if (active.length > 0 && !force) {
+      throw new BridgeError({
+        code: "invocation_conflict",
+        message: "The broker has active invocations. Pass force=true to interrupt them during shutdown.",
+        retryable: false,
+        details: { activeInvocations: active.map((record) => record.invocationId) },
+      });
+    }
+    this.#shutdownRequested = force && active.length > 0;
+    return { accepted: true, force, activeInvocations: active.length };
   }
 
   describe(): Readonly<Record<string, unknown>> {
@@ -574,11 +592,12 @@ export class Broker {
       });
       const latest = this.#requireRecord(invocationId);
       if (latest.state === "cancelling" || controller.signal.aborted) {
-        await this.#complete(invocationId, timedOut ? "timed_out" : "cancelled", {
+        const interrupted = this.#shutdownRequested;
+        await this.#complete(invocationId, interrupted ? "interrupted" : timedOut ? "timed_out" : "cancelled", {
           observedIdentity: result.observedIdentity,
           error: {
-            code: timedOut ? "timed_out" : "cancelled",
-            message: timedOut ? "The invocation exceeded its timeout." : "The invocation was cancelled.",
+            code: interrupted ? "broker_shutdown" : timedOut ? "timed_out" : "cancelled",
+            message: interrupted ? "The broker shut down while the invocation was active." : timedOut ? "The invocation exceeded its timeout." : "The invocation was cancelled.",
           },
         });
       } else {
@@ -586,11 +605,12 @@ export class Broker {
       }
     } catch (error) {
       if (controller.signal.aborted || isAbortError(error)) {
-        await this.#complete(invocationId, timedOut ? "timed_out" : "cancelled", {
+        const interrupted = this.#shutdownRequested;
+        await this.#complete(invocationId, interrupted ? "interrupted" : timedOut ? "timed_out" : "cancelled", {
           observedIdentity: unverifiedIdentity(),
           error: {
-            code: timedOut ? "timed_out" : "cancelled",
-            message: timedOut ? "The invocation exceeded its timeout." : "The invocation was cancelled.",
+            code: interrupted ? "broker_shutdown" : timedOut ? "timed_out" : "cancelled",
+            message: interrupted ? "The broker shut down while the invocation was active." : timedOut ? "The invocation exceeded its timeout." : "The invocation was cancelled.",
           },
         });
       } else {
