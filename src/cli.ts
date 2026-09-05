@@ -7,6 +7,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { Broker } from "./broker.js";
 import { BridgeError, errorDetail } from "./errors.js";
 import { BrokerServer, IpcClient } from "./ipc.js";
+import { McpServer } from "./mcp.js";
 import { brokerPaths } from "./paths.js";
 
 const HELP = `agent-bridge — local harness delegation gateway
@@ -21,6 +22,7 @@ Usage:
   agent-bridge request <operation> [--params <json>] [--json]
   agent-bridge broker serve
   agent-bridge broker stop [--json]
+  agent-bridge mcp serve
 
 Start options:
   --effort <level>              Requested effort level
@@ -206,6 +208,10 @@ async function requestBroker(operation: string, params: unknown): Promise<unknow
   }, { cause: lastError });
 }
 
+async function startMcp(): Promise<void> {
+  await new McpServer((operation, params) => requestBroker(operation, params)).serve();
+}
+
 function parseEventsPage(value: unknown): {
   readonly events: readonly unknown[];
   readonly nextCursor?: string;
@@ -261,6 +267,18 @@ async function runCommand(argv: readonly string[]): Promise<void> {
         retryable: false,
       });
     }
+  }
+  if (command === "mcp") {
+    const action = positional(parsed, 0, "MCP action");
+    if (action === "serve") {
+      await startMcp();
+      return;
+    }
+    throw new BridgeError({
+      code: "invalid_request",
+      message: "Supported MCP action is serve.",
+      retryable: false,
+    });
   }
   if (command === "describe") {
     output(await requestBroker("system.describe", {}), json);
