@@ -1,7 +1,18 @@
 {
   "name": "@sebastian-software/agent-bridge",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Local harness-to-harness delegation gateway",
+  "author": "Sebastian Software GmbH",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sebastian-software/agent-bridge.git"
+  },
+  "homepage": "https://github.com/sebastian-software/agent-bridge#readme",
+  "bugs": {
+    "url": "https://github.com/sebastian-software/agent-bridge/issues"
+  },
+  "keywords": ["agent", "delegation", "harness", "mcp", "cli"],
   "type": "module",
   "bin": {
     "agent-bridge": "./dist/src/cli.js"
@@ -19,6 +30,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "fake-harness": "node scripts/fake-harness.mjs",
+    "version:sync": "node scripts/sync-version.mjs",
     "format": "pnpm exec biome format --write src test scripts",
     "format:check": "pnpm exec biome format src test scripts --reporter=summary",
     "lint": "pnpm exec biome check --formatter-enabled=false --assist-enabled=false src test scripts && node scripts/lint.mjs",
@@ -33,7 +45,9 @@
     "schemas",
     "README.md",
     "docs/cli.md",
-    "docs/mcp.md"
+    "docs/contract.md",
+    "docs/mcp.md",
+    "docs/adapters.md"
   ],
   "publishConfig": {
     "access": "public"
