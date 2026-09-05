@@ -525,6 +525,61 @@ test("broker distinguishes timeout from caller cancellation", async () => {
   }
 });
 
+test("cancelled process invocations retain output and usage observed before termination", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-bridge-partial-result-"));
+  const broker = new Broker(paths(root));
+  await broker.initialize();
+  try {
+    const started = await broker.start(
+      request(root, "slow", {
+        selector: {
+          provider: "agent-bridge",
+          model: "slow",
+          via: "fake-process",
+          effort: "high",
+          requiredCapabilities: ["core.input.text"],
+        },
+        interactionStrategy: "deny",
+      }),
+    );
+    let after: string | undefined;
+    let cancelled = false;
+    for (let attempt = 0; attempt < 100 && !cancelled; attempt += 1) {
+      const page = await broker.events({
+        invocationId: started.invocationId,
+        ...(after === undefined ? {} : { after }),
+      });
+      if (page.nextCursor !== undefined) {
+        after = page.nextCursor;
+      }
+      if (page.events.some((event) => event.category === "output")) {
+        await broker.cancel(started.invocationId);
+        cancelled = true;
+      } else {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    }
+    assert.equal(cancelled, true);
+    const terminal = await waitForTerminal(broker, started.invocationId);
+    assert.equal(stateOf(terminal), "cancelled");
+    const outcome = terminal.outcome as {
+      content: readonly { type: string; text?: string }[];
+      usage?: { inputTokens?: number; outputTokens?: number };
+    };
+    assert.deepEqual(outcome.content, [{ type: "text", text: "echo this" }]);
+    assert.deepEqual(
+      outcome.usage && { inputTokens: outcome.usage.inputTokens, outputTokens: outcome.usage.outputTokens },
+      {
+        inputTokens: 1,
+        outputTokens: 1,
+      },
+    );
+  } finally {
+    await broker.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("route resolution rejects assurance the fake route cannot provide", async () => {
   const root = await mkdtemp(join(tmpdir(), "agent-bridge-policy-"));
   const broker = new Broker(paths(root));

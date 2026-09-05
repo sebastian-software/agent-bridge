@@ -73,9 +73,12 @@ if (
   } else if (scenario === "slow") {
     for (let step = 2; step <= 8; step += 1) {
       await new Promise((resolve) => setTimeout(resolve, 25));
+      if (step === 2) {
+        emit({ type: "assistant", text });
+        emit({ type: "usage", usage: { inputTokens: 1, outputTokens: 1 } });
+      }
       emit({ type: "progress", step, total: 8 });
     }
-    emit({ type: "assistant", text });
     emit({ type: "result", status: "completed", usage: { inputTokens: 1, outputTokens: 1 } });
   } else {
     emit({ type: "assistant", text });

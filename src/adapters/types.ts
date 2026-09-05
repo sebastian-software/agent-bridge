@@ -29,6 +29,7 @@ export interface AdapterRunContext {
   readonly route: ResolvedRoute;
   readonly signal: AbortSignal;
   readonly emit: (event: AdapterEvent) => Promise<void>;
+  readonly reportPartial?: (result: Partial<AdapterRunResult>) => void;
   readonly awaitInput?: (requestId: string, signal?: AbortSignal) => Promise<Pick<InputResponse, "decision">>;
   readonly terminationGraceMs?: number;
 }

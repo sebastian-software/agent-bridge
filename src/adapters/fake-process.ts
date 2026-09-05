@@ -158,6 +158,12 @@ export class FakeProcessAdapter extends ProcessAdapter {
         native: value,
       };
     }
+    if (type === "usage") {
+      const reportedUsage = usage(value.usage);
+      return reportedUsage === undefined
+        ? { category: "activity", data: { phase: "usage" }, native: value }
+        : { category: "usage", data: { usage: { ...reportedUsage } }, usage: reportedUsage, native: value };
+    }
     return type === "init" ? { category: "lifecycle", native: value } : undefined;
   }
 }
