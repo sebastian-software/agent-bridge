@@ -306,6 +306,16 @@ export class IpcClient {
     const id = `req_${crypto.randomUUID()}`;
     const response = await new Promise<unknown>((resolve, reject) => {
       const socket = createConnection(this.#socketPath);
+      let settled = false;
+      const finish = (callback: () => void): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        socket.setTimeout(0);
+        socket.destroy();
+        callback();
+      };
       let received = "";
       socket.setEncoding("utf8");
       socket.once("connect", () => {
@@ -314,22 +324,20 @@ export class IpcClient {
       socket.on("data", (chunk: string) => {
         received += chunk;
         if (Buffer.byteLength(received, "utf8") > MAX_MESSAGE_BYTES * 8) {
-          socket.destroy();
-          reject(brokerUnavailable("The broker response exceeds the eight-MiB client limit."));
+          finish(() => reject(brokerUnavailable("The broker response exceeds the eight-MiB client limit.")));
         }
       });
       socket.once("end", () => {
-        try {
-          resolve(JSON.parse(received.trim()) as unknown);
-        } catch (error) {
-          reject(brokerUnavailable("The broker returned an invalid JSON response.", error));
-        }
+        finish(() => {
+          try {
+            resolve(JSON.parse(received.trim()) as unknown);
+          } catch (error) {
+            reject(brokerUnavailable("The broker returned an invalid JSON response.", error));
+          }
+        });
       });
-      socket.once("error", (error) => reject(brokerUnavailable(`Cannot connect to broker at ${this.#socketPath}.`, error)));
-      socket.setTimeout(35_000, () => {
-        socket.destroy();
-        reject(brokerUnavailable("The broker request timed out."));
-      });
+      socket.once("error", (error) => finish(() => reject(brokerUnavailable(`Cannot connect to broker at ${this.#socketPath}.`, error))));
+      socket.setTimeout(35_000, () => finish(() => reject(brokerUnavailable("The broker request timed out."))));
     });
 
     if (typeof response !== "object" || response === null || Array.isArray(response)) {

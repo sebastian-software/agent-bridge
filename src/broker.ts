@@ -10,6 +10,7 @@ import {
   TERMINAL_STATES,
   parseEventsParams,
   parseInvocationIdParams,
+  parseInvocationListParams,
   parseRespondParams,
   parseRouteDiscoverParams,
   parseShutdownParams,
@@ -19,6 +20,7 @@ import {
   type EffectObservation,
   type InvocationEvent,
   type InvocationOutcome,
+  type InvocationListResult,
   type InvocationRecord,
   type InputResponse,
   type InvocationState,
@@ -239,6 +241,8 @@ export class Broker {
         return this.start(parseStartInvocationRequest(params));
       case "invocation.inspect":
         return this.inspect(parseInvocationIdParams(params).invocationId);
+      case "invocation.list":
+        return this.list(parseInvocationListParams(params));
       case "invocation.get":
         return this.inspect(parseInvocationIdParams(params).invocationId);
       case "invocation.result":
@@ -442,6 +446,37 @@ export class Broker {
       next: TERMINAL_STATES.has(record.state)
         ? ["invocation.events"]
         : ["invocation.events", "invocation.cancel"],
+    };
+  }
+
+  async list(params: {
+    readonly state?: InvocationState;
+    readonly callerCorrelationId?: string;
+    readonly since?: string;
+    readonly limit: number;
+    readonly includeTombstones: boolean;
+  }): Promise<InvocationListResult> {
+    await this.#mutationTail;
+    const since = params.since === undefined ? undefined : Date.parse(params.since);
+    const invocations = [...this.#records.values()]
+      .filter((record) => params.state === undefined || record.state === params.state)
+      .filter((record) => params.callerCorrelationId === undefined || record.callerCorrelationId === params.callerCorrelationId)
+      .filter((record) => since === undefined || Date.parse(record.createdAt) >= since)
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+      .slice(0, params.limit)
+      .map((record) => ({
+        invocationId: record.invocationId,
+        state: record.state,
+        requestedSelector: record.request.selector,
+        resolvedRouteId: record.resolvedRoute.routeId,
+        createdAt: record.createdAt,
+        ...(record.outcome?.completedAt === undefined ? {} : { completedAt: record.outcome.completedAt }),
+        workingDirectory: record.request.workingDirectory,
+        ...(record.callerCorrelationId === undefined ? {} : { callerCorrelationId: record.callerCorrelationId }),
+      }));
+    return {
+      invocations,
+      tombstones: params.includeTombstones ? [...this.#tombstones.values()] : [],
     };
   }
 

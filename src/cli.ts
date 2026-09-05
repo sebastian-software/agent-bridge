@@ -1,11 +1,10 @@
 #!/usr/bin/env node
 
 import { readFile } from "node:fs/promises";
-import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 
 import { Broker } from "./broker.js";
+import { createClient } from "./client.js";
 import { BridgeError, errorDetail } from "./errors.js";
 import { BrokerServer, IpcClient } from "./ipc.js";
 import { McpServer } from "./mcp.js";
@@ -19,6 +18,8 @@ Usage:
   agent-bridge describe [--json]
   agent-bridge routes [--refresh] [--json]
   agent-bridge start --provider <id> --model <id> --text <text> [options]
+  agent-bridge run --provider <id> --model <id> [options] [prompt]
+  agent-bridge list [--active] [--correlation <id>] [--json]
   agent-bridge inspect <invocation-id> [--json]
   agent-bridge get <invocation-id> [--json]
   agent-bridge result <invocation-id> [--json]
@@ -43,6 +44,13 @@ Start options:
   --minimum-assurance <level>   none, native, or isolated
   --idempotency-key <key>       Deduplicate an equivalent start request
   --correlation-id <id>         Opaque caller-owned correlation value
+  --prompt-file <path>          Read the prompt from a file; use - for stdin
+  --input-json <path|->          Read complete content parts as JSON
+  --filesystem <mode>           inherit, read-only, or workspace-write
+  --commands <mode>             allow, deny, or inherit
+  --network <mode>              allow, deny, or inherit
+  --add-dir <path>              Additional directory; repeatable
+  --evidence <level>             Minimum observed identity evidence
 
 Broker configuration flags:
   --retention-completed-days <n>  Completed invocation retention
@@ -64,7 +72,7 @@ interface ParsedArguments {
   readonly options: ReadonlyMap<string, readonly string[]>;
 }
 
-const BOOLEAN_OPTIONS = new Set(["diagnostic-mode", "follow", "force", "help", "json", "refresh"]);
+const BOOLEAN_OPTIONS = new Set(["active", "diagnostic-mode", "fail-on-error", "follow", "force", "help", "json", "refresh", "until-terminal", "version"]);
 
 function parseArguments(args: readonly string[]): ParsedArguments {
   const positionals: string[] = [];
@@ -199,6 +207,150 @@ function output(value: unknown, json: boolean): void {
   process.stdout.write(`${JSON.stringify(value, null, json ? undefined : 2)}\n`);
 }
 
+const client = createClient();
+
+function human(value: unknown): void {
+  if (typeof value === "string") {
+    process.stdout.write(`${value}\n`);
+    return;
+  }
+  process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+}
+
+function textContent(value: unknown): string {
+  if (typeof value !== "object" || value === null || !("content" in value) || !Array.isArray(value.content)) {
+    return "";
+  }
+  return value.content
+    .filter((part): part is { readonly type: "text"; readonly text: string } =>
+      typeof part === "object" && part !== null && "type" in part && part.type === "text" && "text" in part && typeof part.text === "string")
+    .map((part) => part.text)
+    .join("\n");
+}
+
+function eventSummary(event: unknown): string {
+  if (typeof event !== "object" || event === null) {
+    return "event";
+  }
+  const category = "category" in event && typeof event.category === "string" ? event.category : "event";
+  if ("data" in event && typeof event.data === "object" && event.data !== null && !Array.isArray(event.data)) {
+    const data = event.data as Readonly<Record<string, unknown>>;
+    if (typeof data.state === "string") {
+      return `${category}: ${data.state}`;
+    }
+    if (typeof data.message === "string") {
+      return `${category}: ${data.message}`;
+    }
+  }
+  if ("content" in event && Array.isArray(event.content)) {
+    const text = textContent(event);
+    if (text !== "") {
+      return `${category}: ${text.replaceAll(/\s+/g, " ").slice(0, 160)}`;
+    }
+  }
+  return category;
+}
+
+async function promptAndInput(parsed: ParsedArguments): Promise<readonly Record<string, unknown>[]> {
+  const inputJson = option(parsed, "input-json");
+  const promptFile = option(parsed, "prompt-file");
+  const text = option(parsed, "text");
+  if (inputJson !== undefined && (promptFile !== undefined || text !== undefined || parsed.positionals.length > 0)) {
+    throw new BridgeError({ code: "invalid_request", message: "Use only one prompt source.", retryable: false });
+  }
+  if (inputJson !== undefined) {
+    const raw = inputJson === "-" ? await readStandardInput() : await readFile(inputJson, "utf8");
+    let decoded: unknown;
+    try {
+      decoded = JSON.parse(raw) as unknown;
+    } catch (error) {
+      throw new BridgeError({ code: "invalid_request", message: "--input-json must contain valid JSON.", retryable: false }, { cause: error });
+    }
+    if (!Array.isArray(decoded)) {
+      throw new BridgeError({ code: "invalid_request", message: "--input-json must contain a content-part array.", retryable: false });
+    }
+    return decoded as readonly Record<string, unknown>[];
+  }
+  let prompt: string | undefined = text;
+  if (promptFile !== undefined) {
+    prompt = promptFile === "-" ? await readStandardInput() : await readFile(promptFile, "utf8");
+  } else if (prompt === undefined && parsed.positionals.length > 0) {
+    prompt = parsed.positionals.join(" ");
+  } else if (prompt === undefined && !process.stdin.isTTY) {
+    prompt = await readStandardInput();
+  }
+  if (prompt === undefined || prompt === "") {
+    throw new BridgeError({ code: "invalid_request", message: "Provide a prompt, --prompt-file, --input-json, or stdin.", retryable: false });
+  }
+  return [{ type: "text", text: prompt }];
+}
+
+async function startParams(parsed: ParsedArguments): Promise<Readonly<Record<string, unknown>>> {
+  const provider = requiredOption(parsed, "provider");
+  const model = requiredOption(parsed, "model");
+  const effort = option(parsed, "effort");
+  const via = option(parsed, "via");
+  const evidence = option(parsed, "evidence");
+  const timeoutMs = positiveInteger(option(parsed, "timeout-ms"), "timeout-ms");
+  const idempotencyKey = option(parsed, "idempotency-key");
+  const callerCorrelationId = option(parsed, "correlation-id");
+  const filesystem = option(parsed, "filesystem");
+  const commands = option(parsed, "commands");
+  const network = option(parsed, "network");
+  const additionalDirectories = parsed.options.get("add-dir") ?? [];
+  const input = await promptAndInput(parsed);
+  return {
+    selector: {
+      provider,
+      model,
+      ...(effort === undefined ? {} : { effort }),
+      ...(via === undefined ? {} : { via }),
+      requiredCapabilities: parsed.options.get("capability") ?? [],
+      ...(evidence === undefined ? {} : { minimumObservedEvidence: evidence }),
+    },
+    input,
+    workingDirectory: option(parsed, "cwd") ?? process.cwd(),
+    interactionStrategy: option(parsed, "interaction") ?? "orchestrator",
+    requestedPolicy: {
+      ...(filesystem === undefined ? {} : { filesystem }),
+      ...(commands === undefined ? {} : { commands }),
+      ...(network === undefined ? {} : { network }),
+      ...(additionalDirectories.length === 0 ? {} : { additionalDirectories }),
+      minimumAssurance: option(parsed, "minimum-assurance") ?? "none",
+    },
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
+    ...(callerCorrelationId === undefined ? {} : { callerCorrelationId }),
+  };
+}
+
+function routeTable(value: unknown): string {
+  if (typeof value !== "object" || value === null || !("routes" in value) || !Array.isArray(value.routes)) {
+    return JSON.stringify(value, null, 2);
+  }
+  const lines = ["ROUTE                              READINESS    VERSION       AUTH       STRATEGIES"];
+  for (const route of value.routes) {
+    if (typeof route !== "object" || route === null) continue;
+    const item = route as Readonly<Record<string, unknown>>;
+    const strategies = Array.isArray(item.interactionStrategies) ? item.interactionStrategies.join(",") : "";
+    lines.push(`${String(item.routeId ?? "").padEnd(34)} ${String(item.readiness ?? "").padEnd(11)} ${String(item.harnessVersion ?? "").padEnd(13)} ${String(item.authenticationMode ?? "").padEnd(10)} ${strategies}`);
+  }
+  return lines.join("\n");
+}
+
+function summaryTable(value: unknown): string {
+  if (typeof value !== "object" || value === null || !("invocations" in value) || !Array.isArray(value.invocations)) {
+    return JSON.stringify(value, null, 2);
+  }
+  const lines = ["INVOCATION                         STATE              CREATED                 ROUTE"];
+  for (const entry of value.invocations) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const item = entry as Readonly<Record<string, unknown>>;
+    lines.push(`${String(item.invocationId ?? "").padEnd(35)} ${String(item.state ?? "").padEnd(18)} ${String(item.createdAt ?? "").padEnd(24)} ${String(item.resolvedRouteId ?? "")}`);
+  }
+  return lines.join("\n");
+}
+
 async function readStandardInput(): Promise<string> {
   if (process.stdin.isTTY) {
     return "";
@@ -237,71 +389,18 @@ async function startBroker(configOverrides: Partial<BrokerConfigValues> = {}): P
 }
 
 async function requestBroker(operation: string, params: unknown): Promise<unknown> {
-  const paths = brokerPaths();
-  const client = new IpcClient(paths.socketPath);
-  try {
-    if (operation !== "system.status" && operation !== "system.shutdown") {
-      const status = await client.request("system.status", {});
-      if (typeof status === "object" && status !== null && !Array.isArray(status)) {
-        const brokerVersion = "packageVersion" in status && typeof status.packageVersion === "string" ? status.packageVersion : undefined;
-        const activeInvocations = "activeInvocations" in status && typeof status.activeInvocations === "number" ? status.activeInvocations : 0;
-        if (brokerVersion !== PACKAGE_VERSION) {
-          if (activeInvocations > 0) {
-            throw new BridgeError({
-              code: "broker_unavailable",
-              message: `Broker version ${brokerVersion ?? "unknown"} is still serving ${String(activeInvocations)} active invocation(s). Retry after they finish or stop it with --force.`,
-              retryable: false,
-            });
-          }
-          await client.request("system.shutdown", {});
-          await delay(100);
-        }
-      }
-    }
-    return await client.request(operation, params);
-  } catch (error) {
-    if (!(error instanceof BridgeError) || error.code !== "broker_unavailable" || !error.retryable) {
-      throw error;
-    }
-  }
-
-  const cliPath = fileURLToPath(import.meta.url);
-  const child = spawn(process.execPath, [cliPath, "broker", "serve"], {
-    detached: true,
-    stdio: "ignore",
-    env: { ...process.env, AGENT_BRIDGE_DAEMON: "1" },
-  });
-  child.unref();
-
-  let lastError: unknown;
-  for (let attempt = 0; attempt < 50; attempt += 1) {
-    await delay(50);
-    try {
-      return await client.request(operation, params);
-    } catch (error) {
-      lastError = error;
-      if (!(error instanceof BridgeError) || error.code !== "broker_unavailable") {
-        throw error;
-      }
-    }
-  }
-  throw new BridgeError({
-    code: "broker_unavailable",
-    message: `The broker did not become ready at ${paths.socketPath}.`,
-    retryable: true,
-  }, { cause: lastError });
+  return client.execute(operation, params);
 }
 
 async function requestRunningBroker(operation: string, params: unknown): Promise<unknown> {
-  const paths = brokerPaths();
-  try {
-    return await new IpcClient(paths.socketPath).request(operation, params);
-  } catch (error) {
-    if (error instanceof BridgeError && error.code === "broker_unavailable") {
-      return { running: false, socketPath: paths.socketPath };
-    }
-    throw error;
+  if (operation === "system.status") {
+    return client.status();
   }
+  const status = await client.status();
+  if (!status.running) {
+    return { running: false, socketPath: status.socketPath };
+  }
+  return new IpcClient(status.socketPath).request(operation, params);
 }
 
 async function startMcp(): Promise<void> {
@@ -341,6 +440,10 @@ async function runCommand(argv: readonly string[]): Promise<void> {
   const command = argv[0];
   const parsed = parseArguments(argv.slice(1));
   const json = parsed.options.has("json");
+  if (argv[0] === "--version" || command === "version") {
+    process.stdout.write(`${PACKAGE_VERSION}\n`);
+    return;
+  }
   if (command === undefined || command === "help" || parsed.options.has("help")) {
     process.stdout.write(HELP);
     return;
@@ -371,7 +474,8 @@ async function runCommand(argv: readonly string[]): Promise<void> {
       return;
     }
     if (action === "status") {
-      output(await requestRunningBroker("system.status", {}), json);
+      const status = await requestRunningBroker("system.status", {});
+      json ? output(status, true) : human(status);
       return;
     }
     if (action === "logs") {
@@ -432,59 +536,96 @@ async function runCommand(argv: readonly string[]): Promise<void> {
     });
   }
   if (command === "describe") {
-    output(await requestBroker("system.describe", {}), json);
+    const described = await requestBroker("system.describe", {});
+    json ? output(described, true) : human(described);
     return;
   }
   if (command === "routes") {
-    output(await requestBroker("route.discover", { refresh: parsed.options.has("refresh") }), json);
+    const routes = await requestBroker("route.discover", { refresh: parsed.options.has("refresh") });
+    json ? output(routes, true) : process.stdout.write(`${routeTable(routes)}\n`);
     return;
   }
-  if (command === "start") {
-    const effort = option(parsed, "effort");
-    const via = option(parsed, "via");
-    const timeoutMs = positiveInteger(option(parsed, "timeout-ms"), "timeout-ms");
-    const idempotencyKey = option(parsed, "idempotency-key");
-    const callerCorrelationId = option(parsed, "correlation-id");
-    const interactionStrategy = option(parsed, "interaction") ?? "orchestrator";
-    const minimumAssurance = option(parsed, "minimum-assurance") ?? "none";
-    const params = {
-      selector: {
-        provider: requiredOption(parsed, "provider"),
-        model: requiredOption(parsed, "model"),
-        ...(effort === undefined ? {} : { effort }),
-        ...(via === undefined ? {} : { via }),
-        requiredCapabilities: parsed.options.get("capability") ?? [],
-      },
-      input: [{ type: "text", text: requiredOption(parsed, "text") }],
-      workingDirectory: option(parsed, "cwd") ?? process.cwd(),
-      interactionStrategy,
-      requestedPolicy: { minimumAssurance },
-      ...(timeoutMs === undefined ? {} : { timeoutMs }),
-      ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
-      ...(callerCorrelationId === undefined ? {} : { callerCorrelationId }),
+  if (command === "start" || command === "run") {
+    const params = await startParams(parsed);
+    const started = await client.start(params as never);
+    if (command === "start") {
+      json ? output(started, true) : human(`${started.invocationId} ${started.state}`);
+      return;
+    }
+    let interrupted = false;
+    const onSignal = (): void => {
+      interrupted = true;
+      void client.cancel(started.invocationId);
     };
-    output(await requestBroker("invocation.start", params), json);
+    process.once("SIGINT", onSignal);
+    try {
+      if (json) {
+        for await (const event of client.follow(started.invocationId)) {
+          output(event, true);
+        }
+      } else {
+        for await (const event of client.follow(started.invocationId)) {
+          process.stderr.write(`${eventSummary(event)}\n`);
+        }
+      }
+      const result = await client.result(started.invocationId);
+      if (json) {
+        output(result, true);
+      } else {
+        const content = textContent(result.outcome);
+        if (content !== "") process.stdout.write(`${content}\n`);
+        if (result.outcome.error !== undefined) process.stderr.write(`${result.outcome.error.message}\n`);
+      }
+      if (interrupted || result.outcome.status !== "succeeded") {
+        process.exitCode = interrupted ? exitCode("cancelled") : exitCode(result.outcome.status);
+      }
+    return;
+    } finally {
+      process.removeListener("SIGINT", onSignal);
+    }
+  }
+  if (command === "list") {
+    const correlation = option(parsed, "correlation");
+    const list = await client.list({
+      ...(correlation === undefined ? {} : { callerCorrelationId: correlation }),
+      ...(parsed.options.has("active") ? {} : {}),
+    });
+    const filtered = parsed.options.has("active")
+      ? { ...list, invocations: list.invocations.filter((entry) => !["cancelled", "failed", "interrupted", "succeeded", "timed_out"].includes(entry.state)) }
+      : list;
+    json ? output(filtered, true) : process.stdout.write(`${summaryTable(filtered)}\n`);
     return;
   }
   if (command === "inspect" || command === "get") {
     const operation = command === "get" ? "invocation.get" : "invocation.inspect";
-    output(await requestBroker(operation, {
+    const inspected = await requestBroker(operation, {
       invocationId: positional(parsed, 0, "invocation ID"),
-    }), json);
+    });
+    json ? output(inspected, true) : human(inspected);
     return;
   }
   if (command === "result") {
-    output(await requestBroker("invocation.result", {
+    const result = await requestBroker("invocation.result", {
       invocationId: positional(parsed, 0, "invocation ID"),
-    }), json);
+    });
+    if (json) {
+      output(result, true);
+    } else {
+      const content = textContent(result);
+      if (content !== "") process.stdout.write(`${content}\n`);
+      if (parsed.options.has("fail-on-error") && typeof result === "object" && result !== null && "state" in result && result.state !== "succeeded") {
+        process.exitCode = exitCode(String(result.state));
+      }
+    }
     return;
   }
   if (command === "wait") {
     const timeoutMs = boundedPositiveInteger(option(parsed, "timeout-ms"), "timeout-ms", 30_000);
-    output(await requestBroker("invocation.wait", {
-      invocationId: positional(parsed, 0, "invocation ID"),
-      ...(timeoutMs === undefined ? {} : { timeoutMs }),
-    }), json);
+    const invocationId = positional(parsed, 0, "invocation ID");
+    const waited = parsed.options.has("until-terminal")
+      ? await client.wait(invocationId)
+      : await requestBroker("invocation.wait", { invocationId, ...(timeoutMs === undefined ? {} : { timeoutMs }) });
+    json ? output(waited, true) : human(typeof waited === "object" && waited !== null && "state" in waited ? `${String(waited.state)}${"waited" in waited && waited.waited === false ? " (still active)" : ""}` : waited);
     return;
   }
   if (command === "events") {
@@ -504,7 +645,7 @@ async function runCommand(argv: readonly string[]): Promise<void> {
         waitMs: 30_000,
       }));
       for (const event of page.events) {
-        output(event, true);
+        json ? output(event, true) : process.stdout.write(`${eventSummary(event)}\n`);
       }
       if (page.nextCursor !== undefined) {
         after = page.nextCursor;

@@ -167,6 +167,13 @@ test("broker runs asynchronously, persists events, and deduplicates starts", asy
     assert.equal(stateOf(terminal), "succeeded");
     assert.ok("outcome" in terminal);
 
+    const listed = await broker.execute("invocation.list", {
+      callerCorrelationId: undefined,
+      includeTombstones: false,
+    }) as { invocations: readonly { invocationId: string; resolvedRouteId: string }[] };
+    assert.equal(listed.invocations[0]?.invocationId, started.invocationId);
+    assert.equal(listed.invocations[0]?.resolvedRouteId, "fake:fake-echo");
+
     const firstPage = await broker.events({ invocationId: started.invocationId });
     assert.ok(firstPage.events.length >= 5);
     assert.equal(firstPage.events[0]?.sequence, 1);

@@ -25,7 +25,7 @@
     "package:check": "pnpm run build && pnpm pack --dry-run",
     "check": "pnpm run lint && pnpm run typecheck && pnpm run test && pnpm run package:check"
   },
-  "files": ["dist/src", "schemas", "README.md", "docs/cli.md"],
+  "files": ["dist/src", "schemas", "README.md", "docs/cli.md", "docs/mcp.md"],
   "publishConfig": { "access": "public" },
   "engines": {
     "node": ">=22"
