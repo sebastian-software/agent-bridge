@@ -32,6 +32,7 @@ import {
   type StartInvocationResult,
   TERMINAL_STATES,
   type TerminalStatus,
+  type Usage,
 } from "./contract.js";
 import { captureWorkspaceSnapshot, observeWorkspaceEffects, type WorkspaceSnapshot } from "./effects.js";
 import { BridgeError } from "./errors.js";
@@ -121,6 +122,36 @@ function persistedNative(
     summary.truncated = true;
   }
   return summary;
+}
+
+function usageFromEvent(value: JsonValue | undefined): Usage | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const source = value as Record<string, JsonValue>;
+  const numberValue = (candidate: JsonValue | undefined): number | undefined =>
+    typeof candidate === "number" && Number.isFinite(candidate) && candidate >= 0 ? candidate : undefined;
+  const inputTokens = numberValue(source.inputTokens);
+  const outputTokens = numberValue(source.outputTokens);
+  const cacheReadTokens = numberValue(source.cacheReadTokens);
+  const cacheWriteTokens = numberValue(source.cacheWriteTokens);
+  const turns = numberValue(source.turns);
+  const costUsd = numberValue(source.costUsd);
+  if (
+    [inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, turns, costUsd].every((item) => item === undefined)
+  ) {
+    return undefined;
+  }
+  return {
+    ...(inputTokens === undefined ? {} : { inputTokens }),
+    ...(outputTokens === undefined ? {} : { outputTokens }),
+    ...(cacheReadTokens === undefined ? {} : { cacheReadTokens }),
+    ...(cacheWriteTokens === undefined ? {} : { cacheWriteTokens }),
+    ...(turns === undefined ? {} : { turns }),
+    ...(costUsd === undefined ? {} : { costUsd }),
+    evidence: "reported",
+    source: typeof source.source === "string" ? source.source : "persisted-event",
+  };
 }
 
 export class Broker {
@@ -667,6 +698,7 @@ export class Broker {
       timeout.unref();
     }
 
+    let partialResult: Partial<AdapterRunResult> = {};
     try {
       const adapter = this.#registry.adapter(current.resolvedRoute.adapter);
       const result = await adapter.run({
@@ -675,6 +707,9 @@ export class Broker {
         route: current.resolvedRoute,
         signal: controller.signal,
         emit: (event) => this.#appendAdapterEvent(invocationId, event),
+        reportPartial: (partial) => {
+          partialResult = { ...partialResult, ...partial };
+        },
         awaitInput: (requestId, signal) => this.#awaitInput(invocationId, requestId, signal),
         terminationGraceMs: this.#terminationGraceMs,
       });
@@ -698,8 +733,9 @@ export class Broker {
     } catch (error) {
       if (controller.signal.aborted || isAbortError(error)) {
         const interrupted = this.#shutdownRequested;
+        const partial = this.#partialResult(this.#requireRecord(invocationId), partialResult);
         await this.#complete(invocationId, interrupted ? "interrupted" : timedOut ? "timed_out" : "cancelled", {
-          observedIdentity: unverifiedIdentity(),
+          ...partial,
           error: {
             code: interrupted ? "broker_shutdown" : timedOut ? "timed_out" : "cancelled",
             message: interrupted
@@ -766,11 +802,12 @@ export class Broker {
         timestamp,
         category: event.category,
         ...(event.content === undefined ? {} : { content: event.content }),
-        ...(event.data === undefined && event.inputRequest === undefined
+        ...(event.data === undefined && event.inputRequest === undefined && event.usage === undefined
           ? {}
           : {
               data: {
                 ...(event.data ?? {}),
+                ...(event.usage === undefined ? {} : { usage: { ...event.usage } }),
                 ...(event.inputRequest === undefined
                   ? {}
                   : {
@@ -984,6 +1021,24 @@ export class Broker {
       completedAt,
       ...(durationMs === undefined ? {} : { durationMs }),
       ...(result.error === undefined ? {} : { error: result.error }),
+    };
+  }
+
+  #partialResult(
+    record: InvocationRecord,
+    partial: Partial<AdapterRunResult>,
+  ): Partial<AdapterRunResult> & {
+    readonly observedIdentity: ObservedIdentity;
+  } {
+    const output = record.events.flatMap((event) => (event.category === "output" ? (event.content ?? []) : []));
+    const usageEvent = [...record.events].reverse().find((event) => event.category === "usage");
+    const usage = usageEvent === undefined ? undefined : usageFromEvent(usageEvent.data?.usage);
+    return {
+      content: partial.content ?? output,
+      artifacts: partial.artifacts ?? [],
+      effects: partial.effects ?? [],
+      observedIdentity: partial.observedIdentity ?? unverifiedIdentity(),
+      ...(partial.usage === undefined && usage === undefined ? {} : { usage: partial.usage ?? usage! }),
     };
   }
 

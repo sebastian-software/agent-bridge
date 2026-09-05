@@ -208,6 +208,13 @@ export abstract class ProcessAdapter implements Adapter {
             if (event.failure !== undefined) {
               state.failure = event.failure;
             }
+            context.reportPartial?.({
+              content: state.content.parts,
+              artifacts: [],
+              effects: state.effects,
+              observedIdentity: state.identity,
+              ...(state.usage === undefined ? {} : { usage: state.usage }),
+            });
             if (event.inputRequest !== undefined) {
               await context.emit({
                 ...event,
