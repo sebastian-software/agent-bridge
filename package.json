@@ -1,7 +1,6 @@
 {
   "name": "@sebastian-software/agent-bridge",
   "version": "0.0.0",
-  "private": true,
   "description": "Local harness-to-harness delegation gateway",
   "type": "module",
   "bin": {
@@ -20,10 +19,14 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "fake-harness": "node scripts/fake-harness.mjs",
+    "lint": "node scripts/lint.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "pnpm run build && node --test dist/test/**/*.test.js",
-    "check": "pnpm run typecheck && pnpm run test"
+    "package:check": "pnpm run build && pnpm pack --dry-run",
+    "check": "pnpm run lint && pnpm run typecheck && pnpm run test && pnpm run package:check"
   },
+  "files": ["dist/src", "schemas", "README.md", "docs/cli.md"],
+  "publishConfig": { "access": "public" },
   "engines": {
     "node": ">=22"
   },
