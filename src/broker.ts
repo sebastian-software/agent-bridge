@@ -17,6 +17,7 @@ import {
   type InvocationOutcome,
   type InvocationRecord,
   type InvocationState,
+  type InvocationTombstone,
   type ObservedIdentity,
   type PolicyEvidence,
   type StartInvocationRequest,
@@ -94,20 +95,38 @@ export class Broker {
   readonly #runs = new Map<string, Promise<void>>();
   readonly #workspaceLocks = new Map<string, string>();
   readonly #beforeSnapshots = new Map<string, WorkspaceSnapshot>();
+  readonly #tombstones = new Map<string, InvocationTombstone>();
+  readonly #retention: {
+    readonly completedMs: number;
+    readonly maxBytes: number;
+  };
   #mutationTail: Promise<void> = Promise.resolve();
 
-  constructor(paths: BrokerPaths, options?: { readonly registry?: AdapterRegistry }) {
+  constructor(paths: BrokerPaths, options?: {
+    readonly registry?: AdapterRegistry;
+    readonly retention?: {
+      readonly completedMs?: number;
+      readonly maxBytes?: number;
+    };
+  }) {
     this.#paths = paths;
     this.#store = new InvocationStore(paths.stateFile);
     this.#registry = options?.registry ?? new AdapterRegistry();
+    this.#retention = {
+      completedMs: options?.retention?.completedMs ?? 7 * 24 * 60 * 60 * 1000,
+      maxBytes: options?.retention?.maxBytes ?? 1_073_741_824,
+    };
   }
 
   async initialize(): Promise<void> {
     const persisted = await this.#store.load();
-    for (const record of persisted) {
+    for (const record of persisted.invocations) {
       this.#records.set(record.invocationId, record);
     }
-    const activeIds = persisted
+    for (const tombstone of persisted.tombstones) {
+      this.#tombstones.set(tombstone.invocationId, tombstone);
+    }
+    const activeIds = persisted.invocations
       .filter((record) => !TERMINAL_STATES.has(record.state))
       .map((record) => record.invocationId);
     if (activeIds.length === 0) {
@@ -195,7 +214,8 @@ export class Broker {
         completedDays: 7,
         completedBytes: 1_073_741_824,
         evictionGranularity: "invocation",
-        implemented: false,
+        implemented: true,
+        tombstones: true,
         workspaceConcurrency: "reject",
       },
     };
@@ -689,6 +709,15 @@ export class Broker {
   #requireRecord(invocationId: string): InvocationRecord {
     const record = this.#records.get(invocationId);
     if (record === undefined) {
+      const tombstone = this.#tombstones.get(invocationId);
+      if (tombstone !== undefined) {
+        throw new BridgeError({
+          code: "invocation_evicted",
+          message: `Invocation ${invocationId} was evicted by retention policy.`,
+          retryable: false,
+          details: { ...tombstone },
+        });
+      }
       throw new BridgeError({
         code: "invocation_not_found",
         message: `Invocation ${invocationId} was not found.`,
@@ -702,11 +731,47 @@ export class Broker {
     const scheduled = this.#mutationTail.then(async () => {
       const result = mutation();
       if (result.changed) {
-        await this.#store.save([...this.#records.values()]);
+        this.#applyRetention();
+        await this.#store.save([...this.#records.values()], [...this.#tombstones.values()]);
       }
       return result.value;
     });
     this.#mutationTail = scheduled.then(() => undefined, () => undefined);
     return scheduled;
+  }
+
+  #applyRetention(): void {
+    const now = Date.now();
+    const candidates = [...this.#records.values()]
+      .filter((record) => TERMINAL_STATES.has(record.state) && record.outcome !== undefined)
+      .sort((left, right) => Date.parse(left.outcome?.completedAt ?? left.updatedAt)
+        - Date.parse(right.outcome?.completedAt ?? right.updatedAt));
+    const evict = (record: InvocationRecord): void => {
+      this.#records.delete(record.invocationId);
+      this.#tombstones.set(record.invocationId, {
+        invocationId: record.invocationId,
+        evictedAt: new Date(now).toISOString(),
+        reason: "retention",
+      });
+    };
+
+    for (const record of candidates) {
+      const completedAt = Date.parse(record.outcome?.completedAt ?? record.updatedAt);
+      if (Number.isFinite(completedAt) && now - completedAt >= this.#retention.completedMs) {
+        evict(record);
+      }
+    }
+
+    const serializedSize = (): number => Buffer.byteLength(JSON.stringify({
+      storageVersion: 1,
+      invocations: [...this.#records.values()],
+      tombstones: [...this.#tombstones.values()],
+    }, null, 2), "utf8");
+    for (const record of candidates) {
+      if (!this.#records.has(record.invocationId) || serializedSize() <= this.#retention.maxBytes) {
+        continue;
+      }
+      evict(record);
+    }
   }
 }

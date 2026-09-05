@@ -1,6 +1,7 @@
 import { BridgeError } from "./errors.js";
 
 export const SCHEMA_VERSION = "1.0" as const;
+export const IPC_PROTOCOL_VERSION = "1.0" as const;
 
 export type JsonPrimitive = boolean | null | number | string;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
@@ -206,6 +207,12 @@ export interface InvocationRecord {
   readonly outcome?: InvocationOutcome;
 }
 
+export interface InvocationTombstone {
+  readonly invocationId: string;
+  readonly evictedAt: string;
+  readonly reason: "retention";
+}
+
 export interface StartInvocationResult {
   readonly invocationId: string;
   readonly state: InvocationState;
@@ -222,6 +229,7 @@ export interface EventsResult {
 }
 
 export interface OperationRequest {
+  readonly protocolVersion: typeof IPC_PROTOCOL_VERSION;
   readonly id: string;
   readonly operation: string;
   readonly params: unknown;
@@ -365,7 +373,16 @@ export function isJsonValue(value: unknown): value is JsonValue {
 
 export function parseOperationRequest(value: unknown): OperationRequest {
   const source = record(value, "request");
+  if (source.protocolVersion !== IPC_PROTOCOL_VERSION) {
+    throw new BridgeError({
+      code: "protocol_version_mismatch",
+      message: `The IPC protocol version is unsupported; expected ${IPC_PROTOCOL_VERSION}.`,
+      retryable: false,
+      details: { expected: IPC_PROTOCOL_VERSION, received: source.protocolVersion ?? null },
+    });
+  }
   return {
+    protocolVersion: IPC_PROTOCOL_VERSION,
     id: stringValue(source.id, "request.id", { nonEmpty: true }),
     operation: stringValue(source.operation, "request.operation", { nonEmpty: true }),
     params: source.params ?? {},

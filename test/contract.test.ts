@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { parseStartInvocationRequest } from "../src/contract.js";
+import { IPC_PROTOCOL_VERSION, parseOperationRequest, parseStartInvocationRequest } from "../src/contract.js";
 import { BridgeError } from "../src/errors.js";
 
 test("start request parsing applies honest defaults", () => {
@@ -56,4 +56,23 @@ test("content references allow an empty file with byteSize zero", () => {
 
   assert.equal(request.input[0]?.type, "file");
   assert.equal(request.input[0]?.byteSize, 0);
+});
+
+test("IPC requests require the negotiated protocol version", () => {
+  const request = parseOperationRequest({
+    protocolVersion: IPC_PROTOCOL_VERSION,
+    id: "req_1",
+    operation: "system.describe",
+    params: {},
+  });
+  assert.equal(request.protocolVersion, IPC_PROTOCOL_VERSION);
+  assert.throws(
+    () => parseOperationRequest({
+      protocolVersion: "9.9",
+      id: "req_2",
+      operation: "system.describe",
+      params: {},
+    }),
+    (error: unknown) => error instanceof BridgeError && error.code === "protocol_version_mismatch",
+  );
 });
