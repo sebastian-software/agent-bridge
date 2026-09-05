@@ -32,3 +32,8 @@ args = ["mcp", "serve"]
 Only operations marked `implemented` in `system.describe` are advertised as
 MCP tools. Tool schemas are self-contained so hosts do not need to resolve
 cross-file `$ref` values.
+
+The repository also carries an integration test that starts `agent-bridge mcp
+serve` as a child process and drives it with the official MCP SDK client over
+stdio. It covers initialization, tool discovery, schema-backed calls, and a
+complete fake invocation lifecycle.

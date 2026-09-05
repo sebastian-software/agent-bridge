@@ -12,7 +12,13 @@
   "bugs": {
     "url": "https://github.com/sebastian-software/agent-bridge/issues"
   },
-  "keywords": ["agent", "delegation", "harness", "mcp", "cli"],
+  "keywords": [
+    "agent",
+    "delegation",
+    "harness",
+    "mcp",
+    "cli"
+  ],
   "type": "module",
   "bin": {
     "agent-bridge": "./dist/src/cli.js"
@@ -57,6 +63,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.12",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@types/node": "24.10.1",
     "typescript": "5.9.3"
   },
