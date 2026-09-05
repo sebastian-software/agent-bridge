@@ -15,7 +15,7 @@ It does not become the caller's workflow orchestrator.
   results, and makes the final decision. The term does not mean filesystem root
   or workspace root.
 - **Bridge operation:** One bounded function exposed by the bridge, such as
-  discovering a target or starting one invocation.
+  discovering a route or starting one invocation.
 - **Broker:** The long-lived local bridge process that owns active invocation
   processes, event streams, continuation handles, and their lifecycle.
 - **Harness:** An existing agent runtime and its CLI contract, such as Claude
@@ -44,7 +44,7 @@ It does not become the caller's workflow orchestrator.
 - **Effect observation:** A lightweight before/after comparison performed by
   the bridge. It reports evidence of changes but does not provide isolation,
   attribution proof, rollback, or transactional guarantees.
-- **In-place invocation:** An invocation whose target runs in the caller-chosen
+- **In-place invocation:** An invocation whose delegate runs in the caller-chosen
   working directory and may leave effects there. It is not a transaction or an
   isolation boundary.
 - **Workflow:** Caller-owned coordination of one or more invocations.
@@ -125,7 +125,9 @@ Further decisions are tracked as ADR issues in the M0 milestone:
 - Effect observation mechanism, non-Git workspaces, size limits, and the
   policy for concurrent invocations in the same working directory.
 - Retention and privacy of events and outcomes.
-- Cancellation and timeout semantics including Windows equivalents.
+- Cancellation mechanics: grace period before a hard kill, Windows equivalent
+  of process-group termination, and reporting of partial effects. That the
+  whole process tree terminates is already an invariant above.
 - Environment policy for harness processes.
 - Whether retries and idempotency keys exist as separate identities from the
   invocation.
