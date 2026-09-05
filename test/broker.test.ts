@@ -150,6 +150,24 @@ test("route resolution rejects assurance the fake route cannot provide", async (
   }
 });
 
+test("broker rejects overlapping active invocations in one working directory", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-bridge-concurrency-"));
+  const broker = new Broker(paths(root));
+  await broker.initialize();
+  try {
+    const first = await broker.start(request(root, "fake-slow"));
+    await assert.rejects(
+      broker.start(request(root, "fake-slow", { idempotencyKey: "different" })),
+      (error: unknown) => error instanceof BridgeError && error.code === "invocation_conflict",
+    );
+    await broker.cancel(first.invocationId);
+    await waitForTerminal(broker, first.invocationId);
+  } finally {
+    await broker.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("restart reconciliation marks a persisted active snapshot interrupted", async () => {
   const liveRoot = await mkdtemp(join(tmpdir(), "agent-bridge-live-"));
   const restartRoot = await mkdtemp(join(tmpdir(), "agent-bridge-restart-"));

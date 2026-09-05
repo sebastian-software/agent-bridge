@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { stat } from "node:fs/promises";
-import { isAbsolute } from "node:path";
+import { realpath, stat } from "node:fs/promises";
+import { isAbsolute, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 import { AdapterRegistry } from "./adapters/registry.js";
@@ -12,6 +12,7 @@ import {
   parseInvocationIdParams,
   parseStartInvocationRequest,
   type EventsResult,
+  type EffectObservation,
   type InvocationEvent,
   type InvocationOutcome,
   type InvocationRecord,
@@ -26,6 +27,7 @@ import { BridgeError } from "./errors.js";
 import { describeContract } from "./operations.js";
 import type { BrokerPaths } from "./paths.js";
 import { InvocationStore } from "./store.js";
+import { captureWorkspaceSnapshot, observeWorkspaceEffects, type WorkspaceSnapshot } from "./effects.js";
 import { canonicalJson, messageFrom, sha256 } from "./util.js";
 
 interface MutableResult<T> {
@@ -90,6 +92,8 @@ export class Broker {
   readonly #records = new Map<string, InvocationRecord>();
   readonly #controllers = new Map<string, AbortController>();
   readonly #runs = new Map<string, Promise<void>>();
+  readonly #workspaceLocks = new Map<string, string>();
+  readonly #beforeSnapshots = new Map<string, WorkspaceSnapshot>();
   #mutationTail: Promise<void> = Promise.resolve();
 
   constructor(paths: BrokerPaths, options?: { readonly registry?: AdapterRegistry }) {
@@ -119,6 +123,7 @@ export class Broker {
         }, completedAt);
         const outcome = this.#outcome(withEvent, "interrupted", completedAt, {
           observedIdentity: unverifiedIdentity(),
+          effectObservation: { complete: false, diagnostics: ["Broker restart ended the active invocation before its after-snapshot."] },
           error: {
             code: "broker_restarted",
             message: "The broker restarted while this invocation was active.",
@@ -191,6 +196,7 @@ export class Broker {
         completedBytes: 1_073_741_824,
         evictionGranularity: "invocation",
         implemented: false,
+        workspaceConcurrency: "reject",
       },
     };
   }
@@ -231,6 +237,12 @@ export class Broker {
     const { route, descriptor } = await this.#registry.resolve(request);
     const invocationId = `inv_${randomUUID()}`;
     const createdAt = new Date().toISOString();
+    let workspaceKey: string;
+    try {
+      workspaceKey = await realpath(request.workingDirectory);
+    } catch {
+      workspaceKey = resolve(request.workingDirectory);
+    }
     const policy: PolicyEvidence = {
       requestedPolicy: request.requestedPolicy,
       effectiveNativePolicy: {
@@ -244,6 +256,15 @@ export class Broker {
       const deduplicated = this.#findIdempotent(request.idempotencyKey, requestDigest);
       if (deduplicated !== undefined) {
         return { value: this.#startResult(deduplicated, true), changed: false };
+      }
+      const lockOwner = this.#workspaceLocks.get(workspaceKey);
+      if (lockOwner !== undefined) {
+        throw new BridgeError({
+          code: "invocation_conflict",
+          message: "Another active invocation already owns this working directory.",
+          retryable: false,
+          details: { workingDirectory: workspaceKey, invocationId: lockOwner },
+        });
       }
       const base: InvocationRecord = {
         schemaVersion: SCHEMA_VERSION,
@@ -261,10 +282,12 @@ export class Broker {
       };
       const record = this.#appendBridgeEvent(base, "lifecycle", { state: "queued" }, createdAt);
       this.#records.set(invocationId, record);
+      this.#workspaceLocks.set(workspaceKey, invocationId);
       return { value: this.#startResult(record, false), changed: true };
     });
 
     if (!result.deduplicated) {
+      this.#beforeSnapshots.set(invocationId, await captureWorkspaceSnapshot(request.workingDirectory));
       this.#launch(invocationId);
     }
     return result;
@@ -391,6 +414,7 @@ export class Broker {
     if (!shouldRun) {
       await this.#complete(invocationId, "cancelled", {
         observedIdentity: unverifiedIdentity(),
+        effectObservation: { complete: false, diagnostics: ["Invocation was cancelled before an effect snapshot could be collected."] },
         error: { code: "cancelled", message: "The invocation was cancelled before the adapter started." },
       });
       this.#controllers.delete(invocationId);
@@ -510,23 +534,56 @@ export class Broker {
     status: TerminalStatus,
     result: Partial<AdapterRunResult> & {
       readonly observedIdentity: ObservedIdentity;
+      readonly effectObservation?: EffectObservation;
       readonly error?: InvocationOutcome["error"];
     },
   ): Promise<void> {
+    const current = this.#records.get(invocationId);
+    const afterSnapshot = current === undefined
+      ? undefined
+      : await captureWorkspaceSnapshot(current.request.workingDirectory);
+    const observed = await observeWorkspaceEffects(this.#beforeSnapshots.get(invocationId), afterSnapshot ?? {
+      root: current?.request.workingDirectory ?? "",
+      files: new Map(),
+      complete: false,
+      diagnostics: ["Invocation record was not available for effect observation."],
+    });
     await this.#mutate(() => {
       const current = this.#requireRecord(invocationId);
       if (TERMINAL_STATES.has(current.state)) {
         return { value: undefined, changed: false };
       }
       const completedAt = new Date().toISOString();
-      const withEvent = this.#appendBridgeEvent(current, "lifecycle", { state: status }, completedAt);
-      const outcome = this.#outcome(withEvent, status, completedAt, result);
+      const allEffects = [...(result.effects ?? []), ...observed.effects];
+      let withEvent = current;
+      for (const effect of observed.effects) {
+        withEvent = this.#appendBridgeEvent(withEvent, "effect", {
+          path: effect.path,
+          kind: effect.kind,
+          evidence: effect.evidence,
+        }, completedAt);
+      }
+      withEvent = this.#appendBridgeEvent(withEvent, "lifecycle", { state: status }, completedAt);
+      const outcome = this.#outcome(withEvent, status, completedAt, {
+        ...result,
+        effects: allEffects,
+        effectObservation: result.effectObservation ?? {
+          complete: observed.complete,
+          diagnostics: observed.diagnostics,
+        },
+      });
       this.#records.set(invocationId, {
         ...withEvent,
         state: status,
         updatedAt: completedAt,
         outcome,
       });
+      for (const [workspace, owner] of this.#workspaceLocks) {
+        if (owner === invocationId) {
+          this.#workspaceLocks.delete(workspace);
+        }
+      }
+      this.#beforeSnapshots.delete(invocationId);
       return { value: undefined, changed: true };
     });
   }
@@ -537,6 +594,7 @@ export class Broker {
     completedAt: string,
     result: Partial<AdapterRunResult> & {
       readonly observedIdentity: ObservedIdentity;
+      readonly effectObservation?: EffectObservation;
       readonly error?: InvocationOutcome["error"];
     },
   ): InvocationOutcome {
@@ -550,6 +608,7 @@ export class Broker {
       content: result.content ?? [],
       artifacts: result.artifacts ?? [],
       effects: result.effects ?? [],
+      effectObservation: result.effectObservation ?? { complete: true, diagnostics: [] },
       observedIdentity: result.observedIdentity,
       policy: record.policy,
       ...(record.startedAt === undefined ? {} : { startedAt: record.startedAt }),

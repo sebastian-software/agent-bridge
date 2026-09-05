@@ -165,6 +165,11 @@ export interface WorkspaceEffect {
   readonly evidence: "git-status" | "harness-reported";
 }
 
+export interface EffectObservation {
+  readonly complete: boolean;
+  readonly diagnostics: readonly string[];
+}
+
 export interface InvocationOutcome {
   readonly schemaVersion: typeof SCHEMA_VERSION;
   readonly invocationId: string;
@@ -172,6 +177,7 @@ export interface InvocationOutcome {
   readonly content: readonly ContentPart[];
   readonly artifacts: readonly ContentPart[];
   readonly effects: readonly WorkspaceEffect[];
+  readonly effectObservation: EffectObservation;
   readonly observedIdentity: ObservedIdentity;
   readonly policy: PolicyEvidence;
   readonly startedAt?: string;
