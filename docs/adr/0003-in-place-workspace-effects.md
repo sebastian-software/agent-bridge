@@ -18,7 +18,7 @@ them does not make their effects transactional or universally restrictable.
 ## Decision
 
 In-place execution is the primary workspace mode. The orchestrator supplies the
-working directory and the target harness may leave file modifications or other
+working directory and the delegated harness may leave file modifications or other
 effects there.
 
 The orchestrator owns preparation and recovery. It may commit, snapshot, copy,
@@ -27,8 +27,9 @@ does not automatically commit, revert, merge, or isolate the workspace.
 
 The bridge is a lifecycle and interoperability boundary, not a universal
 sandbox. It invokes an ad-hoc resolved harness route with an explicit execution
-profile, but the effective authority remains determined by the operating system
-and the harness's native configuration.
+profile, whose definition and per-harness mapping are left to a follow-up ADR,
+but the effective authority remains determined by the operating system and the
+harness's native configuration.
 
 The bridge performs lightweight effect observation. For a Git workspace it
 records sufficient before/after metadata to report changed paths and relevant

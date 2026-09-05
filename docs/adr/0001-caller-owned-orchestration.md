@@ -1,6 +1,6 @@
 # ADR-0001: Keep workflow orchestration caller-owned
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-08-24
 
 ## Context
@@ -36,6 +36,4 @@ separate capability with its own lifecycle and ownership contract.
 ## Open follow-up decisions
 
 - Exact task, run, and attempt state machines.
-- Whether a deterministic normalization helper belongs in the bridge without
-  becoming workflow orchestration.
 - Whether a future standalone workflow mode is desirable at all.
