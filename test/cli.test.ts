@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { type ChildProcess, execFile as execFileCallback, spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import test from "node:test";
@@ -219,6 +219,24 @@ test("a real broker crash is reconciled as interrupted after restart", async () 
       }
       await childExit(broker);
     }
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("autostart includes the broker startup diagnostic when initialization fails", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-bridge-startup-error-"));
+  const stateDirectory = join(root, "state");
+  await mkdir(stateDirectory);
+  await chmod(stateDirectory, 0o755);
+  const env = testEnvironment(root);
+  try {
+    await assert.rejects(execFile(process.execPath, [cliPath, "describe", "--json"], { env }), (error: unknown) => {
+      if (!(error instanceof Error) || !("stderr" in error) || typeof error.stderr !== "string") {
+        return false;
+      }
+      return error.stderr.includes(stateDirectory) && error.stderr.includes("broker_unavailable");
+    });
+  } finally {
     await rm(root, { recursive: true, force: true });
   }
 });

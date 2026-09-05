@@ -11,6 +11,8 @@ import { BrokerServer, IpcClient } from "./ipc.js";
 import { McpServer } from "./mcp.js";
 import { brokerPaths } from "./paths.js";
 import { PACKAGE_VERSION } from "./version.js";
+import { writeBrokerLog } from "./log.js";
+import { messageFrom } from "./util.js";
 
 const HELP = `agent-bridge — local harness delegation gateway
 
@@ -406,25 +408,44 @@ async function readStandardInput(): Promise<string> {
 async function startBroker(configOverrides: Partial<BrokerConfigValues> = {}): Promise<void> {
   const paths = brokerPaths();
   const config = await loadBrokerConfig(configOverrides);
-  const broker = new Broker(paths, { config });
-  await broker.initialize();
-  const server = new BrokerServer(
-    broker,
-    paths.socketPath,
-    paths.runtimeDirectory,
-    config.idleShutdownMinutes,
-    `${paths.stateDirectory}/broker.log`,
-  );
-  await server.start();
-  if (process.env.AGENT_BRIDGE_DAEMON !== "1") {
-    process.stderr.write(`agent-bridge broker listening at ${paths.socketPath}\n`);
+  const logFile = `${paths.stateDirectory}/broker.log`;
+  const onWarning = (warning: Error): void => {
+    void writeBrokerLog(logFile, "warn", warning.message);
+  };
+  const onUncaughtException = (error: Error): void => {
+    void writeBrokerLog(logFile, "error", `uncaught exception: ${error.message}`);
+  };
+  const onUnhandledRejection = (reason: unknown): void => {
+    void writeBrokerLog(logFile, "error", `unhandled rejection: ${messageFrom(reason)}`);
+  };
+  process.on("warning", onWarning);
+  process.on("uncaughtExceptionMonitor", onUncaughtException);
+  process.on("unhandledRejection", onUnhandledRejection);
+  try {
+    const broker = new Broker(paths, { config, logFile });
+    await broker.initialize();
+    const server = new BrokerServer(
+      broker,
+      paths.socketPath,
+      paths.runtimeDirectory,
+      config.idleShutdownMinutes,
+      logFile,
+    );
+    await server.start();
+    if (process.env.AGENT_BRIDGE_DAEMON !== "1") {
+      process.stderr.write(`agent-bridge broker listening at ${paths.socketPath}\n`);
+    }
+    const signal = new Promise<void>((resolve) => {
+      process.once("SIGINT", resolve);
+      process.once("SIGTERM", resolve);
+    });
+    await Promise.race([signal, server.closed]);
+    await server.stop();
+  } finally {
+    process.off("warning", onWarning);
+    process.off("uncaughtExceptionMonitor", onUncaughtException);
+    process.off("unhandledRejection", onUnhandledRejection);
   }
-  const signal = new Promise<void>((resolve) => {
-    process.once("SIGINT", resolve);
-    process.once("SIGTERM", resolve);
-  });
-  await Promise.race([signal, server.closed]);
-  await server.stop();
 }
 
 async function requestBroker(operation: string, params: unknown): Promise<unknown> {
