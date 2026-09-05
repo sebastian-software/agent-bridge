@@ -66,6 +66,10 @@ test("CLI discovers, starts, follows, and inspects through the Unix socket", asy
     const description = JSON.parse(described.stdout) as { operationsVersion?: unknown };
     assert.equal(description.operationsVersion, "1.0");
 
+    const status = await execFile(process.execPath, [cliPath, "broker", "status", "--json"], { env });
+    const brokerStatus = JSON.parse(status.stdout) as { ready?: unknown };
+    assert.equal(brokerStatus.ready, true);
+
     try {
       await execFile(process.execPath, [cliPath, "start", "--provider", "agent-bridge", "--json"], { env });
       assert.fail("Invalid CLI input should fail.");
@@ -109,6 +113,15 @@ test("CLI discovers, starts, follows, and inspects through the Unix socket", asy
     const inspected = await execFile(process.execPath, [cliPath, "inspect", invocationId, "--json"], { env });
     const inspection = JSON.parse(inspected.stdout) as { state?: unknown };
     assert.equal(inspection.state, "succeeded");
+
+    const fetched = await execFile(process.execPath, [cliPath, "get", invocationId, "--json"], { env });
+    assert.equal((JSON.parse(fetched.stdout) as { invocationId?: unknown }).invocationId, invocationId);
+
+    const waited = await execFile(process.execPath, [cliPath, "wait", invocationId, "--json"], { env });
+    assert.equal((JSON.parse(waited.stdout) as { waited?: unknown }).waited, true);
+
+    const result = await execFile(process.execPath, [cliPath, "result", invocationId, "--json"], { env });
+    assert.equal((JSON.parse(result.stdout) as { outcome?: unknown }).outcome !== undefined, true);
   } finally {
     try {
       await execFile(process.execPath, [cliPath, "broker", "stop", "--json"], { env });

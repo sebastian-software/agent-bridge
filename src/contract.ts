@@ -458,6 +458,22 @@ export function parseInvocationIdParams(value: unknown): { readonly invocationId
   };
 }
 
+export function parseWaitParams(value: unknown): {
+  readonly invocationId: string;
+  readonly timeoutMs?: number;
+} {
+  const source = record(value, "params");
+  const invocationId = stringValue(source.invocationId, "params.invocationId", { nonEmpty: true });
+  const timeoutMs = optionalPositiveInteger(source.timeoutMs, "params.timeoutMs");
+  if (timeoutMs !== undefined && timeoutMs > 30_000) {
+    invalid("params.timeoutMs must not exceed 30000.");
+  }
+  return {
+    invocationId,
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
+  };
+}
+
 export function parseEventsParams(value: unknown): {
   readonly invocationId: string;
   readonly after?: string;

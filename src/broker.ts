@@ -10,6 +10,7 @@ import {
   TERMINAL_STATES,
   parseEventsParams,
   parseInvocationIdParams,
+  parseWaitParams,
   parseStartInvocationRequest,
   type EventsResult,
   type EffectObservation,
@@ -173,12 +174,22 @@ export class Broker {
         return this.describe();
       case "system.shutdown":
         return { accepted: true };
+      case "system.status":
+        return this.status();
       case "route.discover":
         return { routes: await this.#registry.discover() };
       case "invocation.start":
         return this.start(parseStartInvocationRequest(params));
       case "invocation.inspect":
         return this.inspect(parseInvocationIdParams(params).invocationId);
+      case "invocation.get":
+        return this.inspect(parseInvocationIdParams(params).invocationId);
+      case "invocation.result":
+        return this.result(parseInvocationIdParams(params).invocationId);
+      case "invocation.wait": {
+        const wait = parseWaitParams(params);
+        return this.wait(wait.invocationId, wait.timeoutMs);
+      }
       case "invocation.events":
         return this.events(parseEventsParams(params));
       case "invocation.cancel":
@@ -218,6 +229,20 @@ export class Broker {
         tombstones: true,
         workspaceConcurrency: "reject",
       },
+    };
+  }
+
+  status(): Readonly<Record<string, unknown>> {
+    const records = [...this.#records.values()];
+    return {
+      ready: true,
+      pid: process.pid,
+      platform: process.platform,
+      socketPath: this.#paths.socketPath,
+      stateFile: this.#store.path,
+      activeInvocations: records.filter((record) => !TERMINAL_STATES.has(record.state)).length,
+      retainedInvocations: records.length,
+      tombstones: this.#tombstones.size,
     };
   }
 
@@ -335,6 +360,48 @@ export class Broker {
         ? ["invocation.events"]
         : ["invocation.events", "invocation.cancel"],
     };
+  }
+
+  async result(invocationId: string): Promise<Readonly<Record<string, unknown>>> {
+    await this.#mutationTail;
+    const record = this.#requireRecord(invocationId);
+    if (!TERMINAL_STATES.has(record.state) || record.outcome === undefined) {
+      throw new BridgeError({
+        code: "invocation_not_active",
+        message: `Invocation ${invocationId} has no terminal result yet.`,
+        retryable: true,
+      });
+    }
+    return {
+      invocationId,
+      state: record.state,
+      outcome: record.outcome,
+    };
+  }
+
+  async wait(invocationId: string, timeoutMs = 30_000): Promise<Readonly<Record<string, unknown>>> {
+    const deadline = Date.now() + timeoutMs;
+    let after: string | undefined;
+    while (true) {
+      const inspected = await this.inspect(invocationId);
+      const record = this.#records.get(invocationId);
+      if (record !== undefined && TERMINAL_STATES.has(record.state)) {
+        return { ...inspected, waited: true };
+      }
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        return { ...inspected, waited: false };
+      }
+      const page = await this.events({
+        invocationId,
+        ...(after === undefined ? {} : { after }),
+        waitMs: Math.min(30_000, remaining),
+      });
+      after = page.nextCursor ?? after;
+      if (page.terminal) {
+        return { ...(await this.inspect(invocationId)), waited: true };
+      }
+    }
   }
 
   async events(params: {

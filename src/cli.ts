@@ -17,10 +17,14 @@ Usage:
   agent-bridge routes [--json]
   agent-bridge start --provider <id> --model <id> --text <text> [options]
   agent-bridge inspect <invocation-id> [--json]
+  agent-bridge get <invocation-id> [--json]
+  agent-bridge result <invocation-id> [--json]
+  agent-bridge wait <invocation-id> [--timeout-ms <milliseconds>] [--json]
   agent-bridge events <invocation-id> [--after <cursor>] [--follow] [--json]
   agent-bridge cancel <invocation-id> [--json]
   agent-bridge request <operation> [--params <json>] [--json]
   agent-bridge broker serve
+  agent-bridge broker status [--json]
   agent-bridge broker stop [--json]
   agent-bridge mcp serve
 
@@ -128,6 +132,38 @@ function positiveInteger(value: string | undefined, name: string): number | unde
     });
   }
   return parsed;
+}
+
+function boundedPositiveInteger(value: string | undefined, name: string, maximum: number): number | undefined {
+  const parsed = positiveInteger(value, name);
+  if (parsed !== undefined && parsed > maximum) {
+    throw new BridgeError({
+      code: "invalid_request",
+      message: `--${name} must not exceed ${maximum}.`,
+      retryable: false,
+    });
+  }
+  return parsed;
+}
+
+function exitCode(code: string): number {
+  switch (code) {
+    case "invalid_request":
+      return 2;
+    case "broker_unavailable":
+      return 3;
+    case "invocation_not_found":
+    case "invocation_evicted":
+    case "invocation_not_active":
+      return 4;
+    case "route_ambiguous":
+    case "route_unavailable":
+      return 5;
+    case "invocation_conflict":
+      return 6;
+    default:
+      return 1;
+  }
 }
 
 function output(value: unknown, json: boolean): void {
@@ -260,10 +296,14 @@ async function runCommand(argv: readonly string[]): Promise<void> {
       output(await new IpcClient(paths.socketPath).request("system.shutdown", {}), json);
       return;
     }
+    if (action === "status") {
+      output(await requestBroker("system.status", {}), json);
+      return;
+    }
     if (action !== "serve") {
       throw new BridgeError({
         code: "invalid_request",
-        message: "Supported broker actions are serve and stop.",
+        message: "Supported broker actions are serve, status, and stop.",
         retryable: false,
       });
     }
@@ -315,9 +355,24 @@ async function runCommand(argv: readonly string[]): Promise<void> {
     output(await requestBroker("invocation.start", params), json);
     return;
   }
-  if (command === "inspect") {
-    output(await requestBroker("invocation.inspect", {
+  if (command === "inspect" || command === "get") {
+    const operation = command === "get" ? "invocation.get" : "invocation.inspect";
+    output(await requestBroker(operation, {
       invocationId: positional(parsed, 0, "invocation ID"),
+    }), json);
+    return;
+  }
+  if (command === "result") {
+    output(await requestBroker("invocation.result", {
+      invocationId: positional(parsed, 0, "invocation ID"),
+    }), json);
+    return;
+  }
+  if (command === "wait") {
+    const timeoutMs = boundedPositiveInteger(option(parsed, "timeout-ms"), "timeout-ms", 30_000);
+    output(await requestBroker("invocation.wait", {
+      invocationId: positional(parsed, 0, "invocation ID"),
+      ...(timeoutMs === undefined ? {} : { timeoutMs }),
     }), json);
     return;
   }
@@ -387,5 +442,5 @@ runCommand(process.argv.slice(2)).catch((error: unknown) => {
   } else {
     process.stderr.write(`agent-bridge: ${detail.message} (${detail.code})\n`);
   }
-  process.exitCode = 1;
+  process.exitCode = exitCode(detail.code);
 });
