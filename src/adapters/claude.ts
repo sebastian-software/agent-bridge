@@ -11,6 +11,18 @@ import { type DiscoveryProbe, discoverManifestRoutes } from "./discovery.js";
 import { type CommandSpec, ProcessAdapter, promptFor } from "./process.js";
 import type { AdapterEvent, AdapterRunContext } from "./types.js";
 
+export const CLAUDE_SESSION_ENVIRONMENT_DENY_LIST = [
+  "CLAUDECODE",
+  "CLAUDE_CODE",
+  "CLAUDE_CODE_SESSION_ID",
+  "CLAUDE_CODE_REMOTE_SESSION_ID",
+  "CLAUDE_CODE_CHILD_SESSION",
+  "CLAUDE_PID",
+  "CLAUDE_CODE_ENTRYPOINT",
+  "CLAUDE_CODE_MESSAGING_SOCKET",
+  "CLAUDE_CODE_MESSAGING_TOKEN",
+] as const;
+
 const MANIFEST = {
   id: "claude",
   provider: "anthropic",
@@ -221,7 +233,7 @@ export class ClaudeAdapter extends ProcessAdapter {
       args: commandArgs(context),
       stdin: initialInput(context),
       ...(context.request.interactionStrategy === "orchestrator" ? { keepStdinOpen: true } : {}),
-      envDenyList: ["CLAUDECODE", "CLAUDE_CODE", "CLAUDE_CODE_SESSION_ID"],
+      envDenyList: CLAUDE_SESSION_ENVIRONMENT_DENY_LIST,
     };
   }
 

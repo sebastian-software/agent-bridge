@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { ClaudeAdapter } from "../src/adapters/claude.js";
+import { CLAUDE_SESSION_ENVIRONMENT_DENY_LIST, ClaudeAdapter } from "../src/adapters/claude.js";
 import { CodexAdapter } from "../src/adapters/codex.js";
 import { parseVersion, satisfiesVersionRange } from "../src/adapters/discovery.js";
 import { type CommandSpec, ContentAccumulator, ProcessAdapter } from "../src/adapters/process.js";
@@ -243,7 +243,8 @@ test("process adapter sends prompt on stdin and filters denied environment varia
   assert.deepEqual(result.content, [{ type: "text", text: "prompt from stdin" }]);
   const started = events[0];
   assert.equal(started?.data?.phase, "process_started");
-  assert.equal(JSON.stringify(started?.native).includes("prompt from stdin"), false);
+  assert.equal(started?.native, undefined);
+  assert.deepEqual(started?.data?.deniedEnvironment, ["TEST_DENIED"]);
   assert.equal(events.at(-1)?.native?.env, null);
 });
 
@@ -324,6 +325,7 @@ test("Claude orchestrator mode delegates permission prompts and closes stdin aft
   assert.equal(command.args[command.args.indexOf("--permission-mode") + 1], "default");
   assert.equal(command.args.includes("--input-format"), true);
   assert.equal(command.keepStdinOpen, true);
+  assert.deepEqual(command.envDenyList, CLAUDE_SESSION_ENVIRONMENT_DENY_LIST);
 });
 
 test("Codex excludes reasoning from answer content and reports file effects", () => {
