@@ -183,6 +183,7 @@ export abstract class ProcessAdapter implements Adapter {
       });
       const lines = child.stdout === null ? undefined : createInterface({ input: child.stdout });
       if (lines !== undefined) {
+        void exitPromise.then(() => lines.close());
         for await (const line of lines) {
           if (typeof line !== "string" || line.trim() === "") {
             continue;
