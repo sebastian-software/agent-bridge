@@ -68,6 +68,7 @@ export interface BrokerStatus {
   readonly retainedInvocations?: number;
   readonly tombstones?: number;
   readonly diagnosticMode?: boolean;
+  readonly environmentVariableNames?: readonly string[];
 }
 
 export interface ContractDescription {

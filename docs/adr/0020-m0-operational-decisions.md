@@ -23,14 +23,19 @@ produces `cancelled`; a deadline produces `timed_out`; both retain any content
 and effects observed before termination and synthesize a terminal lifecycle
 event when the harness has not emitted one.
 
-### Environment policy (#22)
+### Environment policy (#22, #91)
 
-Harness processes inherit the caller environment because native login, proxy,
-configuration, and PATH are part of an installed harness. The bridge removes
-bridge-internal variables and adapter-declared dangerous variables, then
-applies request overrides only through an adapter-owned namespaced extension.
-Only variable names and policy diagnostics may be recorded; values are never
-placed in events, outcomes, or logs.
+Harness processes inherit the broker's startup environment because native login,
+proxy, configuration, and PATH are part of an installed harness. The broker is
+long-lived, so a caller's later shell changes are not visible to an already
+running broker. `system.status` exposes the broker environment's variable names
+for diagnostics, never their values; `broker restart` is the documented refresh
+path.
+
+The bridge removes bridge-internal variables and adapter-declared dangerous
+variables, then applies request overrides only through an adapter-owned
+namespaced extension. Only variable names and policy diagnostics may be
+recorded; values are never placed in events, outcomes, or logs.
 
 The Claude adapter's deny list covers the parent session, PID, entrypoint,
 child-session, messaging socket, and messaging token markers. Authentication,

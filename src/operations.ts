@@ -49,7 +49,7 @@ export const OPERATION_DEFINITIONS: readonly OperationDefinition[] = [
     availability: "implemented",
     cli: ["broker status --json"],
     input: { type: "object", additionalProperties: false },
-    output: { type: "object", required: ["ready", "pid", "socketPath"] },
+    output: { type: "object", required: ["ready", "pid", "socketPath", "environmentVariableNames"] },
   },
   {
     name: "route.discover",
