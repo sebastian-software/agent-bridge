@@ -10,6 +10,7 @@ import { ClaudeAdapter } from "./claude.js";
 import { CodexAdapter } from "./codex.js";
 import { FakeAdapter } from "./fake.js";
 import type { Adapter } from "./types.js";
+import { applyUserModelCatalog, defaultCatalogPath, loadUserModelCatalog } from "../model-catalog.js";
 
 const ASSURANCE_RANK: Readonly<Record<Assurance, number>> = {
   none: 0,
@@ -26,9 +27,14 @@ const EVIDENCE_RANK: Readonly<Record<EvidenceStatus, number>> = {
 
 export class AdapterRegistry {
   readonly #adapters: ReadonlyMap<string, Adapter>;
+  readonly #catalogPath: string;
 
-  constructor(adapters: readonly Adapter[] = [new FakeAdapter(), new ClaudeAdapter(), new CodexAdapter()]) {
+  constructor(
+    adapters: readonly Adapter[] = [new FakeAdapter(), new ClaudeAdapter(), new CodexAdapter()],
+    options?: { readonly catalogPath?: string },
+  ) {
     this.#adapters = new Map(adapters.map((adapter) => [adapter.id, adapter]));
+    this.#catalogPath = options?.catalogPath ?? defaultCatalogPath();
   }
 
   adapter(id: string): Adapter {
@@ -47,7 +53,8 @@ export class AdapterRegistry {
     const routeGroups = await Promise.all(
       [...this.#adapters.values()].map((adapter) => adapter.discover()),
     );
-    return routeGroups.flat().sort((left, right) => left.routeId.localeCompare(right.routeId));
+    const catalog = await loadUserModelCatalog(this.#catalogPath);
+    return [...applyUserModelCatalog(routeGroups.flat(), catalog)].sort((left, right) => left.routeId.localeCompare(right.routeId));
   }
 
   async resolve(request: StartInvocationRequest): Promise<{
@@ -117,6 +124,7 @@ export class AdapterRegistry {
       route: {
         routeId: candidate.route.routeId,
         ...(candidate.route.executable === undefined ? {} : { executable: candidate.route.executable }),
+        ...(candidate.route.canonicalModel === undefined ? {} : { canonicalModel: candidate.route.canonicalModel }),
         adapter: candidate.route.adapter,
         harnessVersion: candidate.route.harnessVersion,
         authenticationMode: candidate.route.authenticationMode,
