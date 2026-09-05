@@ -36,8 +36,15 @@ export interface AdapterRunResult {
   readonly usage?: Usage;
 }
 
+export interface PolicyResolution {
+  readonly supported: boolean;
+  readonly unsupported: readonly string[];
+  readonly effectiveNativePolicy: Readonly<Record<string, JsonValue>>;
+}
+
 export interface Adapter {
   readonly id: string;
   discover(): Promise<readonly RouteDescriptor[]>;
   run(context: AdapterRunContext): Promise<AdapterRunResult>;
+  resolvePolicy?(request: StartInvocationRequest, route: RouteDescriptor): PolicyResolution;
 }

@@ -99,6 +99,7 @@ export interface RouteDescriptor {
   readonly readiness: "ready" | "unavailable" | "unqualified";
   readonly qualification: readonly QualificationEvidence[];
   readonly diagnostics: readonly string[];
+  readonly policySupport?: Readonly<Record<string, readonly string[]>>;
 }
 
 export interface ResolvedRoute {

@@ -279,7 +279,7 @@ export class Broker {
       return this.#startResult(existing, true);
     }
 
-    const { route, descriptor } = await this.#registry.resolve(request);
+    const { route, descriptor, effectiveNativePolicy } = await this.#registry.resolve(request);
     const invocationId = `inv_${randomUUID()}`;
     const createdAt = new Date().toISOString();
     let workspaceKey: string;
@@ -290,10 +290,7 @@ export class Broker {
     }
     const policy: PolicyEvidence = {
       requestedPolicy: request.requestedPolicy,
-      effectiveNativePolicy: {
-        adapter: descriptor.adapter,
-        controls: [],
-      },
+      effectiveNativePolicy,
       assurance: descriptor.assurance,
     };
 

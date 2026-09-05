@@ -1,4 +1,4 @@
-import type { JsonValue, RouteDescriptor, Usage, WorkspaceEffect } from "../contract.js";
+import type { JsonValue, RequestedPolicy, RouteDescriptor, StartInvocationRequest, Usage, WorkspaceEffect } from "../contract.js";
 import { BridgeError } from "../errors.js";
 import { discoverManifestRoutes, type DiscoveryProbe } from "./discovery.js";
 import { ProcessAdapter, promptFor, type CommandSpec } from "./process.js";
@@ -11,7 +11,7 @@ const MANIFEST = {
   command: "claude",
   versionArgs: ["--version"],
   authArgs: ["auth", "status"],
-  qualifiedMajor: 2,
+  qualifiedVersionRange: ">=2.1.0 <3.0.0",
   authenticationMode: "claude-native",
   models: ["opus", "sonnet", "haiku"].map((model) => ({
     model,
@@ -20,16 +20,50 @@ const MANIFEST = {
     interactionStrategies: ["deny", "unattended"] as const,
   })),
   qualificationClaim: "Claude Code v2 native print-mode stream-json contract with model, effort, and permission mapping.",
+  policySupport: {
+    filesystem: ["read-only", "workspace-write"],
+    commands: ["allow", "deny"],
+    network: ["inherit"],
+    additionalDirectories: ["supported"],
+  },
 } as const;
 
-function permissionMode(context: AdapterRunContext): string {
-  if (context.request.interactionStrategy === "deny") {
+function permissionModeFor(strategy: StartInvocationRequest["interactionStrategy"], policy: RequestedPolicy): string {
+  if (strategy === "deny") {
     return "dontAsk";
   }
-  if (context.request.requestedPolicy.filesystem === "read-only") {
+  if (policy.filesystem === "read-only") {
     return "plan";
   }
   return "acceptEdits";
+}
+
+function permissionMode(context: AdapterRunContext): string {
+  return permissionModeFor(context.request.interactionStrategy, context.request.requestedPolicy);
+}
+
+function resolvePolicy(request: StartInvocationRequest): import("./types.js").PolicyResolution {
+  const unsupported: string[] = [];
+  if (request.requestedPolicy.filesystem === "inherit") {
+    unsupported.push("requestedPolicy.filesystem=inherit");
+  }
+  if (request.requestedPolicy.network !== undefined && request.requestedPolicy.network !== "inherit") {
+    unsupported.push("requestedPolicy.network");
+  }
+  const controls: Array<Readonly<Record<string, JsonValue>>> = [
+    { flag: "--permission-mode", value: permissionModeFor(request.interactionStrategy, request.requestedPolicy) },
+  ];
+  if (request.requestedPolicy.commands === "deny") {
+    controls.push({ flag: "--disallowedTools", value: ["Bash"] });
+  }
+  for (const directory of request.requestedPolicy.additionalDirectories ?? []) {
+    controls.push({ flag: "--add-dir", value: directory });
+  }
+  return {
+    supported: unsupported.length === 0,
+    unsupported,
+    effectiveNativePolicy: { adapter: "claude", controls },
+  };
 }
 
 function commandArgs(context: AdapterRunContext): readonly string[] {
@@ -132,6 +166,10 @@ export class ClaudeAdapter extends ProcessAdapter {
       ...(this.#executable === undefined ? {} : { executable: this.#executable }),
       ...(this.#probe === undefined ? {} : { probe: this.#probe }),
     });
+  }
+
+  resolvePolicy(request: StartInvocationRequest, _route: RouteDescriptor): import("./types.js").PolicyResolution {
+    return resolvePolicy(request);
   }
 
   protected command(context: AdapterRunContext): CommandSpec {

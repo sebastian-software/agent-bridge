@@ -1,4 +1,4 @@
-import type { JsonValue, RouteDescriptor, Usage, WorkspaceEffect } from "../contract.js";
+import type { JsonValue, RouteDescriptor, StartInvocationRequest, Usage, WorkspaceEffect } from "../contract.js";
 import { BridgeError } from "../errors.js";
 import { discoverManifestRoutes, type DiscoveryProbe } from "./discovery.js";
 import { ProcessAdapter, promptFor, type CommandSpec } from "./process.js";
@@ -11,7 +11,7 @@ const MANIFEST = {
   command: "codex",
   versionArgs: ["--version"],
   authArgs: ["login", "status"],
-  qualifiedMajor: 0,
+  qualifiedVersionRange: ">=0.149.0 <1.0.0",
   authenticationMode: "codex-native",
   models: ["gpt-5.5", "gpt-5.3-codex", "codex-mini-latest"].map((model) => ({
     model,
@@ -20,7 +20,48 @@ const MANIFEST = {
     interactionStrategies: ["deny", "unattended"] as const,
   })),
   qualificationClaim: "Codex CLI exec JSONL contract with native model, sandbox, approval, and workspace mapping.",
+  policySupport: {
+    filesystem: ["read-only", "workspace-write"],
+    commands: ["allow"],
+    network: ["allow", "deny"],
+    additionalDirectories: ["supported"],
+  },
 } as const;
+
+function reasoningEffort(value: string): string {
+  return value === "max" ? "xhigh" : value;
+}
+
+function resolvePolicy(request: StartInvocationRequest): import("./types.js").PolicyResolution {
+  const unsupported: string[] = [];
+  if (request.requestedPolicy.filesystem === "inherit") {
+    unsupported.push("requestedPolicy.filesystem=inherit");
+  }
+  if (request.requestedPolicy.commands === "deny") {
+    unsupported.push("requestedPolicy.commands=deny");
+  }
+  if (request.requestedPolicy.network === "inherit") {
+    unsupported.push("requestedPolicy.network=inherit");
+  }
+  const controls: Array<Readonly<Record<string, JsonValue>>> = [
+    { flag: "--sandbox", value: request.requestedPolicy.filesystem === "read-only" ? "read-only" : "workspace-write" },
+    { flag: "-c", value: "approval_policy=never" },
+  ];
+  if (request.requestedPolicy.network === "allow" || request.requestedPolicy.network === "deny") {
+    controls.push({ flag: "-c", value: `sandbox_workspace_write.network_access=${request.requestedPolicy.network === "allow"}` });
+  }
+  for (const directory of request.requestedPolicy.additionalDirectories ?? []) {
+    controls.push({ flag: "--add-dir", value: directory });
+  }
+  if (request.selector.effort !== undefined) {
+    controls.push({ flag: "-c", value: `model_reasoning_effort=${reasoningEffort(request.selector.effort)}` });
+  }
+  return {
+    supported: unsupported.length === 0,
+    unsupported,
+    effectiveNativePolicy: { adapter: "codex", controls },
+  };
+}
 
 function sandbox(context: AdapterRunContext): string {
   if (context.request.requestedPolicy.filesystem === "read-only") {
@@ -97,6 +138,10 @@ export class CodexAdapter extends ProcessAdapter {
     });
   }
 
+  resolvePolicy(request: StartInvocationRequest, _route: RouteDescriptor): import("./types.js").PolicyResolution {
+    return resolvePolicy(request);
+  }
+
   protected command(context: AdapterRunContext): CommandSpec {
     if (context.route.executable === undefined) {
       throw new BridgeError({
@@ -119,6 +164,9 @@ export class CodexAdapter extends ProcessAdapter {
       'approval_policy="never"',
       "-",
     ];
+    if (context.route.effort !== undefined) {
+      args.splice(-1, 0, "-c", `model_reasoning_effort=${reasoningEffort(context.route.effort)}`);
+    }
     for (const directory of context.request.requestedPolicy.additionalDirectories ?? []) {
       args.splice(-1, 0, "--add-dir", directory);
     }

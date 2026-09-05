@@ -22,10 +22,11 @@ export interface AdapterManifest {
   readonly command: string;
   readonly versionArgs: readonly string[];
   readonly authArgs: readonly string[];
-  readonly qualifiedMajor: number;
+  readonly qualifiedVersionRange: string;
   readonly authenticationMode: string;
   readonly models: readonly AdapterModelManifest[];
   readonly qualificationClaim: string;
+  readonly policySupport?: Readonly<Record<string, readonly string[]>>;
 }
 
 export interface DiscoveryProbe {
@@ -34,15 +35,44 @@ export interface DiscoveryProbe {
   readonly checkAuthentication?: (executable: string, args: readonly string[]) => Promise<boolean>;
 }
 
-export function parseVersion(value: string | undefined): { readonly major: number; readonly value: string } | undefined {
+export interface ParsedVersion {
+  readonly major: number;
+  readonly minor: number;
+  readonly patch: number;
+  readonly value: string;
+}
+
+export function parseVersion(value: string | undefined): ParsedVersion | undefined {
   if (value === undefined) {
     return undefined;
   }
-  const match = /(?:^|\s)(\d+)\.(\d+)(?:\.(\d+))?(?:\s|$)/.exec(value);
-  if (match === null || match[1] === undefined) {
+  const match = /(?:^|\s|v)(\d+)\.(\d+)(?:\.(\d+))?(?:[-+][0-9A-Za-z.-]+)?(?:\s|$)/.exec(value);
+  if (match === null || match[1] === undefined || match[2] === undefined) {
     return undefined;
   }
-  return { major: Number(match[1]), value: match[0].trim() };
+  return { major: Number(match[1]), minor: Number(match[2]), patch: Number(match[3] ?? "0"), value: match[0].trim() };
+}
+
+function versionNumber(version: ParsedVersion): number {
+  return version.major * 1_000_000 + version.minor * 1_000 + version.patch;
+}
+
+export function satisfiesVersionRange(version: ParsedVersion, range: string): boolean {
+  const checks = range.trim().split(/\s+/).filter(Boolean).map((part) => {
+    const match = /^(>=|<=|>|<|=)?(\d+)\.(\d+)\.(\d+)$/.exec(part);
+    if (match === null || match[2] === undefined || match[3] === undefined || match[4] === undefined) {
+      return undefined;
+    }
+    const target = Number(match[2]) * 1_000_000 + Number(match[3]) * 1_000 + Number(match[4]);
+    return { operator: match[1] ?? "=", target };
+  });
+  return checks.every((check) => check !== undefined && (
+    check.operator === ">=" ? versionNumber(version) >= check.target
+      : check.operator === "<=" ? versionNumber(version) <= check.target
+        : check.operator === ">" ? versionNumber(version) > check.target
+          : check.operator === "<" ? versionNumber(version) < check.target
+            : versionNumber(version) === check.target
+  ));
 }
 
 async function findExecutable(command: string): Promise<string | undefined> {
@@ -111,12 +141,13 @@ export async function discoverManifestRoutes(
       readiness: "unavailable",
       qualification: [],
       diagnostics: [`Executable ${manifest.command} was not found or is not executable.`],
+      ...(manifest.policySupport === undefined ? {} : { policySupport: manifest.policySupport }),
     }));
   }
 
   const versionOutput = await (probe.readVersion ?? readVersion)(executable, manifest.versionArgs);
   const version = parseVersion(versionOutput);
-  if (version === undefined || version.major !== manifest.qualifiedMajor) {
+  if (version === undefined || !satisfiesVersionRange(version, manifest.qualifiedVersionRange)) {
     return manifest.models.map((model) => ({
       routeId: `${manifest.id}:${model.model}`,
       executable,
@@ -133,7 +164,8 @@ export async function discoverManifestRoutes(
       runtimeIdentityEvidence: "unverified",
       readiness: "unqualified",
       qualification: [],
-      diagnostics: [`Installed ${manifest.command} version is outside the qualified major version ${manifest.qualifiedMajor}.`],
+      diagnostics: [`Installed ${manifest.command} version does not satisfy qualified range ${manifest.qualifiedVersionRange}.`],
+      ...(manifest.policySupport === undefined ? {} : { policySupport: manifest.policySupport }),
     }));
   }
 
@@ -154,10 +186,11 @@ export async function discoverManifestRoutes(
     runtimeIdentityEvidence: "unverified",
     readiness: authenticated ? "ready" : "unavailable",
     qualification: [{
-      qualificationId: `${manifest.id}-major-${manifest.qualifiedMajor}`,
-      testedAt: "2026-09-05T00:00:00.000Z",
-      claim: manifest.qualificationClaim,
+      qualificationId: `${manifest.id}-semver-${manifest.qualifiedVersionRange}`,
+      testedAt: new Date().toISOString(),
+      claim: `${manifest.qualificationClaim} Observed version ${version.value} satisfies ${manifest.qualifiedVersionRange}.`,
     }],
+    ...(manifest.policySupport === undefined ? {} : { policySupport: manifest.policySupport }),
     diagnostics: authenticated
       ? ["Authentication status probe succeeded; readiness remains provisional until an invocation succeeds."]
       : [`${manifest.command} authentication status could not be verified without starting a paid invocation.`],
