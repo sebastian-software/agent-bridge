@@ -1,4 +1,4 @@
-import { lstat, chmod, unlink } from "node:fs/promises";
+import { lstat, mkdir, chmod, unlink } from "node:fs/promises";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
 import { dirname } from "node:path";
 
@@ -58,6 +58,7 @@ async function socketAcceptsConnections(socketPath: string): Promise<boolean> {
 export class BrokerServer {
   readonly #broker: Broker;
   readonly #socketPath: string;
+  readonly #runtimeDirectory: string;
   readonly #sockets = new Set<Socket>();
   #server: Server | undefined;
   #stopPromise: Promise<void> | undefined;
@@ -66,9 +67,10 @@ export class BrokerServer {
     this.#resolveClosed = resolve;
   });
 
-  constructor(broker: Broker, socketPath: string) {
+  constructor(broker: Broker, socketPath: string, runtimeDirectory = dirname(socketPath)) {
     this.#broker = broker;
     this.#socketPath = socketPath;
+    this.#runtimeDirectory = runtimeDirectory;
   }
 
   get closed(): Promise<void> {
@@ -76,7 +78,8 @@ export class BrokerServer {
   }
 
   async start(): Promise<void> {
-    await ensurePrivateDirectory(dirname(this.#socketPath), "runtime");
+    await ensurePrivateDirectory(this.#runtimeDirectory, "runtime");
+    await mkdir(dirname(this.#socketPath), { recursive: true, mode: 0o700 });
     try {
       const existing = await lstat(this.#socketPath);
       if (!existing.isSocket()) {
