@@ -225,6 +225,8 @@ export interface InvocationRecord {
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly startedAt?: string;
+  /** Total number of events, including events loaded from disk on demand. */
+  readonly eventCount: number;
   readonly events: readonly InvocationEvent[];
   readonly outcome?: InvocationOutcome;
 }

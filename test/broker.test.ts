@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, cp, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { chmod, cp, mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -240,6 +240,45 @@ test("store persists invocation metadata and events in separate files", async ()
     const eventLines = (await readFile(join(invocationDirectory, "events.jsonl"), "utf8")).trim().split("\n");
     assert.equal(eventLines.length, (await broker.events({ invocationId: started.invocationId })).events.length);
     assert.ok(await readFile(join(invocationDirectory, "outcome.json"), "utf8"));
+  } finally {
+    await broker.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("store appends activity events without rewriting stable metadata", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-bridge-store-writes-"));
+  const broker = new Broker(paths(root));
+  await broker.initialize();
+  try {
+    const started = await broker.start(request(root, "fake-slow"));
+    let running = await broker.inspect(started.invocationId);
+    for (let attempt = 0; attempt < 100 && stateOf(running) !== "running"; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      running = await broker.inspect(started.invocationId);
+    }
+    assert.equal(stateOf(running), "running");
+
+    const metadataPath = join(
+      paths(root).stateDirectory,
+      "invocations",
+      encodeURIComponent(started.invocationId),
+      "meta.json",
+    );
+    const before = await stat(metadataPath);
+    const initialEventCount = (running as { eventCount: number }).eventCount;
+    let observed = running;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      observed = await broker.inspect(started.invocationId);
+      if ((observed as { eventCount: number }).eventCount > initialEventCount) {
+        break;
+      }
+    }
+    assert.ok((observed as { eventCount: number }).eventCount > initialEventCount);
+    const after = await stat(metadataPath);
+    assert.equal(after.size, before.size);
+    assert.equal(after.mtimeMs, before.mtimeMs);
   } finally {
     await broker.close();
     await rm(root, { recursive: true, force: true });
