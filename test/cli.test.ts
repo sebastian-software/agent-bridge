@@ -161,7 +161,7 @@ test("CLI discovers, starts, follows, and inspects through the Unix socket", asy
     assert.equal(oneShotOutcome.status, "succeeded");
 
     const version = await execFile(process.execPath, [cliPath, "--version"], { env });
-    assert.equal(version.stdout.trim(), "0.0.0");
+    assert.equal(version.stdout.trim(), "0.1.0");
   } finally {
     try {
       await execFile(process.execPath, [cliPath, "broker", "stop", "--json"], { env });
