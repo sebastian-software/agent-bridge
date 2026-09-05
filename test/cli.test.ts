@@ -94,6 +94,8 @@ test("CLI discovers, starts, follows, and inspects through the Unix socket", asy
       "hello from CLI",
       "--cwd",
       root,
+      "--correlation-id",
+      "cli-test",
       "--json",
     ], { env });
     const invocationId = invocationIdFrom(started.stdout);
@@ -122,6 +124,31 @@ test("CLI discovers, starts, follows, and inspects through the Unix socket", asy
 
     const result = await execFile(process.execPath, [cliPath, "result", invocationId, "--json"], { env });
     assert.equal((JSON.parse(result.stdout) as { outcome?: unknown }).outcome !== undefined, true);
+
+    const listed = await execFile(process.execPath, [cliPath, "list", "--correlation", "cli-test", "--json"], { env });
+    assert.equal((JSON.parse(listed.stdout) as { invocations?: readonly unknown[] }).invocations?.length, 1);
+
+    const oneShot = await execFile(process.execPath, [
+      cliPath,
+      "run",
+      "--provider",
+      "agent-bridge",
+      "--model",
+      "fake-echo",
+      "--via",
+      "fake",
+      "--text",
+      "one shot",
+      "--cwd",
+      root,
+      "--json",
+    ], { env });
+    const oneShotLines = oneShot.stdout.trim().split("\n").filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>);
+    assert.ok(oneShotLines.some((line) => line.category === "lifecycle"));
+    assert.equal((oneShotLines.at(-1)?.outcome as { status?: string }).status, "succeeded");
+
+    const version = await execFile(process.execPath, [cliPath, "--version"], { env });
+    assert.equal(version.stdout.trim(), "0.0.0");
   } finally {
     try {
       await execFile(process.execPath, [cliPath, "broker", "stop", "--json"], { env });

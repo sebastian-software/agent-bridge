@@ -14,10 +14,16 @@ test("MCP initialize and tools/list expose the bridge contract", async () => {
   const server = new McpServer(async () => ({ ok: true }));
   const initialized = decoded(await server.handle(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18" } })));
   assert.equal((initialized.result as { protocolVersion: string }).protocolVersion, "2025-06-18");
+  const fallback = decoded(await server.handle(JSON.stringify({ jsonrpc: "2.0", id: 3, method: "initialize", params: { protocolVersion: "unsupported" } })));
+  assert.equal((fallback.result as { protocolVersion: string }).protocolVersion, "2025-06-18");
   const listed = decoded(await server.handle(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" })));
-  const tools = listed.result as { tools: readonly { name: string }[] };
+  const tools = listed.result as { tools: readonly { name: string; inputSchema?: Record<string, unknown>; outputSchema?: Record<string, unknown> }[] };
   assert.ok(tools.tools.some((tool) => tool.name === "agent_bridge_invocation_start"));
   assert.ok(tools.tools.some((tool) => tool.name === "agent_bridge_invocation_events"));
+  assert.equal(tools.tools.some((tool) => tool.name === "agent_bridge_invocation_send"), false);
+  const startTool = tools.tools.find((tool) => tool.name === "agent_bridge_invocation_start");
+  assert.ok(startTool?.inputSchema?.properties);
+  assert.ok(startTool?.outputSchema);
 });
 
 test("MCP tools/call returns structured broker results and errors", async () => {

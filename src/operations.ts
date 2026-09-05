@@ -89,6 +89,24 @@ export const OPERATION_DEFINITIONS: readonly OperationDefinition[] = [
     output: { type: "object", required: ["invocationId", "state", "eventCount"] },
   },
   {
+    name: "invocation.list",
+    summary: "List retained invocation summaries with optional correlation and state filters.",
+    availability: "implemented",
+    cli: ["list [--active] [--correlation <id>] [--json]"],
+    input: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        state: { enum: ["queued", "running", "waiting_for_input", "cancelling", "cancelled", "failed", "interrupted", "succeeded", "timed_out"] },
+        callerCorrelationId: { type: "string", minLength: 1 },
+        since: { type: "string", format: "date-time" },
+        limit: { type: "integer", minimum: 1, maximum: 1000 },
+        includeTombstones: { type: "boolean" },
+      },
+    },
+    output: { type: "object", required: ["invocations", "tombstones"] },
+  },
+  {
     name: "invocation.get",
     summary: "Alias for inspecting one invocation by stable ID.",
     availability: "implemented",

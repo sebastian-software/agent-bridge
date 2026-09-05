@@ -258,6 +258,22 @@ export interface EventsResult {
   readonly terminal: boolean;
 }
 
+export interface InvocationSummary {
+  readonly invocationId: string;
+  readonly state: InvocationState;
+  readonly requestedSelector: DelegationSelector;
+  readonly resolvedRouteId: string;
+  readonly createdAt: string;
+  readonly completedAt?: string;
+  readonly workingDirectory: string;
+  readonly callerCorrelationId?: string;
+}
+
+export interface InvocationListResult {
+  readonly invocations: readonly InvocationSummary[];
+  readonly tombstones: readonly InvocationTombstone[];
+}
+
 export interface OperationRequest {
   readonly protocolVersion: typeof IPC_PROTOCOL_VERSION;
   readonly id: string;
@@ -550,5 +566,48 @@ export function parseEventsParams(value: unknown): {
     invocationId: stringValue(source.invocationId, "params.invocationId", { nonEmpty: true }),
     ...(after === undefined ? {} : { after }),
     ...(waitMs === undefined ? {} : { waitMs }),
+  };
+}
+
+export function parseInvocationListParams(value: unknown): {
+  readonly state?: InvocationState;
+  readonly callerCorrelationId?: string;
+  readonly since?: string;
+  readonly limit: number;
+  readonly includeTombstones: boolean;
+} {
+  const source = record(value, "params");
+  const state = source.state === undefined
+    ? undefined
+    : oneOf(source.state, "params.state", [
+      "queued",
+      "running",
+      "waiting_for_input",
+      "cancelling",
+      "cancelled",
+      "failed",
+      "interrupted",
+      "succeeded",
+      "timed_out",
+    ] as const);
+  const callerCorrelationId = optionalString(source.callerCorrelationId, "params.callerCorrelationId");
+  const since = optionalString(source.since, "params.since");
+  if (since !== undefined && !Number.isFinite(Date.parse(since))) {
+    invalid("params.since must be an ISO-8601 timestamp.");
+  }
+  const limit = source.limit === undefined ? 50 : source.limit;
+  if (typeof limit !== "number" || !Number.isSafeInteger(limit) || limit <= 0 || limit > 1_000) {
+    invalid("params.limit must be a positive integer not exceeding 1000.");
+  }
+  const includeTombstones = source.includeTombstones === undefined ? false : source.includeTombstones;
+  if (typeof includeTombstones !== "boolean") {
+    invalid("params.includeTombstones must be a boolean.");
+  }
+  return {
+    ...(state === undefined ? {} : { state }),
+    ...(callerCorrelationId === undefined ? {} : { callerCorrelationId }),
+    ...(since === undefined ? {} : { since }),
+    limit,
+    includeTombstones,
   };
 }

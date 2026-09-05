@@ -1,10 +1,13 @@
 import { createInterface } from "node:readline";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import type { Readable, Writable } from "node:stream";
 
 import { errorDetail } from "./errors.js";
 import { OPERATION_DEFINITIONS, OPERATIONS_VERSION } from "./operations.js";
 
 const MCP_PROTOCOL_VERSION = "2025-06-18";
+const SUPPORTED_PROTOCOL_VERSIONS = new Set([MCP_PROTOCOL_VERSION, "2025-03-26", "2024-11-05"]);
 const TOOL_PREFIX = "agent_bridge_";
 
 type RpcId = string | number | null;
@@ -36,7 +39,57 @@ function operationName(name: unknown): string | undefined {
     return undefined;
   }
   const candidate = name.slice(TOOL_PREFIX.length).replaceAll("_", ".");
-  return OPERATION_DEFINITIONS.some((definition) => definition.name === candidate) ? candidate : undefined;
+  return OPERATION_DEFINITIONS.some((definition) => definition.name === candidate && definition.availability === "implemented")
+    ? candidate
+    : undefined;
+}
+
+function schemaFile(name: string): Readonly<Record<string, unknown>> {
+  const candidates = [
+    new URL(`../../schemas/${name}.schema.json`, import.meta.url),
+    new URL(`../schemas/${name}.schema.json`, import.meta.url),
+  ];
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(readFileSync(fileURLToPath(candidate), "utf8")) as Readonly<Record<string, unknown>>;
+    } catch {
+      // Try the source-tree path when tests execute TypeScript directly.
+    }
+  }
+  return { type: "object", additionalProperties: true };
+}
+
+function inlineSchema(value: unknown, root: Readonly<Record<string, unknown>>): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => inlineSchema(entry, root));
+  }
+  if (typeof value !== "object" || value === null) {
+    return value;
+  }
+  const source = value as Readonly<Record<string, unknown>>;
+  if (typeof source.$ref === "string" && source.$ref.startsWith("#/$defs/")) {
+    const definition = source.$ref.slice("#/$defs/".length);
+    const defs = root.$defs;
+    if (typeof defs === "object" && defs !== null && !Array.isArray(defs) && definition in defs) {
+      return inlineSchema((defs as Readonly<Record<string, unknown>>)[definition], root);
+    }
+  }
+  return Object.fromEntries(Object.entries(source)
+    .filter(([key]) => key !== "$defs")
+    .map(([key, entry]) => [key, inlineSchema(entry, root)]));
+}
+
+const INVOCATION_REQUEST_SCHEMA = inlineSchema(schemaFile("invocation-request"), schemaFile("invocation-request"));
+
+function definition(name: string): (typeof OPERATION_DEFINITIONS)[number] | undefined {
+  return OPERATION_DEFINITIONS.find((entry) => entry.name === name);
+}
+
+function toolSchema(name: string, key: "input" | "output"): unknown {
+  if (name === "invocation.start" && key === "input") {
+    return INVOCATION_REQUEST_SCHEMA;
+  }
+  return definition(name)?.[key] ?? { type: "object", additionalProperties: true };
 }
 
 function response(requestId: RpcId, result: unknown): UnknownRecord {
@@ -84,7 +137,9 @@ export class McpServer {
     if (request.method === "initialize") {
       const params = record(request.params);
       const requestedVersion = params?.protocolVersion;
-      const protocolVersion = typeof requestedVersion === "string" ? requestedVersion : MCP_PROTOCOL_VERSION;
+      const protocolVersion = typeof requestedVersion === "string" && SUPPORTED_PROTOCOL_VERSIONS.has(requestedVersion)
+        ? requestedVersion
+        : MCP_PROTOCOL_VERSION;
       return JSON.stringify(response(request.id, {
         protocolVersion,
         capabilities: { tools: { listChanged: false } },
@@ -96,10 +151,11 @@ export class McpServer {
     }
     if (request.method === "tools/list") {
       return JSON.stringify(response(request.id, {
-        tools: OPERATION_DEFINITIONS.map((definition) => ({
+        tools: OPERATION_DEFINITIONS.filter((definition) => definition.availability === "implemented").map((definition) => ({
           name: toolName(definition.name),
-          description: `${definition.summary} (${definition.availability})`,
-          inputSchema: definition.input,
+          description: definition.summary,
+          inputSchema: toolSchema(definition.name, "input"),
+          outputSchema: toolSchema(definition.name, "output"),
         })),
       }));
     }
