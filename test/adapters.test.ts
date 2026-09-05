@@ -401,7 +401,29 @@ test("policy resolution rejects unsupported fields and records exact controls", 
   assert.equal(unsupported.supported, false);
   assert.ok(unsupported.unsupported.includes("requestedPolicy.network"));
 
+  const claudeInherit = claude.resolvePolicy(
+    { ...request(process.cwd()), requestedPolicy: { minimumAssurance: "none", filesystem: "inherit" } },
+    claudeRoute,
+  );
+  assert.equal(claudeInherit.supported, true);
+
   const codex = new InspectableCodexAdapter();
+  const codexInherit = codex.resolvePolicy(
+    {
+      ...request(process.cwd()),
+      requestedPolicy: { minimumAssurance: "none", filesystem: "inherit", network: "inherit" },
+    },
+    {
+      ...claudeRoute,
+      routeId: "codex:test",
+      provider: "openai",
+      model: "gpt-5.5",
+      via: "codex",
+      adapter: "codex",
+    },
+  );
+  assert.equal(codexInherit.supported, true);
+
   const codexRequest = { ...request(process.cwd()), selector: { ...request(process.cwd()).selector, effort: "max" } };
   const command = codex.commandFor({
     invocationId: "inv_policy",

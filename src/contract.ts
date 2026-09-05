@@ -159,6 +159,8 @@ export interface WorkspaceEffect {
   readonly previousPath?: string;
   readonly kind: "created" | "deleted" | "modified" | "renamed" | "unknown";
   readonly evidence: "git-status" | "harness-reported";
+  /** True when a harness-reported path is outside the requested workspace. */
+  readonly outsideWorkspace?: true;
 }
 
 export interface EffectObservation {

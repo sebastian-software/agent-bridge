@@ -29,7 +29,7 @@ export const SCHEMA_DEFINITIONS: readonly SchemaDefinition[] = [
 export const OPERATION_DEFINITIONS: readonly OperationDefinition[] = [
   {
     name: "system.describe",
-    summary: "Describe protocol versions, operations, routes, and broker settings.",
+    summary: "Describe protocol versions, operations, and broker settings.",
     availability: "implemented",
     cli: ["describe --json"],
     input: { type: "object", additionalProperties: false },

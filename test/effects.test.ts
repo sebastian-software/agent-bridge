@@ -6,7 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
 
-import { captureWorkspaceSnapshot, observeWorkspaceEffects } from "../src/effects.js";
+import { captureWorkspaceSnapshot, normalizeHarnessEffect, observeWorkspaceEffects } from "../src/effects.js";
 
 const execFile = promisify(execFileCallback);
 
@@ -59,4 +59,25 @@ test("non-Git directories report incomplete observation instead of claiming no e
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("normalizes harness paths and marks effects outside the workspace", () => {
+  const inside = normalizeHarnessEffect(
+    { path: "/workspace/project/src/app.ts", kind: "modified", evidence: "harness-reported" },
+    "/workspace/project",
+  );
+  assert.deepEqual(inside, { path: "src/app.ts", kind: "modified", evidence: "harness-reported" });
+
+  const outside = normalizeHarnessEffect(
+    {
+      path: "../shared.txt",
+      previousPath: "src/old.ts",
+      kind: "renamed",
+      evidence: "harness-reported",
+    },
+    "/workspace/project",
+  );
+  assert.ok(outside.path.startsWith("/"));
+  assert.equal(outside.previousPath, "src/old.ts");
+  assert.equal(outside.outsideWorkspace, true);
 });

@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { lstat } from "node:fs/promises";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 
 import type { WorkspaceEffect } from "./contract.js";
@@ -30,6 +31,34 @@ export interface EffectObservation {
   readonly effects: readonly WorkspaceEffect[];
   readonly complete: boolean;
   readonly diagnostics: readonly string[];
+}
+
+interface NormalizedPath {
+  readonly path: string;
+  readonly outsideWorkspace: boolean;
+}
+
+function normalizeHarnessPath(path: string, workspace: string): NormalizedPath {
+  const absolute = resolve(workspace, path);
+  const relativePath = relative(workspace, absolute);
+  const outsideWorkspace = relativePath === ".." || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath);
+  return {
+    path: outsideWorkspace ? absolute : relativePath === "" ? "." : relativePath,
+    outsideWorkspace,
+  };
+}
+
+export function normalizeHarnessEffect(effect: WorkspaceEffect, workspace: string): WorkspaceEffect {
+  const normalizedPath = normalizeHarnessPath(effect.path, workspace);
+  const normalizedPreviousPath =
+    effect.previousPath === undefined ? undefined : normalizeHarnessPath(effect.previousPath, workspace);
+  const outsideWorkspace = normalizedPath.outsideWorkspace || (normalizedPreviousPath?.outsideWorkspace ?? false);
+  return {
+    ...effect,
+    path: normalizedPath.path,
+    ...(normalizedPreviousPath === undefined ? {} : { previousPath: normalizedPreviousPath.path }),
+    ...(outsideWorkspace ? { outsideWorkspace: true } : {}),
+  };
 }
 
 async function git(root: string, args: readonly string[]): Promise<string> {
