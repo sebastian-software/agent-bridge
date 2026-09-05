@@ -34,7 +34,12 @@ import {
   type TerminalStatus,
   type Usage,
 } from "./contract.js";
-import { captureWorkspaceSnapshot, observeWorkspaceEffects, type WorkspaceSnapshot } from "./effects.js";
+import {
+  captureWorkspaceSnapshot,
+  normalizeHarnessEffect,
+  observeWorkspaceEffects,
+  type WorkspaceSnapshot,
+} from "./effects.js";
 import { BridgeError } from "./errors.js";
 import { describeContract } from "./operations.js";
 import type { BrokerPaths } from "./paths.js";
@@ -836,7 +841,12 @@ export class Broker {
         eventCount: sequence,
         events: [...current.events, appended],
       };
-      for (const effect of event.effects ?? []) {
+      const effects = (event.effects ?? []).map((effect) =>
+        effect.evidence === "harness-reported"
+          ? normalizeHarnessEffect(effect, current.request.workingDirectory)
+          : effect,
+      );
+      for (const effect of effects) {
         updated = this.#appendBridgeEvent(
           updated,
           "effect",
@@ -845,6 +855,7 @@ export class Broker {
             ...(effect.previousPath === undefined ? {} : { previousPath: effect.previousPath }),
             kind: effect.kind,
             evidence: effect.evidence,
+            ...(effect.outsideWorkspace === true ? { outsideWorkspace: true } : {}),
           },
           timestamp,
         );
@@ -963,7 +974,14 @@ export class Broker {
         return { value: undefined, changed: false };
       }
       const completedAt = new Date().toISOString();
-      const allEffects = [...(result.effects ?? []), ...observed.effects];
+      const allEffects = [
+        ...(result.effects ?? []).map((effect) =>
+          effect.evidence === "harness-reported"
+            ? normalizeHarnessEffect(effect, current.request.workingDirectory)
+            : effect,
+        ),
+        ...observed.effects,
+      ];
       let withEvent = current;
       for (const effect of observed.effects) {
         withEvent = this.#appendBridgeEvent(

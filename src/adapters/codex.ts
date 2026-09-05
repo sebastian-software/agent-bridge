@@ -46,14 +46,8 @@ function reasoningEffort(value: string): string {
 
 function resolvePolicy(request: StartInvocationRequest): import("./types.js").PolicyResolution {
   const unsupported: string[] = [];
-  if (request.requestedPolicy.filesystem === "inherit") {
-    unsupported.push("requestedPolicy.filesystem=inherit");
-  }
   if (request.requestedPolicy.commands === "deny") {
     unsupported.push("requestedPolicy.commands=deny");
-  }
-  if (request.requestedPolicy.network === "inherit") {
-    unsupported.push("requestedPolicy.network=inherit");
   }
   const controls: Array<Readonly<Record<string, JsonValue>>> = [
     { flag: "--sandbox", value: request.requestedPolicy.filesystem === "read-only" ? "read-only" : "workspace-write" },

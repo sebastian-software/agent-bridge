@@ -3,14 +3,15 @@
 The bridge has three versioned surfaces: the invocation schemas and operation
 description use schema/operations version `1.0`, and local Unix-socket IPC uses
 protocol `1.0`. `system.describe` is the source of truth for the operation
-list, route descriptors, and broker configuration. The JSON files in
+list and broker configuration; `route.discover` is the source of truth for
+route descriptors. The JSON files in
 [`schemas/`](../schemas/) are the machine-readable contract.
 
 ## Operations
 
 | Operation | Purpose | Next affordances |
 | --- | --- | --- |
-| `system.describe` | Describe versions, operations, routes, and settings | — |
+| `system.describe` | Describe versions, operations, and settings | — |
 | `system.status` | Inspect broker readiness, counts, and environment names | `broker stop` |
 | `system.shutdown` | Stop the broker, optionally forcing active work to interrupt | — |
 | `route.discover` | Discover qualified and authenticated routes | `invocation.start` |
@@ -37,6 +38,10 @@ queued → running → waiting_for_input → running
    ├────────┴──────────────┴─────────────┴──→ cancelling → terminal
    └────────────────────────────────────────→ terminal
 ```
+
+`waiting_for_input` is reachable only through adapters exposing a response
+channel: the fake interactive fixture and Claude's orchestrator route in this
+release. Deny and unattended routes do not enter that state.
 
 Terminal states are `succeeded`, `failed`, `cancelled`, `timed_out`, and
 `interrupted`. A broker restart produces `interrupted`; a timeout produces
@@ -67,8 +72,11 @@ expired request IDs are rejected rather than guessed.
 `content` is the delegate's returned answer. `artifacts` are returned content
 references. `effects` are observed workspace changes (`created`, `modified`,
 `deleted`, `renamed`, or `unknown`) with evidence marked as `git-status` or
-`harness-reported`. `effectObservation.complete` and its diagnostics say when
-the before/after snapshot was incomplete.
+`harness-reported`. Harness-reported paths inside `workingDirectory` are
+normalized to relative paths; paths outside it remain absolute and carry
+`outsideWorkspace: true`. Git-observed paths are workspace-relative.
+`effectObservation.complete` and its diagnostics say when the before/after
+snapshot was incomplete.
 
 `observedIdentity` keeps provider, model, harness version, and native session
 ID separate from the requested and resolved identities. Each value carries

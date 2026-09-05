@@ -88,9 +88,6 @@ function permissionMode(context: AdapterRunContext): string {
 
 function resolvePolicy(request: StartInvocationRequest): import("./types.js").PolicyResolution {
   const unsupported: string[] = [];
-  if (request.requestedPolicy.filesystem === "inherit") {
-    unsupported.push("requestedPolicy.filesystem=inherit");
-  }
   if (request.requestedPolicy.network !== undefined && request.requestedPolicy.network !== "inherit") {
     unsupported.push("requestedPolicy.network");
   }

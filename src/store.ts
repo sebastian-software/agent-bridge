@@ -208,11 +208,15 @@ function parsePolicy(value: unknown, field: string, requestPolicy: PolicyEvidenc
 function parseEffect(value: unknown, field: string): WorkspaceEffect {
   const source = objectValue(value, field);
   const previousPath = optionalString(source.previousPath, `${field}.previousPath`);
+  if (source.outsideWorkspace !== undefined && source.outsideWorkspace !== true) {
+    corrupt(`${field}.outsideWorkspace must be true when present.`);
+  }
   return {
     path: requiredString(source.path, `${field}.path`),
     ...(previousPath === undefined ? {} : { previousPath }),
     kind: literal(source.kind, `${field}.kind`, ["created", "deleted", "modified", "renamed", "unknown"] as const),
     evidence: literal(source.evidence, `${field}.evidence`, ["git-status", "harness-reported"] as const),
+    ...(source.outsideWorkspace === true ? { outsideWorkspace: true } : {}),
   };
 }
 
