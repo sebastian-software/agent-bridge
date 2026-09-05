@@ -128,6 +128,14 @@ export abstract class ProcessAdapter implements Adapter {
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     });
+    let childError: Error | undefined;
+    const exitPromise = new Promise<{ readonly code: number | null; readonly signal: NodeJS.Signals | null }>((resolve) => {
+      child.once("error", (error) => {
+        childError = error;
+        resolve({ code: null, signal: null });
+      });
+      child.once("close", (code, signal) => resolve({ code, signal }));
+    });
     if (command.keepStdinOpen === true) {
       if (command.stdin !== undefined) {
         child.stdin?.write(command.stdin);
@@ -246,10 +254,10 @@ export abstract class ProcessAdapter implements Adapter {
           }
         }
       }
-      const exit = await new Promise<{ readonly code: number | null; readonly signal: NodeJS.Signals | null }>((resolve, reject) => {
-        child.once("error", reject);
-        child.once("close", (code, signal) => resolve({ code, signal }));
-      });
+      const exit = await exitPromise;
+      if (childError !== undefined) {
+        throw childError;
+      }
       if (context.signal.aborted) {
         throw abortError();
       }
