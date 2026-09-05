@@ -23,7 +23,7 @@ process.on("SIGINT", () => process.exit(130));
 process.on("SIGTERM", () => process.exit(143));
 
 if (
-  !["success", "failure", "timeout", "malformed", "truncated", "effects", "cancel", "identity-absent", "slow"].includes(
+  !["success", "failure", "timeout", "malformed", "truncated", "effects", "cancel", "identity-absent", "slow", "exit-before-read"].includes(
     scenario,
   )
 ) {
@@ -44,6 +44,8 @@ if (
   } else if (scenario === "truncated") {
     process.stdout.write(JSON.stringify({ type: "assistant", text }));
     process.exitCode = 0;
+  } else if (scenario === "exit-before-read") {
+    process.exit(0);
   } else if (scenario === "failure") {
     emit({ type: "diagnostic", message: "fake harness failure" });
     process.exitCode = 7;
