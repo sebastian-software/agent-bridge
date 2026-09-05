@@ -8,11 +8,10 @@ control with a normalized outcome.
 
 - [`CONTEXT.md`](CONTEXT.md): domain glossary and resolved invariants. This is
   the source of truth for terminology.
-- [`docs/adr/`](docs/adr/): architecture decision records. Each accepted ADR
-  supersedes earlier drafts on the topic it decides.
+- [`docs/adr/`](docs/adr/): architecture decision records.
 
-The original RFC-0001 was retired on 2026-09-05. Its still-valid content lives
-in `CONTEXT.md` and the ADRs; the rest was superseded by ADR-0001 to ADR-0006.
+ADRs are edited in place while the design is young. Git history is the record
+of how a decision evolved; the current text is always the current decision.
 
 ## Planning
 

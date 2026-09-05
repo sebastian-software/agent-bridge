@@ -28,8 +28,7 @@ It does not become the caller's workflow orchestrator.
 - **Delegation selector:** The caller's ad-hoc description of the desired
   delegate: provider, model, effort, optional harness family, and optional
   required capabilities. It is not a pre-created named object.
-- **Delegate:** The harness route chosen for one invocation. The term replaces
-  "target" used in early drafts.
+- **Delegate:** The harness route chosen for one invocation.
 - **Resolved route:** The concrete adapter, executable, harness version,
   authenticated native context, and model selection chosen for one invocation.
 - **Invocation:** One asynchronous, bounded delegation from an orchestrator to
@@ -83,8 +82,8 @@ It does not become the caller's workflow orchestrator.
 
 ## Process and security boundary invariants
 
-These invariants were carried over from the retired RFC-0001. They describe the
-bridge's own boundary, not a sandbox around the harness.
+These invariants describe the bridge's own boundary, not a sandbox around the
+harness.
 
 - Routes resolve only to reviewed adapters and the executables they qualify.
   The bridge never turns an arbitrary executable, URL, or shell fragment into a

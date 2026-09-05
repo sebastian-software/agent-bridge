@@ -2,7 +2,6 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-24
-- **Amended:** 2026-09-05
 
 ## Context
 
@@ -38,11 +37,3 @@ separate capability with its own lifecycle and ownership contract.
 
 - Exact task, run, and attempt state machines.
 - Whether a future standalone workflow mode is desirable at all.
-
-## Amendments
-
-- 2026-09-05: Status raised from Proposed to Accepted. `CONTEXT.md` already
-  lists the caller-only root as a resolved invariant and ADR-0002 depends on
-  this decision. The question whether a normalization helper belongs in the
-  bridge is answered by ADR-0002: outcome normalization is core, review
-  aggregation is not.

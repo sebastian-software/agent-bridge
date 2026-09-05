@@ -2,7 +2,6 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-24
-- **Amended:** 2026-09-05
 
 ## Context
 
@@ -57,11 +56,3 @@ effects, including modifications made directly to files in a Git workspace.
 - How workspace changes are captured and represented in the outcome.
 - How interactive permission and user-input requests return to the orchestrator.
 - Whether invocation state survives termination of the orchestrator process.
-
-## Amendments
-
-- 2026-09-05: The original text called MCP the primary harness-facing
-  integration. ADR-0006 decided the opposite: the CLI is the universal surface
-  and MCP is an optional projection. The decision text now reflects ADR-0006.
-  The term "target" was replaced by "delegate" and "route" to match
-  `CONTEXT.md` and ADR-0004, which rejects pre-created target objects.
