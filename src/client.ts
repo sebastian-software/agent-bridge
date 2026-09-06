@@ -19,6 +19,13 @@ import { PACKAGE_VERSION } from "./version.js";
 
 const MAX_STARTUP_DIAGNOSTIC_BYTES = 4 * 1024;
 
+function normalizeStartupDiagnostic(line: string): string {
+  return line
+    .replace(/^agent-bridge:\s*/i, "")
+    .replace(/\s+\([A-Za-z0-9_]+\)\s*$/, "")
+    .trim();
+}
+
 export interface InspectionResult {
   readonly schemaVersion: string;
   readonly invocationId: string;
@@ -321,7 +328,7 @@ export class AgentBridgeClient {
       }
       const startupDiagnostic = startupStderr
         .split(/\r?\n/)
-        .map((line) => line.trim())
+        .map(normalizeStartupDiagnostic)
         .find((line) => line !== "");
       throw new BridgeError(
         {
