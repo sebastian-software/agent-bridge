@@ -97,6 +97,7 @@ work.
 ---
 
 <!-- sebastian-software-branding:start -->
+
 <p align="center">
   <a href="https://oss.sebastian-software.com">
     <img src="https://sebastian-brand.vercel.app/sebastian-software/logo-software.svg" alt="Sebastian Software" width="240" />
@@ -109,4 +110,5 @@ work.
 </p>
 
 <p align="center">Copyright &copy; 2026 Sebastian Software GmbH</p>
+
 <!-- sebastian-software-branding:end -->
