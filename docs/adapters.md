@@ -27,7 +27,8 @@ and terminal error handling.
   `interactionStrategies`;
 - a `policySupport` table for filesystem, commands, network, and additional
   directories; and
-- a precise `qualificationClaim` describing the tested native contract.
+- a precise `qualificationClaim` describing the contract covered by the
+  qualification suite.
 
 Model entries also declare one canonical native model ID and optional request
 aliases. Discovery publishes one route for the canonical ID and one for each
@@ -88,6 +89,13 @@ qualified.
 - Record a stable qualification ID, test date, test-suite path, and the exact
   test commit or tag in the manifest. Discovery adds the observed installed
   version to the claim without changing the static `testedAt` evidence.
+- Keep the static manifest claim limited to what the suite actually verifies:
+  discovery, argument construction, and normalizer fixtures do not prove that
+  a real harness or model was executed.
+- If an opt-in run against an installed harness is performed, record its
+  observed harness version and model IDs in a separate runtime qualification
+  record. Never synthesize that record from discovery or overwrite the static
+  `testedAt`/`testCommit` facts.
 - Verify authentication without exposing credentials or placing them in argv.
 - Exercise every advertised model, effort, capability, and interaction mode.
 - Verify stdin behavior, bounded native output, identity evidence, usage, and

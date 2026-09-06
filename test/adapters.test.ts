@@ -207,6 +207,8 @@ test("route discovery reports qualified and authenticated command routes", async
   assert.equal(opusAlias?.canonicalModel, "claude-opus-4-8");
   assert.equal(opusAlias?.qualification[0]?.testedAt, "2026-09-05T22:04:14+02:00");
   assert.match(opusAlias?.qualification[0]?.claim ?? "", /test\/adapters\.test\.ts/);
+  assert.match(opusAlias?.qualification[0]?.claim ?? "", /verifies route discovery, command argument construction/);
+  assert.doesNotMatch(opusAlias?.qualification[0]?.claim ?? "", /exercised native model/);
   const haiku = routes.find((candidate) => candidate.model === "claude-haiku-4-5-20251001");
   assert.equal(haiku?.canonicalModel, "claude-haiku-4-5-20251001");
 });
@@ -224,6 +226,7 @@ test("Codex discovery exposes canonical model IDs and documented family aliases"
   const alias = routes.find((candidate) => candidate.model === "gpt-5-codex");
   assert.equal(alias?.canonicalModel, "gpt-5.3-codex");
   assert.match(alias?.qualification[0]?.claim ?? "", /2473c44fc41befe82847287b13af53245c008a39/);
+  assert.match(alias?.qualification[0]?.claim ?? "", /runtime model identity requires a separate opt-in/);
 });
 
 test("route discovery fails closed for an unqualified harness version", async () => {
