@@ -396,6 +396,11 @@ test("broker supervises the fake harness process across success and failure scen
             effect.path.endsWith("fake-renamed.txt"),
           ),
         );
+        const effectEvents = (await broker.events({ invocationId: started.invocationId })).events.filter(
+          (event) => event.category === "effect",
+        );
+        assert.ok(effectEvents.length > 0);
+        assert.ok(effectEvents.every((event) => typeof event.data?.path === "string"));
       }
     } finally {
       await broker.close();

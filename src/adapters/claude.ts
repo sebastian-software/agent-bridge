@@ -176,12 +176,28 @@ function usageFrom(value: unknown): Usage | undefined {
   };
 }
 
-function effectFromTool(block: unknown): WorkspaceEffect | undefined {
+function messageBlocks(value: unknown): readonly unknown[] {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return [];
+  }
+  const message = (value as Record<string, unknown>).message;
+  if (typeof message !== "object" || message === null || Array.isArray(message)) {
+    return [];
+  }
+  const content = (message as Record<string, unknown>).content;
+  return Array.isArray(content) ? content : [];
+}
+
+function toolUseEffect(block: unknown): { readonly toolUseId: string; readonly effect: WorkspaceEffect } | undefined {
   if (typeof block !== "object" || block === null || Array.isArray(block)) {
     return undefined;
   }
   const source = block as Record<string, unknown>;
-  if (source.type !== "tool_use" || !["Edit", "MultiEdit", "Write", "NotebookEdit"].includes(String(source.name))) {
+  if (
+    source.type !== "tool_use" ||
+    typeof source.id !== "string" ||
+    !["Edit", "MultiEdit", "Write", "NotebookEdit"].includes(String(source.name))
+  ) {
     return undefined;
   }
   const input =
@@ -191,7 +207,53 @@ function effectFromTool(block: unknown): WorkspaceEffect | undefined {
   const path = [input.file_path, input.path, input.notebook_path].find(
     (candidate): candidate is string => typeof candidate === "string" && candidate !== "",
   );
-  return path === undefined ? undefined : { path, kind: "modified", evidence: "harness-reported" };
+  return path === undefined
+    ? undefined
+    : { toolUseId: source.id, effect: { path, kind: "modified", evidence: "harness-reported" } };
+}
+
+function toolResultIsDenied(block: Record<string, unknown>): boolean {
+  if (block.is_error === true || block.is_denied === true || block.error === true) {
+    return true;
+  }
+  const content =
+    typeof block.content === "string"
+      ? block.content
+      : Array.isArray(block.content)
+        ? block.content
+            .filter(
+              (part): part is { text: string } =>
+                typeof part === "object" &&
+                part !== null &&
+                !Array.isArray(part) &&
+                typeof (part as Record<string, unknown>).text === "string",
+            )
+            .map((part) => part.text)
+            .join(" ")
+        : "";
+  return /(?:permission|user).*(?:denied|rejected)|(?:denied|rejected|not allowed)/i.test(content);
+}
+
+function confirmedToolEffects(
+  value: Record<string, JsonValue>,
+  state: { pendingEffects?: Map<string, WorkspaceEffect> },
+): readonly WorkspaceEffect[] {
+  const pendingEffects = state.pendingEffects;
+  if (pendingEffects === undefined) {
+    return [];
+  }
+  return messageBlocks(value).flatMap((block): WorkspaceEffect[] => {
+    if (typeof block !== "object" || block === null || Array.isArray(block)) {
+      return [];
+    }
+    const source = block as Record<string, unknown>;
+    if (source.type !== "tool_result" || typeof source.tool_use_id !== "string") {
+      return [];
+    }
+    const effect = pendingEffects.get(source.tool_use_id);
+    pendingEffects.delete(source.tool_use_id);
+    return effect === undefined || toolResultIsDenied(source) ? [] : [effect];
+  });
 }
 
 function textFromMessage(value: unknown): string | undefined {
@@ -260,6 +322,7 @@ export class ClaudeAdapter extends ProcessAdapter {
     state: {
       identity: import("../contract.js").ObservedIdentity;
       content: { add(text: string): void; setFinal(text: string): void };
+      pendingEffects?: Map<string, WorkspaceEffect>;
     },
   ): AdapterEvent | undefined {
     const type = typeof value.type === "string" ? value.type : "unknown";
@@ -302,6 +365,10 @@ export class ClaudeAdapter extends ProcessAdapter {
         };
       }
     }
+    if (type === "user") {
+      const effects = confirmedToolEffects(value, state);
+      return effects.length === 0 ? undefined : { category: "effect", effects };
+    }
     if (type === "assistant") {
       const text = textFromMessage(value.message);
       const blocks =
@@ -311,18 +378,22 @@ export class ClaudeAdapter extends ProcessAdapter {
         Array.isArray(value.message.content)
           ? value.message.content
           : [];
-      const effects = blocks.map(effectFromTool).filter((effect): effect is WorkspaceEffect => effect !== undefined);
+      const pendingEffects = state.pendingEffects ?? new Map<string, WorkspaceEffect>();
+      state.pendingEffects ??= pendingEffects;
+      for (const block of blocks) {
+        const captured = toolUseEffect(block);
+        if (captured !== undefined) {
+          pendingEffects.set(captured.toolUseId, captured.effect);
+        }
+      }
       if (text !== undefined) {
         return {
           category: "output",
           content: [{ type: "text", text }],
-          ...(effects.length === 0 ? {} : { effects }),
           native: value,
         };
       }
-      if (effects.length > 0) {
-        return { category: "effect", effects, native: value };
-      }
+      return undefined;
     }
     if (type === "result") {
       const text = typeof value.result === "string" ? value.result : undefined;

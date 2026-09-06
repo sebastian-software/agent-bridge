@@ -106,7 +106,11 @@ export abstract class ProcessAdapter implements Adapter {
 
   protected abstract normalizeNative(
     value: Record<string, JsonValue>,
-    state: { identity: ObservedIdentity; content: ContentAccumulator },
+    state: {
+      identity: ObservedIdentity;
+      content: ContentAccumulator;
+      pendingEffects?: Map<string, WorkspaceEffect>;
+    },
   ): AdapterEvent | undefined;
 
   async run(context: AdapterRunContext): Promise<AdapterRunResult> {
@@ -174,6 +178,7 @@ export abstract class ProcessAdapter implements Adapter {
       identity: identity(context.route.provider, context.route.harnessVersion),
       content: new ContentAccumulator(),
       effects: [] as WorkspaceEffect[],
+      pendingEffects: new Map<string, WorkspaceEffect>(),
       usage: undefined as Usage | undefined,
       failure: undefined as AdapterEvent["failure"],
     };
