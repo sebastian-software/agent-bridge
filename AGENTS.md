@@ -20,10 +20,10 @@ pnpm install --frozen-lockfile
 pnpm agent:check
 ```
 
-`pnpm agent:check` runs OxLint and ESLint, the oxfmt format check, TypeScript
-validation, the build and the test suite. `pnpm check` is the fuller gate CI
-runs: `agent:check` plus the ADR index check, coverage and the package
-dry-run.
+`pnpm agent:check` runs OxLint and ESLint, the workflow action pin check, the
+oxfmt format check, TypeScript validation, the build and the test suite.
+`pnpm check` is the fuller gate CI runs: `agent:check` plus the ADR index
+check, coverage and the package dry-run.
 
 ## Where the context lives
 
@@ -34,6 +34,8 @@ dry-run.
   its row in the table; `pnpm docs:adr-index` checks that the two agree.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) explains the gate step by step, the two
   fake harnesses, and the adapter SPI.
+- [`docs/releasing.md`](docs/releasing.md) describes the automated release and
+  publish flow.
 - [`docs/contract.md`](docs/contract.md), [`docs/cli.md`](docs/cli.md),
   [`docs/mcp.md`](docs/mcp.md) and [`docs/adapters.md`](docs/adapters.md)
   describe the published surface. Keep them in step with the code.
