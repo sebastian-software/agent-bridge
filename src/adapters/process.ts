@@ -213,6 +213,14 @@ export abstract class ProcessAdapter implements Adapter {
     };
     context.signal.addEventListener("abort", onAbort, { once: true });
 
+    // Attach the stdout consumer before the first await. When the child exits,
+    // Node flushes and discards every stdio stream nobody is reading yet, so a
+    // harness that finishes while the process_started event is still being
+    // persisted would otherwise lose its whole output and be reported as
+    // succeeded with empty content.
+    const lines = child.stdout === null ? undefined : createInterface({ input: child.stdout });
+    const lineStream = lines?.[Symbol.asyncIterator]();
+
     try {
       await context.emit({
         category: "activity",
@@ -222,12 +230,11 @@ export abstract class ProcessAdapter implements Adapter {
           deniedEnvironment: [...deniedEnvironment].sort(),
         },
       });
-      const lines = child.stdout === null ? undefined : createInterface({ input: child.stdout });
-      if (lines !== undefined) {
+      if (lines !== undefined && lineStream !== undefined) {
         void exitPromise.then(() => {
           lines.close();
         });
-        for await (const line of lines) {
+        for await (const line of lineStream) {
           if (typeof line !== "string" || line.trim() === "") {
             continue;
           }
@@ -379,6 +386,7 @@ export abstract class ProcessAdapter implements Adapter {
         ...(state.usage === undefined ? {} : { usage: state.usage }),
       };
     } finally {
+      lines?.close();
       context.signal.removeEventListener("abort", onAbort);
       if (terminationTimer !== undefined) {
         clearTimeout(terminationTimer);

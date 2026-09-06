@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 
 import type { AdapterEvent, AdapterRunContext } from "../src/adapters/types.js";
 import type {
@@ -271,6 +272,23 @@ test("process adapter normalizes JSONL output and preserves the absolute executa
   });
   assert.deepEqual(result.content, [{ type: "text", text: "hello" }]);
   assert.equal(events.at(-1)?.category, "output");
+});
+
+test("process adapter keeps the output of a harness that exits before the first event is persisted", async () => {
+  const adapter = new TestProcessAdapter();
+  const result = await adapter.run({
+    invocationId: "inv_fast_exit",
+    request: request(process.cwd()),
+    route: route(adapter.id, process.execPath),
+    signal: new AbortController().signal,
+    async emit(event) {
+      if (event.data?.phase === "process_started") {
+        // A slow store write: the harness has long exited by the time it resolves.
+        await delay(300);
+      }
+    },
+  });
+  assert.deepEqual(result.content, [{ type: "text", text: "hello" }]);
 });
 
 test("process adapter sends prompt on stdin and filters denied environment variables", async () => {
