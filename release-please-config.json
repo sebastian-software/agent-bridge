@@ -1,0 +1,13 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "bootstrap-sha": "9b90b637455eee5e65b2fb3a091cc6afc2780520",
+  "release-type": "node",
+  "include-component-in-tag": false,
+  "packages": {
+    ".": {
+      "component": "agent-bridge",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": ["src/version.ts"]
+    }
+  }
+}

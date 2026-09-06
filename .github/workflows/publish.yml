@@ -1,0 +1,104 @@
+# Release Please opens one release pull request per product version; merging it
+# creates the tag, the GitHub Release and the changelog entry, and the gated
+# publish job below runs from that tag.
+#
+# The manual path exists for retries only: when the publish job failed after the
+# release was cut, dispatch the workflow with that release's tag. It checks out
+# the tag, never `main`, so a delayed retry cannot publish newer sources under a
+# version that already exists.
+#
+# Publishing uses npm Trusted Publishing (OIDC). It needs `id-token: write` and
+# no NPM_TOKEN; the token must be configured for
+# @sebastian-software/agent-bridge on npmjs.com before the first release.
+
+name: publish
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to (re)publish, for example v0.1.1"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    name: Release please
+    if: ${{ github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      releases_created: ${{ steps.release.outputs.releases_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - name: Run release-please
+        id: release
+        uses: googleapis/release-please-action@0dfd8538845b8e92600d271a895a5372865d4062 # v5
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          # Events created with the built-in GITHUB_TOKEN do not start new
+          # workflow runs. The app token lets CI run on the release pull
+          # request itself; without it the release PR simply has no checks.
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+
+  publish-npm:
+    name: Publish to npm
+    needs: release-please
+    # `!cancelled()` lets the job run when release-please was skipped by the
+    # manual path; a plain `needs` would skip it too.
+    if: >-
+      ${{ !cancelled() && (
+        (github.event_name == 'push' && needs.release-please.outputs.releases_created == 'true') ||
+        github.event_name == 'workflow_dispatch'
+      ) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Kept from the workflow this replaces: any approval or branch protection
+    # the owner attaches to the npm-release environment still gates publishing.
+    environment: npm-release
+    permissions:
+      contents: read
+      # npm exchanges this GitHub Actions OIDC token for a short-lived publish
+      # credential. No NPM_TOKEN is required or consumed.
+      id-token: write
+    steps:
+      - name: Check out the release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # Always the release tag: from release-please on the push path, from
+          # the operator on the manual path. Checkout fails on an unknown tag.
+          ref: ${{ inputs.tag || needs.release-please.outputs.tag_name }}
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24.x
+          registry-url: https://registry.npmjs.org
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify the release candidate
+        run: pnpm check
+
+      - name: Publish with npm provenance
+        # --no-git-checks: the tag is checked out detached, which pnpm would
+        # otherwise reject as "not on a branch".
+        run: pnpm publish --provenance --access public --no-git-checks
