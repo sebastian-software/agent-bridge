@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability by email
+    url: mailto:security@sebastian-software.de
+    about: Do not open a public issue. Email the private security inbox; this route always works.
+  - name: Report a security vulnerability as a private advisory
+    url: https://github.com/sebastian-software/agent-bridge/security/advisories/new
+    about: Do not open a public issue. Works once private vulnerability reporting is enabled for this repository; otherwise use the email route above.
