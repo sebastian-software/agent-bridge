@@ -65,6 +65,7 @@
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
+    "@sebastian-software/standards": "0.9.0",
     "@types/node": "24.10.1",
     "eslint": "^10.10.0",
     "eslint-config-setup": "^0.5.2",
