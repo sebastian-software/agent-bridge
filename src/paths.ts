@@ -8,7 +8,11 @@ export type BrokerPaths = {
   readonly runtimeDirectory: string;
   readonly stateDirectory: string;
   readonly socketPath: string;
-  /** Legacy socket retained for one release when migrating from XDG_RUNTIME_DIR/broker.sock. */
+  /**
+   * Legacy socket kept reachable while brokers started before the scoped path
+   * existed may still be running. Removal is tracked in issue #127, targeted at
+   * the first release after 0.1.0.
+   */
   readonly legacySocketPath?: string;
   readonly stateFile: string;
 };
