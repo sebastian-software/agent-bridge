@@ -54,7 +54,8 @@ Two deterministic fixtures let you exercise the broker without an installed
 harness or a model call.
 
 `--via fake` is an in-process adapter with the routes `fake-echo`, `fake-slow`,
-and `fake-fail`:
+and `fake-fail`. It qualifies every interaction strategy, so the default
+`orchestrator` works:
 
 ```sh
 agent-bridge run --provider agent-bridge --model fake-echo --via fake \
@@ -65,11 +66,13 @@ agent-bridge run --provider agent-bridge --model fake-echo --via fake \
 it covers process supervision: stdin, stderr bounds, cancellation of the process
 group, timeout grace, and JSONL parsing. Its model name selects the scenario —
 `success`, `failure`, `timeout`, `malformed`, `truncated`, `effects`, `cancel`,
-`identity-absent`, `slow`, or `exit-before-read`:
+`identity-absent`, `slow`, or `exit-before-read`. These routes qualify `deny`
+and `unattended` only, so pass `--interaction`; the CLI otherwise defaults to
+`orchestrator` and resolution fails with `route_unavailable`:
 
 ```sh
 agent-bridge run --provider agent-bridge --model effects --via fake-process \
-  --cwd "$(mktemp -d)" "write a file"
+  --interaction deny --cwd "$(mktemp -d)" "write a file"
 ```
 
 The script also runs on its own, which is the quickest way to inspect the JSONL

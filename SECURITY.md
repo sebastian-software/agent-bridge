@@ -17,6 +17,10 @@ Two private channels are available:
   **Security** tab and choose **Report a vulnerability**.
 - **Email** — security@sebastian-software.de.
 
+Either channel is fine. Email is the one that always works: when the **Security**
+tab offers no **Report a vulnerability** button, private reporting is not enabled
+yet for this repository, so send the report by email instead.
+
 Include a concise description, the affected version or commit, reproduction
 steps, the impact you expect, and any suggested fix. Leave out credentials and
 data you are not allowed to share.
