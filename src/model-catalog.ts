@@ -3,23 +3,24 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import type { QualificationEvidence, RouteDescriptor } from "./contract.js";
+
 import { BridgeError } from "./errors.js";
 
-export interface UserModelDefinition {
+export type UserModelDefinition = {
   readonly nativeModel: string;
   readonly efforts?: readonly string[];
   readonly capabilities?: readonly string[];
   readonly interactionStrategies?: RouteDescriptor["interactionStrategies"];
-}
+};
 
-export interface UserAdapterCatalog {
+export type UserAdapterCatalog = {
   readonly aliases?: Readonly<Record<string, string>>;
   readonly models?: Readonly<Record<string, UserModelDefinition>>;
-}
+};
 
-export interface UserModelCatalog {
+export type UserModelCatalog = {
   readonly adapters?: Readonly<Record<string, UserAdapterCatalog>>;
-}
+};
 
 export function defaultCatalogPath(): string {
   const configHome = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
@@ -33,7 +34,9 @@ function object(value: unknown): Record<string, unknown> | undefined {
 }
 
 function stringArray(value: unknown): readonly string[] | undefined {
-  return Array.isArray(value) && value.every((entry) => typeof entry === "string" && entry !== "") ? value : undefined;
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string" && entry !== "")
+    ? value
+    : undefined;
 }
 
 function parseCatalog(value: unknown, path: string): UserModelCatalog {
@@ -59,7 +62,8 @@ function parseCatalog(value: unknown, path: string): UserModelCatalog {
     const aliases = adapter.aliases === undefined ? undefined : object(adapter.aliases);
     if (
       adapter.aliases !== undefined &&
-      (aliases === undefined || !Object.values(aliases).every((value) => typeof value === "string" && value !== ""))
+      (aliases === undefined ||
+        !Object.values(aliases).every((value) => typeof value === "string" && value !== ""))
     ) {
       throw new BridgeError({
         code: "invalid_request",
@@ -78,7 +82,11 @@ function parseCatalog(value: unknown, path: string): UserModelCatalog {
     const models: Record<string, UserModelDefinition> = {};
     for (const [modelId, rawModel] of Object.entries(modelsSource ?? {})) {
       const model = object(rawModel);
-      if (model === undefined || typeof model.nativeModel !== "string" || model.nativeModel === "") {
+      if (
+        model === undefined ||
+        typeof model.nativeModel !== "string" ||
+        model.nativeModel === ""
+      ) {
         throw new BridgeError({
           code: "invalid_request",
           message: `Model catalog entry ${adapterId}/${modelId} needs nativeModel.`,
@@ -86,9 +94,12 @@ function parseCatalog(value: unknown, path: string): UserModelCatalog {
         });
       }
       const efforts = model.efforts === undefined ? undefined : stringArray(model.efforts);
-      const capabilities = model.capabilities === undefined ? undefined : stringArray(model.capabilities);
+      const capabilities =
+        model.capabilities === undefined ? undefined : stringArray(model.capabilities);
       const interactionStrategies =
-        model.interactionStrategies === undefined ? undefined : stringArray(model.interactionStrategies);
+        model.interactionStrategies === undefined
+          ? undefined
+          : stringArray(model.interactionStrategies);
       if (
         (model.efforts !== undefined && efforts === undefined) ||
         (model.capabilities !== undefined && capabilities === undefined) ||
@@ -106,7 +117,10 @@ function parseCatalog(value: unknown, path: string): UserModelCatalog {
         ...(capabilities === undefined ? {} : { capabilities }),
         ...(interactionStrategies === undefined
           ? {}
-          : { interactionStrategies: interactionStrategies as RouteDescriptor["interactionStrategies"] }),
+          : {
+              interactionStrategies:
+                interactionStrategies as RouteDescriptor["interactionStrategies"],
+            }),
       };
     }
     parsedAdapters[adapterId] = {
@@ -126,7 +140,11 @@ export async function loadUserModelCatalog(path = defaultCatalogPath()): Promise
       return {};
     }
     throw new BridgeError(
-      { code: "invalid_request", message: `Model catalog ${path} could not be read.`, retryable: false },
+      {
+        code: "invalid_request",
+        message: `Model catalog ${path} could not be read.`,
+        retryable: false,
+      },
       { cause: error },
     );
   }
@@ -137,13 +155,21 @@ export async function loadUserModelCatalog(path = defaultCatalogPath()): Promise
       throw error;
     }
     throw new BridgeError(
-      { code: "invalid_request", message: `Model catalog ${path} is not valid JSON.`, retryable: false },
+      {
+        code: "invalid_request",
+        message: `Model catalog ${path} is not valid JSON.`,
+        retryable: false,
+      },
       { cause: error },
     );
   }
 }
 
-function userEvidence(adapterId: string, modelId: string, nativeModel: string): QualificationEvidence {
+function userEvidence(
+  adapterId: string,
+  modelId: string,
+  nativeModel: string,
+): QualificationEvidence {
   return {
     qualificationId: `user-declared:${adapterId}:${modelId}`,
     testedAt: new Date().toISOString(),
@@ -155,7 +181,7 @@ function routeWithModel(
   route: RouteDescriptor,
   model: string,
   nativeModel: string,
-  catalog: UserModelDefinition | undefined,
+  catalog: undefined | UserModelDefinition,
   adapterId: string,
 ): RouteDescriptor {
   return {
@@ -165,7 +191,9 @@ function routeWithModel(
     canonicalModel: nativeModel,
     ...(catalog?.efforts === undefined ? {} : { efforts: catalog.efforts }),
     ...(catalog?.capabilities === undefined ? {} : { capabilities: catalog.capabilities }),
-    ...(catalog?.interactionStrategies === undefined ? {} : { interactionStrategies: catalog.interactionStrategies }),
+    ...(catalog?.interactionStrategies === undefined
+      ? {}
+      : { interactionStrategies: catalog.interactionStrategies }),
     qualification: [...route.qualification, userEvidence(adapterId, model, nativeModel)],
   };
 }
@@ -178,10 +206,21 @@ export function applyUserModelCatalog(
   for (const [adapterId, adapterCatalog] of Object.entries(catalog.adapters ?? {})) {
     const adapterRoutes = routes.filter((route) => route.adapter === adapterId);
     for (const [alias, target] of Object.entries(adapterCatalog.aliases ?? {})) {
-      const targetRoute = adapterRoutes.find((route) => route.model === target || route.canonicalModel === target);
-      if (targetRoute !== undefined && !result.some((route) => route.adapter === adapterId && route.model === alias)) {
+      const targetRoute = adapterRoutes.find(
+        (route) => route.model === target || route.canonicalModel === target,
+      );
+      if (
+        targetRoute !== undefined &&
+        !result.some((route) => route.adapter === adapterId && route.model === alias)
+      ) {
         result.push(
-          routeWithModel(targetRoute, alias, targetRoute.canonicalModel ?? targetRoute.model, undefined, adapterId),
+          routeWithModel(
+            targetRoute,
+            alias,
+            targetRoute.canonicalModel ?? targetRoute.model,
+            undefined,
+            adapterId,
+          ),
         );
       }
     }
@@ -191,7 +230,9 @@ export function applyUserModelCatalog(
     }
     for (const [modelId, definition] of Object.entries(adapterCatalog.models ?? {})) {
       if (!result.some((route) => route.adapter === adapterId && route.model === modelId)) {
-        result.push(routeWithModel(template, modelId, definition.nativeModel, definition, adapterId));
+        result.push(
+          routeWithModel(template, modelId, definition.nativeModel, definition, adapterId),
+        );
       }
     }
   }

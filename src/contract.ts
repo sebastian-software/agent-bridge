@@ -4,12 +4,17 @@ export const SCHEMA_VERSION = "1.0" as const;
 export const IPC_PROTOCOL_VERSION = "1.0" as const;
 
 export type JsonPrimitive = boolean | null | number | string;
-export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
+export type JsonValue = { [key: string]: JsonValue } | JsonPrimitive | JsonValue[];
 
 export type Assurance = "isolated" | "native" | "none";
 export type EvidenceStatus = "inferred" | "reported" | "unverified" | "verified";
 export type InteractionStrategy = "deny" | "orchestrator" | "unattended";
-export type InvocationState = "queued" | "running" | "waiting_for_input" | "cancelling" | TerminalStatus;
+export type InvocationState =
+  | "cancelling"
+  | "queued"
+  | "running"
+  | "waiting_for_input"
+  | TerminalStatus;
 export type TerminalStatus = "cancelled" | "failed" | "interrupted" | "succeeded" | "timed_out";
 
 export const TERMINAL_STATES: ReadonlySet<InvocationState> = new Set([
@@ -21,41 +26,41 @@ export const TERMINAL_STATES: ReadonlySet<InvocationState> = new Set([
 ]);
 
 export type ContentPart =
-  | { readonly type: "text"; readonly text: string }
-  | { readonly type: "json"; readonly value: JsonValue }
   | {
-      readonly type: "image" | "audio" | "file";
+      readonly type: "audio" | "file" | "image";
       readonly path: string;
       readonly mimeType: string;
       readonly byteSize?: number;
       readonly digest?: string;
     }
+  | { readonly type: "json"; readonly value: JsonValue }
   | {
       readonly type: "resource";
       readonly uri: string;
       readonly mimeType?: string;
       readonly byteSize?: number;
       readonly digest?: string;
-    };
+    }
+  | { readonly type: "text"; readonly text: string };
 
-export interface DelegationSelector {
+export type DelegationSelector = {
   readonly provider: string;
   readonly model: string;
   readonly effort?: string;
   readonly via?: string;
   readonly requiredCapabilities: readonly string[];
   readonly minimumObservedEvidence?: EvidenceStatus;
-}
+};
 
-export interface RequestedPolicy {
+export type RequestedPolicy = {
   readonly filesystem?: "inherit" | "read-only" | "workspace-write";
   readonly commands?: "allow" | "deny" | "inherit";
   readonly network?: "allow" | "deny" | "inherit";
   readonly additionalDirectories?: readonly string[];
   readonly minimumAssurance: Assurance;
-}
+};
 
-export interface StartInvocationRequest {
+export type StartInvocationRequest = {
   readonly selector: DelegationSelector;
   readonly input: readonly ContentPart[];
   readonly workingDirectory: string;
@@ -64,15 +69,15 @@ export interface StartInvocationRequest {
   readonly timeoutMs?: number;
   readonly callerCorrelationId?: string;
   readonly idempotencyKey?: string;
-}
+};
 
-export interface QualificationEvidence {
+export type QualificationEvidence = {
   readonly qualificationId: string;
   readonly testedAt: string;
   readonly claim: string;
-}
+};
 
-export interface RouteDescriptor {
+export type RouteDescriptor = {
   readonly routeId: string;
   readonly executable?: string;
   readonly canonicalModel?: string;
@@ -92,9 +97,9 @@ export interface RouteDescriptor {
   readonly diagnostics: readonly string[];
   readonly discoveredAt?: string;
   readonly policySupport?: Readonly<Record<string, readonly string[]>>;
-}
+};
 
-export interface ResolvedRoute {
+export type ResolvedRoute = {
   readonly routeId: string;
   readonly executable?: string;
   readonly canonicalModel?: string;
@@ -107,26 +112,26 @@ export interface ResolvedRoute {
   readonly via: string;
   readonly capabilities: readonly string[];
   readonly qualification: readonly QualificationEvidence[];
-}
+};
 
-export interface ObservedValue {
+export type ObservedValue = {
   readonly value?: string;
   readonly evidence: EvidenceStatus;
   readonly source?: string;
-}
+};
 
-export interface ObservedIdentity {
+export type ObservedIdentity = {
   readonly provider: ObservedValue;
   readonly model: ObservedValue;
   readonly harnessVersion: ObservedValue;
   readonly nativeSessionId: ObservedValue;
-}
+};
 
-export interface PolicyEvidence {
+export type PolicyEvidence = {
   readonly requestedPolicy: RequestedPolicy;
   readonly effectiveNativePolicy: Readonly<Record<string, JsonValue>>;
   readonly assurance: Assurance;
-}
+};
 
 export type EventCategory =
   | "activity"
@@ -138,7 +143,7 @@ export type EventCategory =
   | "output"
   | "usage";
 
-export interface InvocationEvent {
+export type InvocationEvent = {
   readonly schemaVersion: typeof SCHEMA_VERSION;
   readonly invocationId: string;
   readonly sequence: number;
@@ -152,23 +157,23 @@ export interface InvocationEvent {
     readonly adapter?: string;
   };
   readonly native?: Readonly<Record<string, JsonValue>>;
-}
+};
 
-export interface WorkspaceEffect {
+export type WorkspaceEffect = {
   readonly path: string;
   readonly previousPath?: string;
   readonly kind: "created" | "deleted" | "modified" | "renamed" | "unknown";
   readonly evidence: "git-status" | "harness-reported";
   /** True when a harness-reported path is outside the requested workspace. */
   readonly outsideWorkspace?: true;
-}
+};
 
-export interface EffectObservation {
+export type EffectObservation = {
   readonly complete: boolean;
   readonly diagnostics: readonly string[];
-}
+};
 
-export interface Usage {
+export type Usage = {
   readonly inputTokens?: number;
   readonly outputTokens?: number;
   readonly cacheReadTokens?: number;
@@ -177,24 +182,24 @@ export interface Usage {
   readonly costUsd?: number;
   readonly evidence: "reported";
   readonly source: string;
-}
+};
 
-export interface InputRequest {
+export type InputRequest = {
   readonly requestId: string;
   readonly kind: "permission";
   readonly prompt: string;
   readonly toolName?: string;
   /** Original tool input, kept transiently for native permission responses. */
   readonly input?: JsonValue;
-}
+};
 
-export interface InputResponse {
+export type InputResponse = {
   readonly invocationId: string;
   readonly requestId: string;
   readonly decision: "allow" | "deny";
-}
+};
 
-export interface InvocationOutcome {
+export type InvocationOutcome = {
   readonly schemaVersion: typeof SCHEMA_VERSION;
   readonly invocationId: string;
   readonly status: TerminalStatus;
@@ -212,9 +217,9 @@ export interface InvocationOutcome {
     readonly code: string;
     readonly message: string;
   };
-}
+};
 
-export interface InvocationRecord {
+export type InvocationRecord = {
   readonly schemaVersion: typeof SCHEMA_VERSION;
   readonly invocationId: string;
   readonly callerCorrelationId?: string;
@@ -231,30 +236,30 @@ export interface InvocationRecord {
   readonly eventCount: number;
   readonly events: readonly InvocationEvent[];
   readonly outcome?: InvocationOutcome;
-}
+};
 
-export interface InvocationTombstone {
+export type InvocationTombstone = {
   readonly invocationId: string;
   readonly evictedAt: string;
   readonly reason: "retention";
-}
+};
 
-export interface StartInvocationResult {
+export type StartInvocationResult = {
   readonly invocationId: string;
   readonly state: InvocationState;
   readonly deduplicated: boolean;
   readonly next: readonly string[];
-}
+};
 
-export interface EventsResult {
+export type EventsResult = {
   readonly invocationId: string;
   readonly state: InvocationState;
   readonly events: readonly InvocationEvent[];
   readonly nextCursor?: string;
   readonly terminal: boolean;
-}
+};
 
-export interface InvocationSummary {
+export type InvocationSummary = {
   readonly invocationId: string;
   readonly state: InvocationState;
   readonly requestedSelector: DelegationSelector;
@@ -263,22 +268,21 @@ export interface InvocationSummary {
   readonly completedAt?: string;
   readonly workingDirectory: string;
   readonly callerCorrelationId?: string;
-}
+};
 
-export interface InvocationListResult {
+export type InvocationListResult = {
   readonly invocations: readonly InvocationSummary[];
   readonly tombstones: readonly InvocationTombstone[];
-}
+};
 
-export interface OperationRequest {
+export type OperationRequest = {
   readonly protocolVersion: typeof IPC_PROTOCOL_VERSION;
   readonly id: string;
   readonly operation: string;
   readonly params: unknown;
-}
+};
 
 export type OperationResponse =
-  | { readonly id: string; readonly ok: true; readonly result: unknown }
   | {
       readonly id: string;
       readonly ok: false;
@@ -288,7 +292,8 @@ export type OperationResponse =
         readonly retryable: boolean;
         readonly details?: Readonly<Record<string, unknown>>;
       };
-    };
+    }
+  | { readonly id: string; readonly ok: true; readonly result: unknown };
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -355,7 +360,14 @@ function optionalNonNegativeInteger(value: unknown, field: string): number | und
 
 function parseContentPart(value: unknown, field: string): ContentPart {
   const source = record(value, field);
-  const type = oneOf(source.type, `${field}.type`, ["text", "json", "image", "audio", "file", "resource"] as const);
+  const type = oneOf(source.type, `${field}.type`, [
+    "text",
+    "json",
+    "image",
+    "audio",
+    "file",
+    "resource",
+  ] as const);
 
   if (type === "text") {
     return { type, text: stringValue(source.text, `${field}.text`) };
@@ -435,7 +447,9 @@ export function parseStartInvocationRequest(value: unknown): StartInvocationRequ
   const source = record(value, "params");
   const selectorSource = record(source.selector, "params.selector");
   const policySource =
-    source.requestedPolicy === undefined ? {} : record(source.requestedPolicy, "params.requestedPolicy");
+    source.requestedPolicy === undefined
+      ? {}
+      : record(source.requestedPolicy, "params.requestedPolicy");
   if (!Array.isArray(source.input) || source.input.length === 0) {
     invalid("params.input must contain at least one content part.");
   }
@@ -462,33 +476,54 @@ export function parseStartInvocationRequest(value: unknown): StartInvocationRequ
   const commands =
     policySource.commands === undefined
       ? undefined
-      : oneOf(policySource.commands, "params.requestedPolicy.commands", ["inherit", "deny", "allow"] as const);
+      : oneOf(policySource.commands, "params.requestedPolicy.commands", [
+          "inherit",
+          "deny",
+          "allow",
+        ] as const);
   const network =
     policySource.network === undefined
       ? undefined
-      : oneOf(policySource.network, "params.requestedPolicy.network", ["inherit", "deny", "allow"] as const);
+      : oneOf(policySource.network, "params.requestedPolicy.network", [
+          "inherit",
+          "deny",
+          "allow",
+        ] as const);
   const additionalDirectories =
     policySource.additionalDirectories === undefined
       ? undefined
-      : stringArray(policySource.additionalDirectories, "params.requestedPolicy.additionalDirectories");
+      : stringArray(
+          policySource.additionalDirectories,
+          "params.requestedPolicy.additionalDirectories",
+        );
   const timeoutMs = optionalPositiveInteger(source.timeoutMs, "params.timeoutMs");
-  const callerCorrelationId = optionalString(source.callerCorrelationId, "params.callerCorrelationId");
+  const callerCorrelationId = optionalString(
+    source.callerCorrelationId,
+    "params.callerCorrelationId",
+  );
   const idempotencyKey = optionalString(source.idempotencyKey, "params.idempotencyKey");
 
   return {
     selector: {
-      provider: stringValue(selectorSource.provider, "params.selector.provider", { nonEmpty: true }),
+      provider: stringValue(selectorSource.provider, "params.selector.provider", {
+        nonEmpty: true,
+      }),
       model: stringValue(selectorSource.model, "params.selector.model", { nonEmpty: true }),
       ...(effort === undefined ? {} : { effort }),
       ...(via === undefined ? {} : { via }),
       requiredCapabilities:
         selectorSource.requiredCapabilities === undefined
           ? []
-          : stringArray(selectorSource.requiredCapabilities, "params.selector.requiredCapabilities"),
+          : stringArray(
+              selectorSource.requiredCapabilities,
+              "params.selector.requiredCapabilities",
+            ),
       ...(minimumObservedEvidence === undefined ? {} : { minimumObservedEvidence }),
     },
     input: parseContentParts(source.input, "params.input"),
-    workingDirectory: stringValue(source.workingDirectory, "params.workingDirectory", { nonEmpty: true }),
+    workingDirectory: stringValue(source.workingDirectory, "params.workingDirectory", {
+      nonEmpty: true,
+    }),
     interactionStrategy:
       source.interactionStrategy === undefined
         ? "orchestrator"
@@ -616,16 +651,20 @@ export function parseInvocationListParams(value: unknown): {
           "succeeded",
           "timed_out",
         ] as const);
-  const callerCorrelationId = optionalString(source.callerCorrelationId, "params.callerCorrelationId");
+  const callerCorrelationId = optionalString(
+    source.callerCorrelationId,
+    "params.callerCorrelationId",
+  );
   const since = optionalString(source.since, "params.since");
   if (since !== undefined && !Number.isFinite(Date.parse(since))) {
     invalid("params.since must be an ISO-8601 timestamp.");
   }
   const limit = source.limit === undefined ? 50 : source.limit;
-  if (typeof limit !== "number" || !Number.isSafeInteger(limit) || limit <= 0 || limit > 1_000) {
+  if (typeof limit !== "number" || !Number.isSafeInteger(limit) || limit <= 0 || limit > 1000) {
     invalid("params.limit must be a positive integer not exceeding 1000.");
   }
-  const includeTombstones = source.includeTombstones === undefined ? false : source.includeTombstones;
+  const includeTombstones =
+    source.includeTombstones === undefined ? false : source.includeTombstones;
   if (typeof includeTombstones !== "boolean") {
     invalid("params.includeTombstones must be a boolean.");
   }

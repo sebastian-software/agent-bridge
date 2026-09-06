@@ -1,15 +1,17 @@
 import type {
   JsonValue,
+  ObservedIdentity,
   RequestedPolicy,
   RouteDescriptor,
   StartInvocationRequest,
   Usage,
   WorkspaceEffect,
 } from "../contract.js";
+import type { AdapterEvent, AdapterRunContext, PolicyResolution } from "./types.js";
+
 import { BridgeError } from "../errors.js";
-import { type DiscoveryProbe, discoverManifestRoutes } from "./discovery.js";
+import { discoverManifestRoutes, type DiscoveryProbe } from "./discovery.js";
 import { type CommandSpec, ProcessAdapter, promptFor } from "./process.js";
-import type { AdapterEvent, AdapterRunContext } from "./types.js";
 
 export const CLAUDE_SESSION_ENVIRONMENT_DENY_LIST = [
   "CLAUDECODE",
@@ -69,7 +71,10 @@ const MANIFEST = {
   },
 } as const;
 
-function permissionModeFor(strategy: StartInvocationRequest["interactionStrategy"], policy: RequestedPolicy): string {
+function permissionModeFor(
+  strategy: StartInvocationRequest["interactionStrategy"],
+  policy: RequestedPolicy,
+): string {
   if (strategy === "deny") {
     return "dontAsk";
   }
@@ -86,13 +91,19 @@ function permissionMode(context: AdapterRunContext): string {
   return permissionModeFor(context.request.interactionStrategy, context.request.requestedPolicy);
 }
 
-function resolvePolicy(request: StartInvocationRequest): import("./types.js").PolicyResolution {
+function resolvePolicy(request: StartInvocationRequest): PolicyResolution {
   const unsupported: string[] = [];
-  if (request.requestedPolicy.network !== undefined && request.requestedPolicy.network !== "inherit") {
+  if (
+    request.requestedPolicy.network !== undefined &&
+    request.requestedPolicy.network !== "inherit"
+  ) {
     unsupported.push("requestedPolicy.network");
   }
   const controls: Array<Readonly<Record<string, JsonValue>>> = [
-    { flag: "--permission-mode", value: permissionModeFor(request.interactionStrategy, request.requestedPolicy) },
+    {
+      flag: "--permission-mode",
+      value: permissionModeFor(request.interactionStrategy, request.requestedPolicy),
+    },
   ];
   if (request.interactionStrategy === "orchestrator") {
     controls.push({ flag: "--input-format", value: "stream-json" });
@@ -150,13 +161,17 @@ function initialInput(context: AdapterRunContext): string {
   })}\n`;
 }
 
-function usageFrom(value: unknown): Usage | undefined {
+function numberValue(candidate: unknown): number | undefined {
+  return typeof candidate === "number" && Number.isFinite(candidate) && candidate >= 0
+    ? candidate
+    : undefined;
+}
+
+function usageFrom(value: unknown): undefined | Usage {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return undefined;
   }
   const source = value as Record<string, unknown>;
-  const numberValue = (candidate: unknown): number | undefined =>
-    typeof candidate === "number" && Number.isFinite(candidate) && candidate >= 0 ? candidate : undefined;
   const inputTokens = numberValue(source.input_tokens);
   const outputTokens = numberValue(source.output_tokens);
   const cacheReadTokens = numberValue(source.cache_read_input_tokens);
@@ -164,7 +179,9 @@ function usageFrom(value: unknown): Usage | undefined {
   const costUsd = numberValue(source.total_cost_usd);
   const turns = numberValue(source.num_turns);
   if (
-    [inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, costUsd, turns].every((item) => item === undefined)
+    [inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, costUsd, turns].every(
+      (item) => item === undefined,
+    )
   ) {
     return undefined;
   }
@@ -192,7 +209,9 @@ function messageBlocks(value: unknown): readonly unknown[] {
   return Array.isArray(content) ? content : [];
 }
 
-function toolUseEffect(block: unknown): { readonly toolUseId: string; readonly effect: WorkspaceEffect } | undefined {
+function toolUseEffect(
+  block: unknown,
+): { readonly toolUseId: string; readonly effect: WorkspaceEffect } | undefined {
   if (typeof block !== "object" || block === null || Array.isArray(block)) {
     return undefined;
   }
@@ -235,7 +254,7 @@ function toolResultIsDenied(block: Record<string, unknown>): boolean {
             .map((part) => part.text)
             .join(" ")
         : "";
-  return /(?:permission|user).*(?:denied|rejected)|(?:denied|rejected|not allowed)/i.test(content);
+  return /(?:permission|user).*(?:denied|rejected)|denied|rejected|not allowed/i.test(content);
 }
 
 function confirmedToolEffects(
@@ -274,7 +293,10 @@ function textFromMessage(value: unknown): string | undefined {
   const text = content
     .filter(
       (part): part is { text: string } =>
-        typeof part === "object" && part !== null && "text" in part && typeof part.text === "string",
+        typeof part === "object" &&
+        part !== null &&
+        "text" in part &&
+        typeof part.text === "string",
     )
     .map((part) => part.text)
     .join("");
@@ -299,7 +321,7 @@ export class ClaudeAdapter extends ProcessAdapter {
     });
   }
 
-  resolvePolicy(request: StartInvocationRequest, _route: RouteDescriptor): import("./types.js").PolicyResolution {
+  resolvePolicy(request: StartInvocationRequest, _route: RouteDescriptor): PolicyResolution {
     return resolvePolicy(request);
   }
 
@@ -324,8 +346,8 @@ export class ClaudeAdapter extends ProcessAdapter {
   protected normalizeNative(
     value: Record<string, JsonValue>,
     state: {
-      identity: import("../contract.js").ObservedIdentity;
-      content: { add(text: string): void; setFinal(text: string): void };
+      identity: ObservedIdentity;
+      content: { add: (text: string) => void; setFinal: (text: string) => void };
       pendingEffects?: Map<string, WorkspaceEffect>;
     },
   ): AdapterEvent | undefined {
@@ -335,10 +357,14 @@ export class ClaudeAdapter extends ProcessAdapter {
     if (sessionId !== undefined || model !== undefined) {
       state.identity = {
         ...state.identity,
-        ...(model === undefined ? {} : { model: { value: model, evidence: "reported", source: "claude-stream" } }),
+        ...(model === undefined
+          ? {}
+          : { model: { value: model, evidence: "reported", source: "claude-stream" } }),
         ...(sessionId === undefined
           ? {}
-          : { nativeSessionId: { value: sessionId, evidence: "reported", source: "claude-stream" } }),
+          : {
+              nativeSessionId: { value: sessionId, evidence: "reported", source: "claude-stream" },
+            }),
       };
     }
     if (type === "control_request") {
@@ -405,12 +431,15 @@ export class ClaudeAdapter extends ProcessAdapter {
         state.content.setFinal(text);
       }
       const usage = usageFrom({
-        ...(typeof value.usage === "object" && value.usage !== null ? value.usage : {}),
+        ...(typeof value.usage === "object" && value.usage !== null && !Array.isArray(value.usage)
+          ? value.usage
+          : {}),
         total_cost_usd: value.total_cost_usd,
         num_turns: value.num_turns,
       });
       const isError =
-        value.is_error === true || (typeof value.subtype === "string" && value.subtype.startsWith("error_"));
+        value.is_error === true ||
+        (typeof value.subtype === "string" && value.subtype.startsWith("error_"));
       return {
         category: usage === undefined ? "lifecycle" : "usage",
         data: { state: "native_result", ...(usage === undefined ? {} : { usage: { ...usage } }) },
@@ -419,7 +448,10 @@ export class ClaudeAdapter extends ProcessAdapter {
           ? {
               failure: {
                 code: typeof value.subtype === "string" ? value.subtype : "native_error",
-                message: typeof value.result === "string" ? value.result : "Claude reported an unsuccessful result.",
+                message:
+                  typeof value.result === "string"
+                    ? value.result
+                    : "Claude reported an unsuccessful result.",
               },
             }
           : {}),

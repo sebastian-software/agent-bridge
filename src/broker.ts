@@ -3,9 +3,11 @@ import { realpath, stat } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
-import { AdapterRegistry } from "./adapters/registry.js";
 import type { AdapterEvent, AdapterRunResult } from "./adapters/types.js";
-import { type BrokerConfig, type BrokerConfigValues, brokerConfigFromValues } from "./config.js";
+import type { BrokerPaths } from "./paths.js";
+
+import { AdapterRegistry } from "./adapters/registry.js";
+import { type BrokerConfig, brokerConfigFromValues, type BrokerConfigValues } from "./config.js";
 import {
   type EffectObservation,
   type EventsResult,
@@ -18,7 +20,6 @@ import {
   type InvocationTombstone,
   type JsonValue,
   type ObservedIdentity,
-  type PolicyEvidence,
   parseEventsParams,
   parseInvocationIdParams,
   parseInvocationListParams,
@@ -27,6 +28,7 @@ import {
   parseShutdownParams,
   parseStartInvocationRequest,
   parseWaitParams,
+  type PolicyEvidence,
   SCHEMA_VERSION,
   type StartInvocationRequest,
   type StartInvocationResult,
@@ -41,18 +43,17 @@ import {
   type WorkspaceSnapshot,
 } from "./effects.js";
 import { BridgeError } from "./errors.js";
+import { writeBrokerLog } from "./log.js";
 import { describeContract } from "./operations.js";
-import type { BrokerPaths } from "./paths.js";
 import { ensurePrivateDirectory } from "./paths.js";
 import { InvocationStore } from "./store.js";
-import { writeBrokerLog } from "./log.js";
 import { canonicalJson, messageFrom, sha256 } from "./util.js";
 import { PACKAGE_VERSION } from "./version.js";
 
-interface MutableResult<T> {
+type MutableResult<T> = {
   readonly value: T;
   readonly changed: boolean;
-}
+};
 
 function unverifiedIdentity(): ObservedIdentity {
   return {
@@ -64,18 +65,24 @@ function unverifiedIdentity(): ObservedIdentity {
 }
 
 function isAbortError(error: unknown): boolean {
-  return error instanceof Error && (error.name === "AbortError" || ("code" in error && error.code === "ABORT_ERR"));
+  return (
+    error instanceof Error &&
+    (error.name === "AbortError" || ("code" in error && error.code === "ABORT_ERR"))
+  );
 }
 
 function eventCursor(sequence: number): string {
   return `v1:${sequence}`;
 }
 
-function eventAfterCursor(events: readonly InvocationEvent[], cursor: string | undefined): readonly InvocationEvent[] {
+function eventAfterCursor(
+  events: readonly InvocationEvent[],
+  cursor: string | undefined,
+): readonly InvocationEvent[] {
   if (cursor === undefined) {
     return events;
   }
-  const match = /^v1:(0|[1-9][0-9]*)$/.exec(cursor);
+  const match = /^v1:(0|[1-9]\d*)$/.exec(cursor);
   if (match === null) {
     throw new BridgeError({
       code: "invalid_request",
@@ -142,13 +149,17 @@ function isEffectOnlyCarrier(event: AdapterEvent): boolean {
   );
 }
 
-function usageFromEvent(value: JsonValue | undefined): Usage | undefined {
+function numberValue(candidate: JsonValue | undefined): number | undefined {
+  return typeof candidate === "number" && Number.isFinite(candidate) && candidate >= 0
+    ? candidate
+    : undefined;
+}
+
+function usageFromEvent(value: JsonValue | undefined): undefined | Usage {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return undefined;
   }
   const source = value as Record<string, JsonValue>;
-  const numberValue = (candidate: JsonValue | undefined): number | undefined =>
-    typeof candidate === "number" && Number.isFinite(candidate) && candidate >= 0 ? candidate : undefined;
   const inputTokens = numberValue(source.inputTokens);
   const outputTokens = numberValue(source.outputTokens);
   const cacheReadTokens = numberValue(source.cacheReadTokens);
@@ -156,7 +167,9 @@ function usageFromEvent(value: JsonValue | undefined): Usage | undefined {
   const turns = numberValue(source.turns);
   const costUsd = numberValue(source.costUsd);
   if (
-    [inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, turns, costUsd].every((item) => item === undefined)
+    [inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, turns, costUsd].every(
+      (item) => item === undefined,
+    )
   ) {
     return undefined;
   }
@@ -181,7 +194,10 @@ export class Broker {
   readonly #runs = new Map<string, Promise<void>>();
   readonly #workspaceLocks = new Map<string, string>();
   readonly #beforeSnapshots = new Map<string, WorkspaceSnapshot>();
-  readonly #inputWaiters = new Map<string, Map<string, (response: Pick<InputResponse, "decision">) => void>>();
+  readonly #inputWaiters = new Map<
+    string,
+    Map<string, (response: Pick<InputResponse, "decision">) => void>
+  >();
   readonly #inputResponses = new Map<string, Pick<InputResponse, "decision">>();
   readonly #tombstones = new Map<string, InvocationTombstone>();
   readonly #diagnosticMode: boolean;
@@ -217,7 +233,9 @@ export class Broker {
       ...(options?.retention?.completedMs === undefined
         ? {}
         : { retentionCompletedDays: options.retention.completedMs / (24 * 60 * 60 * 1000) }),
-      ...(options?.retention?.maxBytes === undefined ? {} : { retentionMaxBytes: options.retention.maxBytes }),
+      ...(options?.retention?.maxBytes === undefined
+        ? {}
+        : { retentionMaxBytes: options.retention.maxBytes }),
       ...(options?.diagnosticMode === undefined ? {} : { diagnosticMode: options.diagnosticMode }),
     };
     this.#config = options?.config ?? brokerConfigFromValues(compatibility);
@@ -226,7 +244,10 @@ export class Broker {
       maxBytes: this.#config.retentionMaxBytes,
     };
     this.#diagnosticMode = this.#config.diagnosticMode;
-    this.#effectLimits = { maxFiles: this.#config.effectsMaxFiles, maxBytes: this.#config.effectsMaxBytes };
+    this.#effectLimits = {
+      maxFiles: this.#config.effectsMaxFiles,
+      maxBytes: this.#config.effectsMaxBytes,
+    };
     this.#terminationGraceMs = this.#config.terminationGraceMs;
     this.#logFile = options?.logFile ?? `${paths.stateDirectory}/broker.log`;
   }
@@ -340,11 +361,14 @@ export class Broker {
   }
 
   async shutdown(force = false): Promise<Readonly<Record<string, unknown>>> {
-    const active = [...this.#records.values()].filter((record) => !TERMINAL_STATES.has(record.state));
+    const active = [...this.#records.values()].filter(
+      (record) => !TERMINAL_STATES.has(record.state),
+    );
     if (active.length > 0 && !force) {
       throw new BridgeError({
         code: "invocation_conflict",
-        message: "The broker has active invocations. Pass force=true to interrupt them during shutdown.",
+        message:
+          "The broker has active invocations. Pass force=true to interrupt them during shutdown.",
         retryable: false,
         details: { activeInvocations: active.map((record) => record.invocationId) },
       });
@@ -470,7 +494,9 @@ export class Broker {
       const base: InvocationRecord = {
         schemaVersion: SCHEMA_VERSION,
         invocationId,
-        ...(request.callerCorrelationId === undefined ? {} : { callerCorrelationId: request.callerCorrelationId }),
+        ...(request.callerCorrelationId === undefined
+          ? {}
+          : { callerCorrelationId: request.callerCorrelationId }),
         ...(request.idempotencyKey === undefined ? {} : { idempotencyKey: request.idempotencyKey }),
         requestDigest,
         request,
@@ -510,14 +536,18 @@ export class Broker {
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
       ...(record.startedAt === undefined ? {} : { startedAt: record.startedAt }),
-      ...(record.callerCorrelationId === undefined ? {} : { callerCorrelationId: record.callerCorrelationId }),
+      ...(record.callerCorrelationId === undefined
+        ? {}
+        : { callerCorrelationId: record.callerCorrelationId }),
       requested: record.request.selector,
       resolved: record.resolvedRoute,
       policy: record.policy,
       eventCount: record.eventCount,
       ...(lastEvent === undefined ? {} : { lastCursor: lastEvent.cursor }),
       ...(record.outcome === undefined ? {} : { outcome: record.outcome }),
-      next: TERMINAL_STATES.has(record.state) ? ["invocation.events"] : ["invocation.events", "invocation.cancel"],
+      next: TERMINAL_STATES.has(record.state)
+        ? ["invocation.events"]
+        : ["invocation.events", "invocation.cancel"],
     };
   }
 
@@ -536,7 +566,8 @@ export class Broker {
       .filter((record) => params.state === undefined || record.state === params.state)
       .filter(
         (record) =>
-          params.callerCorrelationId === undefined || record.callerCorrelationId === params.callerCorrelationId,
+          params.callerCorrelationId === undefined ||
+          record.callerCorrelationId === params.callerCorrelationId,
       )
       .filter((record) => since === undefined || Date.parse(record.createdAt) >= since)
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
@@ -547,9 +578,13 @@ export class Broker {
         requestedSelector: record.request.selector,
         resolvedRouteId: record.resolvedRoute.routeId,
         createdAt: record.createdAt,
-        ...(record.outcome?.completedAt === undefined ? {} : { completedAt: record.outcome.completedAt }),
+        ...(record.outcome?.completedAt === undefined
+          ? {}
+          : { completedAt: record.outcome.completedAt }),
         workingDirectory: record.request.workingDirectory,
-        ...(record.callerCorrelationId === undefined ? {} : { callerCorrelationId: record.callerCorrelationId }),
+        ...(record.callerCorrelationId === undefined
+          ? {}
+          : { callerCorrelationId: record.callerCorrelationId }),
       }));
     return {
       invocations,
@@ -667,8 +702,8 @@ export class Broker {
       .catch(async (error: unknown) => {
         try {
           await this.#failUnexpected(invocationId, error);
-        } catch (nested) {
-          this.#log("error", `Failed to record invocation crash: ${messageFrom(nested)}`);
+        } catch (error) {
+          this.#log("error", `Failed to record invocation crash: ${messageFrom(error)}`);
         }
       })
       .finally(() => {
@@ -689,7 +724,12 @@ export class Broker {
       if (current.state !== "queued") {
         return { value: false, changed: false };
       }
-      const withEvent = this.#appendBridgeEvent(current, "lifecycle", { state: "running" }, startedAt);
+      const withEvent = this.#appendBridgeEvent(
+        current,
+        "lifecycle",
+        { state: "running" },
+        startedAt,
+      );
       this.#records.set(invocationId, {
         ...withEvent,
         state: "running",
@@ -705,7 +745,10 @@ export class Broker {
           complete: false,
           diagnostics: ["Invocation was cancelled before an effect snapshot could be collected."],
         },
-        error: { code: "cancelled", message: "The invocation was cancelled before the adapter started." },
+        error: {
+          code: "cancelled",
+          message: "The invocation was cancelled before the adapter started.",
+        },
       });
       this.#controllers.delete(invocationId);
       return;
@@ -718,8 +761,12 @@ export class Broker {
       timeout = setTimeout(() => {
         timedOut = true;
         this.#markTimingOut(invocationId).then(
-          () => controller.abort(),
-          (error: unknown) => this.#log("error", `Failed to record invocation timeout: ${messageFrom(error)}`),
+          () => {
+            controller.abort();
+          },
+          (error: unknown) => {
+            this.#log("error", `Failed to record invocation timeout: ${messageFrom(error)}`);
+          },
         );
       }, current.request.timeoutMs);
       timeout.unref();
@@ -733,27 +780,31 @@ export class Broker {
         request: current.request,
         route: current.resolvedRoute,
         signal: controller.signal,
-        emit: (event) => this.#appendAdapterEvent(invocationId, event),
-        reportPartial: (partial) => {
+        emit: async (event) => this.#appendAdapterEvent(invocationId, event),
+        reportPartial(partial) {
           partialResult = { ...partialResult, ...partial };
         },
-        awaitInput: (requestId, signal) => this.#awaitInput(invocationId, requestId, signal),
+        awaitInput: async (requestId, signal) => this.#awaitInput(invocationId, requestId, signal),
         terminationGraceMs: this.#terminationGraceMs,
       });
       const latest = this.#requireRecord(invocationId);
       if (latest.state === "cancelling" || controller.signal.aborted) {
         const interrupted = this.#shutdownRequested;
-        await this.#complete(invocationId, interrupted ? "interrupted" : timedOut ? "timed_out" : "cancelled", {
-          observedIdentity: result.observedIdentity,
-          error: {
-            code: interrupted ? "broker_shutdown" : timedOut ? "timed_out" : "cancelled",
-            message: interrupted
-              ? "The broker shut down while the invocation was active."
-              : timedOut
-                ? "The invocation exceeded its timeout."
-                : "The invocation was cancelled.",
+        await this.#complete(
+          invocationId,
+          interrupted ? "interrupted" : timedOut ? "timed_out" : "cancelled",
+          {
+            observedIdentity: result.observedIdentity,
+            error: {
+              code: interrupted ? "broker_shutdown" : timedOut ? "timed_out" : "cancelled",
+              message: interrupted
+                ? "The broker shut down while the invocation was active."
+                : timedOut
+                  ? "The invocation exceeded its timeout."
+                  : "The invocation was cancelled.",
+            },
           },
-        });
+        );
       } else {
         await this.#complete(invocationId, "succeeded", result);
       }
@@ -761,17 +812,21 @@ export class Broker {
       if (controller.signal.aborted || isAbortError(error)) {
         const interrupted = this.#shutdownRequested;
         const partial = this.#partialResult(this.#requireRecord(invocationId), partialResult);
-        await this.#complete(invocationId, interrupted ? "interrupted" : timedOut ? "timed_out" : "cancelled", {
-          ...partial,
-          error: {
-            code: interrupted ? "broker_shutdown" : timedOut ? "timed_out" : "cancelled",
-            message: interrupted
-              ? "The broker shut down while the invocation was active."
-              : timedOut
-                ? "The invocation exceeded its timeout."
-                : "The invocation was cancelled.",
+        await this.#complete(
+          invocationId,
+          interrupted ? "interrupted" : timedOut ? "timed_out" : "cancelled",
+          {
+            ...partial,
+            error: {
+              code: interrupted ? "broker_shutdown" : timedOut ? "timed_out" : "cancelled",
+              message: interrupted
+                ? "The broker shut down while the invocation was active."
+                : timedOut
+                  ? "The invocation exceeded its timeout."
+                  : "The invocation was cancelled.",
+            },
           },
-        });
+        );
       } else {
         const errorCode = error instanceof BridgeError ? error.code : "adapter_failed";
         await this.#complete(invocationId, "failed", {
@@ -831,11 +886,13 @@ export class Broker {
           timestamp,
           category: event.category,
           ...(event.content === undefined ? {} : { content: event.content }),
-          ...(event.data === undefined && event.inputRequest === undefined && event.usage === undefined
+          ...(event.data === undefined &&
+          event.inputRequest === undefined &&
+          event.usage === undefined
             ? {}
             : {
                 data: {
-                  ...(event.data ?? {}),
+                  ...event.data,
                   ...(event.usage === undefined ? {} : { usage: { ...event.usage } }),
                   ...(event.inputRequest === undefined
                     ? {}
@@ -843,12 +900,16 @@ export class Broker {
                         requestId: event.inputRequest.requestId,
                         kind: event.inputRequest.kind,
                         prompt: event.inputRequest.prompt,
-                        ...(event.inputRequest.toolName === undefined ? {} : { toolName: event.inputRequest.toolName }),
+                        ...(event.inputRequest.toolName === undefined
+                          ? {}
+                          : { toolName: event.inputRequest.toolName }),
                       }),
                 },
               }),
           provenance: { source: "adapter", adapter: current.resolvedRoute.adapter },
-          ...(event.native === undefined ? {} : { native: persistedNative(event.native, this.#diagnosticMode) }),
+          ...(event.native === undefined
+            ? {}
+            : { native: persistedNative(event.native, this.#diagnosticMode) }),
         };
         updated = {
           ...current,
@@ -892,7 +953,9 @@ export class Broker {
           retryable: false,
         });
       }
-      const pendingRequest = [...current.events].reverse().find((event) => event.category === "input_required");
+      const pendingRequest = [...current.events]
+        .reverse()
+        .find((event) => event.category === "input_required");
       if (pendingRequest?.data?.requestId !== response.requestId) {
         throw new BridgeError({
           code: "invalid_request",
@@ -919,7 +982,12 @@ export class Broker {
         updatedAt: timestamp,
       });
       return {
-        value: { invocationId: response.invocationId, requestId: response.requestId, accepted: true, state: "running" },
+        value: {
+          invocationId: response.invocationId,
+          requestId: response.requestId,
+          accepted: true,
+          state: "running",
+        },
         changed: true,
       };
     });
@@ -946,13 +1014,17 @@ export class Broker {
       return response;
     }
     return new Promise((resolve) => {
-      const waiters = this.#inputWaiters.get(invocationId) ?? new Map();
+      const waiters =
+        this.#inputWaiters.get(invocationId) ??
+        new Map<string, (response: Pick<InputResponse, "decision">) => void>();
       const finish = (decision: Pick<InputResponse, "decision">): void => {
         waiters.delete(requestId);
         signal?.removeEventListener("abort", onAbort);
         resolve(decision);
       };
-      const onAbort = (): void => finish({ decision: "deny" });
+      const onAbort = (): void => {
+        finish({ decision: "deny" });
+      };
       waiters.set(requestId, finish);
       this.#inputWaiters.set(invocationId, waiters);
       signal?.addEventListener("abort", onAbort, { once: true });
@@ -965,11 +1037,11 @@ export class Broker {
   async #complete(
     invocationId: string,
     status: TerminalStatus,
-    result: Partial<AdapterRunResult> & {
+    result: {
       readonly observedIdentity: ObservedIdentity;
       readonly effectObservation?: EffectObservation;
       readonly error?: InvocationOutcome["error"];
-    },
+    } & Partial<AdapterRunResult>,
   ): Promise<void> {
     const current = this.#records.get(invocationId);
     const afterSnapshot =
@@ -1042,14 +1114,16 @@ export class Broker {
     record: InvocationRecord,
     status: TerminalStatus,
     completedAt: string,
-    result: Partial<AdapterRunResult> & {
+    result: {
       readonly observedIdentity: ObservedIdentity;
       readonly effectObservation?: EffectObservation;
       readonly error?: InvocationOutcome["error"];
-    },
+    } & Partial<AdapterRunResult>,
   ): InvocationOutcome {
     const durationMs =
-      record.startedAt === undefined ? undefined : Math.max(0, Date.parse(completedAt) - Date.parse(record.startedAt));
+      record.startedAt === undefined
+        ? undefined
+        : Math.max(0, Date.parse(completedAt) - Date.parse(record.startedAt));
     return {
       schemaVersion: SCHEMA_VERSION,
       invocationId: record.invocationId,
@@ -1071,10 +1145,12 @@ export class Broker {
   #partialResult(
     record: InvocationRecord,
     partial: Partial<AdapterRunResult>,
-  ): Partial<AdapterRunResult> & {
+  ): {
     readonly observedIdentity: ObservedIdentity;
-  } {
-    const output = record.events.flatMap((event) => (event.category === "output" ? (event.content ?? []) : []));
+  } & Partial<AdapterRunResult> {
+    const output = record.events.flatMap((event) =>
+      event.category === "output" ? (event.content ?? []) : [],
+    );
     const usageEvent = [...record.events].reverse().find((event) => event.category === "usage");
     const usage = usageEvent === undefined ? undefined : usageFromEvent(usageEvent.data?.usage);
     const effectiveUsage = partial.usage ?? usage;
@@ -1098,7 +1174,7 @@ export class Broker {
     });
   }
 
-  #log(level: "warn" | "error" | "info", message: string): void {
+  #log(level: "error" | "info" | "warn", message: string): void {
     void writeBrokerLog(this.#logFile, level, message);
   }
 
@@ -1136,16 +1212,24 @@ export class Broker {
     };
   }
 
-  async #existingIdempotent(idempotencyKey: string | undefined, digest: string): Promise<InvocationRecord | undefined> {
+  async #existingIdempotent(
+    idempotencyKey: string | undefined,
+    digest: string,
+  ): Promise<InvocationRecord | undefined> {
     await this.#mutationTail;
     return this.#findIdempotent(idempotencyKey, digest);
   }
 
-  #findIdempotent(idempotencyKey: string | undefined, digest: string): InvocationRecord | undefined {
+  #findIdempotent(
+    idempotencyKey: string | undefined,
+    digest: string,
+  ): InvocationRecord | undefined {
     if (idempotencyKey === undefined) {
       return undefined;
     }
-    const record = [...this.#records.values()].find((candidate) => candidate.idempotencyKey === idempotencyKey);
+    const record = [...this.#records.values()].find(
+      (candidate) => candidate.idempotencyKey === idempotencyKey,
+    );
     if (record === undefined) {
       return undefined;
     }
@@ -1194,8 +1278,8 @@ export class Broker {
       return result.value;
     });
     this.#mutationTail = scheduled.then(
-      () => undefined,
-      () => undefined,
+      () => {},
+      () => {},
     );
     return scheduled;
   }

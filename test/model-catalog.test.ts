@@ -4,10 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { FakeAdapter } from "../src/adapters/fake.js";
-import { AdapterRegistry } from "../src/adapters/registry.js";
 import type { Adapter, AdapterRunContext, AdapterRunResult } from "../src/adapters/types.js";
 import type { RouteDescriptor } from "../src/contract.js";
+
+import { FakeAdapter } from "../src/adapters/fake.js";
+import { AdapterRegistry } from "../src/adapters/registry.js";
 
 class CountingAdapter implements Adapter {
   readonly id = "counting";

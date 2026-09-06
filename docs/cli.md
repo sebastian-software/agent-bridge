@@ -6,22 +6,22 @@ command that needs a broker starts the user-owned daemon automatically.
 
 ## Commands
 
-| Command | Purpose |
-| --- | --- |
-| `describe` | Contract, operation, broker, and retention metadata |
-| `routes [--refresh]` | Qualified route discovery |
-| `start` | Start one asynchronous invocation and print its ID |
-| `run` | Start, follow, and return one invocation result |
-| `list` | List retained invocation summaries |
-| `get` / `inspect <id>` | Read invocation state and event cursor |
-| `events <id>` | Read events once, or follow until terminal |
-| `wait <id>` | Poll once for up to 30 seconds, or use `--until-terminal` |
-| `result <id>` | Read the immutable terminal outcome |
-| `cancel <id>` | Request cancellation |
-| `broker status` / `stop` / `restart` | Inspect or control the broker |
-| `broker logs` | Read or follow the broker log |
-| `request <operation>` | Send any operation with JSON params |
-| `mcp serve` | Serve the MCP projection over stdio |
+| Command                              | Purpose                                                   |
+| ------------------------------------ | --------------------------------------------------------- |
+| `describe`                           | Contract, operation, broker, and retention metadata       |
+| `routes [--refresh]`                 | Qualified route discovery                                 |
+| `start`                              | Start one asynchronous invocation and print its ID        |
+| `run`                                | Start, follow, and return one invocation result           |
+| `list`                               | List retained invocation summaries                        |
+| `get` / `inspect <id>`               | Read invocation state and event cursor                    |
+| `events <id>`                        | Read events once, or follow until terminal                |
+| `wait <id>`                          | Poll once for up to 30 seconds, or use `--until-terminal` |
+| `result <id>`                        | Read the immutable terminal outcome                       |
+| `cancel <id>`                        | Request cancellation                                      |
+| `broker status` / `stop` / `restart` | Inspect or control the broker                             |
+| `broker logs`                        | Read or follow the broker log                             |
+| `request <operation>`                | Send any operation with JSON params                       |
+| `mcp serve`                          | Serve the MCP projection over stdio                       |
 
 ## Starting an invocation
 

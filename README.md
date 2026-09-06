@@ -86,8 +86,27 @@ pnpm install --frozen-lockfile
 pnpm check
 ```
 
-`pnpm check` runs formatting, Biome linting, TypeScript validation, tests,
-coverage, the package dry-run, and the existing newline gate. Architecture and
-terminology live in [`CONTEXT.md`](CONTEXT.md) and the
-[`docs/adr/`](docs/adr/) decision records. Work is tracked in GitHub issues;
-see the `epic` label for grouped work.
+`pnpm agent:check` runs the standard gate: OxLint and ESLint, the oxfmt format
+check, TypeScript validation, the build, and the tests. `pnpm check` adds
+coverage and the package dry-run, and is what CI runs. Conventions for agents
+and contributors live in [`AGENTS.md`](AGENTS.md); architecture and terminology
+live in [`CONTEXT.md`](CONTEXT.md) and the [`docs/adr/`](docs/adr/) decision
+records. Work is tracked in GitHub issues; see the `epic` label for grouped
+work.
+
+---
+
+<!-- sebastian-software-branding:start -->
+<p align="center">
+  <a href="https://oss.sebastian-software.com">
+    <img src="https://sebastian-brand.vercel.app/sebastian-software/logo-software.svg" alt="Sebastian Software" width="240" />
+  </a>
+</p>
+
+<p align="center">
+  <strong>Built by Sebastian Software</strong> — consulting for TypeScript, React &amp; Rust.<br />
+  <a href="https://sebastian-software.de">Work with us</a> · <a href="https://oss.sebastian-software.com">More open source</a>
+</p>
+
+<p align="center">Copyright &copy; 2026 Sebastian Software GmbH</p>
+<!-- sebastian-software-branding:end -->

@@ -1,12 +1,20 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
+
+import type { AdapterEvent, AdapterRunContext } from "../src/adapters/types.js";
+import type {
+  JsonValue,
+  ObservedIdentity,
+  ResolvedRoute,
+  RouteDescriptor,
+  WorkspaceEffect,
+} from "../src/contract.js";
 
 import { CLAUDE_SESSION_ENVIRONMENT_DENY_LIST, ClaudeAdapter } from "../src/adapters/claude.js";
 import { CodexAdapter } from "../src/adapters/codex.js";
 import { parseVersion, satisfiesVersionRange } from "../src/adapters/discovery.js";
 import { type CommandSpec, ContentAccumulator, ProcessAdapter } from "../src/adapters/process.js";
-import type { AdapterEvent, AdapterRunContext } from "../src/adapters/types.js";
-import type { JsonValue, ObservedIdentity, ResolvedRoute, RouteDescriptor, WorkspaceEffect } from "../src/contract.js";
 
 const route = (adapter: string, executable: string): ResolvedRoute => ({
   routeId: `${adapter}:test`,
@@ -39,13 +47,16 @@ class TestProcessAdapter extends ProcessAdapter {
   protected command(_context: AdapterRunContext): CommandSpec {
     return {
       executable: process.execPath,
-      args: ["-e", "console.log(JSON.stringify({type:'assistant',message:{content:[{type:'text',text:'hello'}]}}))"],
+      args: [
+        "-e",
+        "console.log(JSON.stringify({type:'assistant',message:{content:[{type:'text',text:'hello'}]}}))",
+      ],
     };
   }
 
   protected normalizeNative(
     value: Record<string, JsonValue>,
-    state: { identity: ObservedIdentity; content: { add(text: string): void } },
+    state: { identity: ObservedIdentity; content: { add: (text: string) => void } },
   ): AdapterEvent {
     const text =
       typeof value.message === "object" &&
@@ -85,9 +96,9 @@ class StdinProcessAdapter extends ProcessAdapter {
 
   protected normalizeNative(
     value: Record<string, JsonValue>,
-    state: { identity: ObservedIdentity; content: { add(text: string): void } },
+    state: { identity: ObservedIdentity; content: { add: (text: string) => void } },
   ): AdapterEvent {
-    const message = value.message as { content?: readonly { text?: unknown }[] };
+    const message = value.message as { content?: ReadonlyArray<{ text?: unknown }> };
     const text = typeof message.content?.[0]?.text === "string" ? message.content[0].text : "";
     state.content.add(text);
     return { category: "output", content: [{ type: "text", text }], native: value };
@@ -207,7 +218,10 @@ test("route discovery reports qualified and authenticated command routes", async
   assert.equal(opusAlias?.canonicalModel, "claude-opus-4-8");
   assert.equal(opusAlias?.qualification[0]?.testedAt, "2026-09-05T22:04:14+02:00");
   assert.match(opusAlias?.qualification[0]?.claim ?? "", /test\/adapters\.test\.ts/);
-  assert.match(opusAlias?.qualification[0]?.claim ?? "", /verifies route discovery, command argument construction/);
+  assert.match(
+    opusAlias?.qualification[0]?.claim ?? "",
+    /verifies route discovery, command argument construction/,
+  );
   assert.doesNotMatch(opusAlias?.qualification[0]?.claim ?? "", /exercised native model/);
   const haiku = routes.find((candidate) => candidate.model === "claude-haiku-4-5-20251001");
   assert.equal(haiku?.canonicalModel, "claude-haiku-4-5-20251001");
@@ -226,7 +240,10 @@ test("Codex discovery exposes canonical model IDs and documented family aliases"
   const alias = routes.find((candidate) => candidate.model === "gpt-5-codex");
   assert.equal(alias?.canonicalModel, "gpt-5.3-codex");
   assert.match(alias?.qualification[0]?.claim ?? "", /2473c44fc41befe82847287b13af53245c008a39/);
-  assert.match(alias?.qualification[0]?.claim ?? "", /runtime model identity requires a separate opt-in/);
+  assert.match(
+    alias?.qualification[0]?.claim ?? "",
+    /runtime model identity requires a separate opt-in/,
+  );
 });
 
 test("route discovery fails closed for an unqualified harness version", async () => {
@@ -249,12 +266,29 @@ test("process adapter normalizes JSONL output and preserves the absolute executa
     request: request(process.cwd()),
     route: route(adapter.id, process.execPath),
     signal: new AbortController().signal,
-    emit: async (event) => {
+    async emit(event) {
       events.push(event);
     },
   });
   assert.deepEqual(result.content, [{ type: "text", text: "hello" }]);
   assert.equal(events.at(-1)?.category, "output");
+});
+
+test("process adapter keeps the output of a harness that exits before the first event is persisted", async () => {
+  const adapter = new TestProcessAdapter();
+  const result = await adapter.run({
+    invocationId: "inv_fast_exit",
+    request: request(process.cwd()),
+    route: route(adapter.id, process.execPath),
+    signal: new AbortController().signal,
+    async emit(event) {
+      if (event.data?.phase === "process_started") {
+        // A slow store write: the harness has long exited by the time it resolves.
+        await delay(300);
+      }
+    },
+  });
+  assert.deepEqual(result.content, [{ type: "text", text: "hello" }]);
 });
 
 test("process adapter sends prompt on stdin and filters denied environment variables", async () => {
@@ -265,7 +299,7 @@ test("process adapter sends prompt on stdin and filters denied environment varia
     request: request(process.cwd()),
     route: route(adapter.id, process.execPath),
     signal: new AbortController().signal,
-    emit: async (event) => {
+    async emit(event) {
       events.push(event);
     },
   });
@@ -285,10 +319,10 @@ test("process adapter completes a bidirectional permission exchange", async () =
     request: request(process.cwd()),
     route: route(adapter.id, process.execPath),
     signal: new AbortController().signal,
-    emit: async (event) => {
+    async emit(event) {
       events.push(event);
     },
-    awaitInput: async (requestId) => {
+    async awaitInput(requestId) {
       assert.equal(requestId, "perm_1");
       return { decision: "allow" };
     },
@@ -308,7 +342,12 @@ test("Claude keeps the final result once and captures reported usage", () => {
     state,
   );
   const result = adapter.normalize(
-    { type: "result", result: "pong", usage: { input_tokens: 3, output_tokens: 2 }, total_cost_usd: 0.01 },
+    {
+      type: "result",
+      result: "pong",
+      usage: { input_tokens: 3, output_tokens: 2 },
+      total_cost_usd: 0.01,
+    },
     state,
   );
   assert.equal(assistant?.category, "output");
@@ -325,7 +364,9 @@ test("Claude confirms file effects only from successful tool results", () => {
       {
         type: "assistant",
         message: {
-          content: [{ type: "tool_use", id: "write_1", name: "Write", input: { file_path: "probe.txt" } }],
+          content: [
+            { type: "tool_use", id: "write_1", name: "Write", input: { file_path: "probe.txt" } },
+          ],
         },
       },
       state,
@@ -336,7 +377,11 @@ test("Claude confirms file effects only from successful tool results", () => {
     adapter.normalize(
       {
         type: "user",
-        message: { content: [{ type: "tool_result", tool_use_id: "write_1", is_error: true, content: "Denied" }] },
+        message: {
+          content: [
+            { type: "tool_result", tool_use_id: "write_1", is_error: true, content: "Denied" },
+          ],
+        },
       },
       state,
     ),
@@ -348,7 +393,9 @@ test("Claude confirms file effects only from successful tool results", () => {
       {
         type: "assistant",
         message: {
-          content: [{ type: "tool_use", id: "write_2", name: "Write", input: { file_path: "probe.txt" } }],
+          content: [
+            { type: "tool_use", id: "write_2", name: "Write", input: { file_path: "probe.txt" } },
+          ],
         },
       },
       state,
@@ -356,8 +403,14 @@ test("Claude confirms file effects only from successful tool results", () => {
     undefined,
   );
   assert.deepEqual(
-    adapter.normalize({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "write_2" }] } }, state),
-    { category: "effect", effects: [{ path: "probe.txt", kind: "modified", evidence: "harness-reported" }] },
+    adapter.normalize(
+      { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "write_2" }] } },
+      state,
+    ),
+    {
+      category: "effect",
+      effects: [{ path: "probe.txt", kind: "modified", evidence: "harness-reported" }],
+    },
   );
 });
 
@@ -391,10 +444,15 @@ test("Claude orchestrator mode delegates permission prompts and closes stdin aft
     },
     route: { ...route("claude", process.execPath), provider: "anthropic", model: "opus" },
     signal: new AbortController().signal,
-    emit: async () => {},
+    async emit() {},
   };
   const command = adapter.commandFor(context);
-  assert.deepEqual(command.args.slice(-4), ["--input-format", "stream-json", "--permission-prompt-tool", "stdio"]);
+  assert.deepEqual(command.args.slice(-4), [
+    "--input-format",
+    "stream-json",
+    "--permission-prompt-tool",
+    "stdio",
+  ]);
   assert.equal(command.args[command.args.indexOf("--permission-mode") + 1], "default");
   assert.equal(command.args.includes("--input-format"), true);
   assert.equal(command.keepStdinOpen, true);
@@ -412,7 +470,7 @@ test("Claude and Codex pass requested model aliases through to the harness", () 
       canonicalModel: "claude-opus-4-8",
     },
     signal: new AbortController().signal,
-    emit: async () => {},
+    async emit() {},
   });
   assert.equal(claudeCommand.args[claudeCommand.args.indexOf("--model") + 1], "opus");
 
@@ -426,7 +484,7 @@ test("Claude and Codex pass requested model aliases through to the harness", () 
       canonicalModel: "gpt-5.3-codex",
     },
     signal: new AbortController().signal,
-    emit: async () => {},
+    async emit() {},
   });
   assert.equal(codexCommand.args[codexCommand.args.indexOf("--model") + 1], "gpt-5-codex");
 });
@@ -442,7 +500,10 @@ test("Codex excludes reasoning from answer content and reports file effects", ()
     { type: "item.completed", item: { type: "file_change", path: "src/app.ts", kind: "modify" } },
     state,
   );
-  const answer = adapter.normalize({ type: "item.completed", item: { type: "agent_message", text: "answer" } }, state);
+  const answer = adapter.normalize(
+    { type: "item.completed", item: { type: "agent_message", text: "answer" } },
+    state,
+  );
   assert.equal(reasoning?.category, "activity");
   assert.equal(reasoning?.data?.phase, "reasoning");
   assert.equal(effect?.effects?.[0]?.evidence, "harness-reported");
@@ -484,7 +545,10 @@ test("policy resolution rejects unsupported fields and records exact controls", 
   assert.ok(unsupported.unsupported.includes("requestedPolicy.network"));
 
   const claudeInherit = claude.resolvePolicy(
-    { ...request(process.cwd()), requestedPolicy: { minimumAssurance: "none", filesystem: "inherit" } },
+    {
+      ...request(process.cwd()),
+      requestedPolicy: { minimumAssurance: "none", filesystem: "inherit" },
+    },
     claudeRoute,
   );
   assert.equal(claudeInherit.supported, true);
@@ -516,13 +580,16 @@ test("policy resolution rejects unsupported fields and records exact controls", 
   );
   assert.equal(codexInherit.supported, true);
 
-  const codexRequest = { ...request(process.cwd()), selector: { ...request(process.cwd()).selector, effort: "max" } };
+  const codexRequest = {
+    ...request(process.cwd()),
+    selector: { ...request(process.cwd()).selector, effort: "max" },
+  };
   const command = codex.commandFor({
     invocationId: "inv_policy",
     request: codexRequest,
     route: { ...route("codex", process.execPath), effort: "max" },
     signal: new AbortController().signal,
-    emit: async () => {},
+    async emit() {},
   });
   assert.ok(command.args.includes("model_reasoning_effort=xhigh"));
   assert.equal(command.stdin, "hello");

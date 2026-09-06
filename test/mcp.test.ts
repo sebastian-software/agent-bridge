@@ -1,3 +1,5 @@
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import assert from "node:assert/strict";
 import { execFile as execFileCallback } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -5,9 +7,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
-
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
 import { McpServer } from "../src/mcp.js";
 
@@ -25,19 +24,35 @@ test("MCP initialize and tools/list expose the bridge contract", async () => {
   const server = new McpServer(async () => ({ ok: true }));
   const initialized = decoded(
     await server.handle(
-      JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18" } }),
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: { protocolVersion: "2025-06-18" },
+      }),
     ),
   );
   assert.equal((initialized.result as { protocolVersion: string }).protocolVersion, "2025-06-18");
   const fallback = decoded(
     await server.handle(
-      JSON.stringify({ jsonrpc: "2.0", id: 3, method: "initialize", params: { protocolVersion: "unsupported" } }),
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 3,
+        method: "initialize",
+        params: { protocolVersion: "unsupported" },
+      }),
     ),
   );
   assert.equal((fallback.result as { protocolVersion: string }).protocolVersion, "2025-06-18");
-  const listed = decoded(await server.handle(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" })));
+  const listed = decoded(
+    await server.handle(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" })),
+  );
   const tools = listed.result as {
-    tools: readonly { name: string; inputSchema?: Record<string, unknown>; outputSchema?: Record<string, unknown> }[];
+    tools: ReadonlyArray<{
+      name: string;
+      inputSchema?: Record<string, unknown>;
+      outputSchema?: Record<string, unknown>;
+    }>;
   };
   assert.ok(tools.tools.some((tool) => tool.name === "agent_bridge_invocation_start"));
   assert.ok(tools.tools.some((tool) => tool.name === "agent_bridge_invocation_events"));
@@ -74,7 +89,10 @@ test("MCP tools/call returns structured broker results and errors", async () => 
   );
   const successResult = success.result as { structuredContent: { invocationId: string } };
   assert.equal(successResult.structuredContent.invocationId, "inv_test");
-  assert.deepEqual(calls[0], { operation: "invocation.start", params: { workingDirectory: "/tmp" } });
+  assert.deepEqual(calls[0], {
+    operation: "invocation.start",
+    params: { workingDirectory: "/tmp" },
+  });
 
   const failure = decoded(
     await server.handle(
@@ -94,13 +112,18 @@ test("MCP tools/call returns structured broker results and errors", async () => 
 
 test("MCP notifications do not produce stdout responses", async () => {
   const server = new McpServer(async () => ({}));
-  assert.equal(await server.handle(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })), undefined);
+  assert.equal(
+    await server.handle(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })),
+    undefined,
+  );
 });
 
 test("MCP serves the broker contract to the official stdio client", async () => {
   const root = await mkdtemp(join(tmpdir(), "agent-bridge-mcp-integration-"));
   const env = Object.fromEntries(
-    Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
+    Object.entries(process.env).filter(
+      (entry): entry is [string, string] => entry[1] !== undefined,
+    ),
   );
   Object.assign(env, {
     AGENT_BRIDGE_RUNTIME_DIR: join(root, "run"),
@@ -174,8 +197,10 @@ test("MCP serves the broker contract to the official stdio client", async () => 
     });
     assert.ok(result.structuredContent);
   } finally {
-    await client.close().catch(() => undefined);
-    await execFile(process.execPath, [cliPath, "broker", "stop", "--force"], { env }).catch(() => undefined);
+    await client.close().catch(() => {});
+    await execFile(process.execPath, [cliPath, "broker", "stop", "--force"], { env }).catch(
+      () => {},
+    );
     await rm(root, { recursive: true, force: true });
   }
 });

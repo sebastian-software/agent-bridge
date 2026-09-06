@@ -6,7 +6,11 @@ import { join } from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
 
-import { captureWorkspaceSnapshot, normalizeHarnessEffect, observeWorkspaceEffects } from "../src/effects.js";
+import {
+  captureWorkspaceSnapshot,
+  normalizeHarnessEffect,
+  observeWorkspaceEffects,
+} from "../src/effects.js";
 
 const execFile = promisify(execFileCallback);
 

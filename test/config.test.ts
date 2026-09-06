@@ -21,7 +21,11 @@ test("broker config applies CLI over environment over config file", async () => 
   const previousPath = process.env.AGENT_BRIDGE_CONFIG_PATH;
   const previousBytes = process.env.AGENT_BRIDGE_RETENTION_MAX_BYTES;
   try {
-    await writeFile(path, JSON.stringify({ broker: { retention: { maxBytes: 100 }, diagnosticMode: true } }), "utf8");
+    await writeFile(
+      path,
+      JSON.stringify({ broker: { retention: { maxBytes: 100 }, diagnosticMode: true } }),
+      "utf8",
+    );
     process.env.AGENT_BRIDGE_CONFIG_PATH = path;
     process.env.AGENT_BRIDGE_RETENTION_MAX_BYTES = "200";
     const config = await loadBrokerConfig({ retentionMaxBytes: 300 });

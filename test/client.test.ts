@@ -4,10 +4,12 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+
+import type { BrokerPaths } from "../src/paths.js";
+
 import { Broker } from "../src/broker.js";
 import { createClient } from "../src/client.js";
 import { BrokerServer } from "../src/ipc.js";
-import type { BrokerPaths } from "../src/paths.js";
 import { PACKAGE_VERSION } from "../src/version.js";
 
 function paths(root: string): BrokerPaths {
@@ -29,7 +31,12 @@ test("typed client follows and runs an invocation through the broker", async () 
   const client = createClient({ socketPath: brokerPaths.socketPath });
   try {
     const result = await client.run({
-      selector: { provider: "agent-bridge", model: "fake-echo", via: "fake", requiredCapabilities: [] },
+      selector: {
+        provider: "agent-bridge",
+        model: "fake-echo",
+        via: "fake",
+        requiredCapabilities: [],
+      },
       input: [{ type: "text", text: "typed client" }],
       workingDirectory: root,
       interactionStrategy: "orchestrator",
@@ -77,7 +84,11 @@ test("typed client checks broker version once per client instance", async () => 
     await client.routes();
     assert.deepEqual(requests, ["system.status", "system.describe", "route.discover"]);
   } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolve) =>
+      server.close(() => {
+        resolve();
+      }),
+    );
     await rm(root, { recursive: true, force: true });
   }
 });

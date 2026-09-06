@@ -1,8 +1,15 @@
 import { join } from "node:path";
 
-import type { JsonValue, ObservedIdentity, RouteDescriptor, Usage, WorkspaceEffect } from "../contract.js";
-import { type CommandSpec, type ContentAccumulator, ProcessAdapter, promptFor } from "./process.js";
+import type {
+  JsonValue,
+  ObservedIdentity,
+  RouteDescriptor,
+  Usage,
+  WorkspaceEffect,
+} from "../contract.js";
 import type { AdapterEvent, AdapterRunContext } from "./types.js";
+
+import { type CommandSpec, type ContentAccumulator, ProcessAdapter, promptFor } from "./process.js";
 
 const SCENARIOS = [
   "success",
@@ -48,7 +55,7 @@ function numberValue(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
-function usage(value: unknown): Usage | undefined {
+function usage(value: unknown): undefined | Usage {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return undefined;
   }
@@ -74,11 +81,19 @@ export class FakeProcessAdapter extends ProcessAdapter {
   }
 
   protected command(context: AdapterRunContext): CommandSpec {
-    const harness = process.env.AGENT_BRIDGE_FAKE_HARNESS_PATH ?? join(process.cwd(), "scripts", "fake-harness.mjs");
+    const harness =
+      process.env.AGENT_BRIDGE_FAKE_HARNESS_PATH ??
+      join(process.cwd(), "scripts", "fake-harness.mjs");
     if (context.route.model === "exit-before-read") {
       return {
         executable: process.execPath,
-        args: [harness, "--scenario", context.route.model, "--cwd", context.request.workingDirectory],
+        args: [
+          harness,
+          "--scenario",
+          context.route.model,
+          "--cwd",
+          context.request.workingDirectory,
+        ],
         stdin: promptFor(context),
       };
     }
@@ -101,7 +116,11 @@ export class FakeProcessAdapter extends ProcessAdapter {
     state: { identity: ObservedIdentity; content: ContentAccumulator },
   ): AdapterEvent | undefined {
     const type = typeof value.type === "string" ? value.type : "unknown";
-    if (value.provider === "agent-bridge" || value.model !== undefined || value.harnessVersion !== undefined) {
+    if (
+      value.provider === "agent-bridge" ||
+      value.model !== undefined ||
+      value.harnessVersion !== undefined
+    ) {
       state.identity = {
         ...state.identity,
         ...(typeof value.provider === "string"
@@ -111,14 +130,23 @@ export class FakeProcessAdapter extends ProcessAdapter {
           ? { model: { value: value.model, evidence: "reported", source: "fake-process" } }
           : {}),
         ...(typeof value.harnessVersion === "string"
-          ? { harnessVersion: { value: value.harnessVersion, evidence: "reported", source: "fake-process" } }
+          ? {
+              harnessVersion: {
+                value: value.harnessVersion,
+                evidence: "reported",
+                source: "fake-process",
+              },
+            }
           : {}),
       };
     }
     if (type === "progress") {
       return {
         category: "activity",
-        data: { phase: "fake-process", ...(typeof value.step === "number" ? { step: value.step } : {}) },
+        data: {
+          phase: "fake-process",
+          ...(typeof value.step === "number" ? { step: value.step } : {}),
+        },
         native: value,
       };
     }
@@ -162,7 +190,12 @@ export class FakeProcessAdapter extends ProcessAdapter {
       const reportedUsage = usage(value.usage);
       return reportedUsage === undefined
         ? { category: "activity", data: { phase: "usage" }, native: value }
-        : { category: "usage", data: { usage: { ...reportedUsage } }, usage: reportedUsage, native: value };
+        : {
+            category: "usage",
+            data: { usage: { ...reportedUsage } },
+            usage: reportedUsage,
+            native: value,
+          };
     }
     return type === "init" ? { category: "lifecycle", native: value } : undefined;
   }

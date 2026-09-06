@@ -30,15 +30,15 @@ detach-versus-cancel design without depending on its chat or sandbox lifecycle.
 
 ## Measured results
 
-| Scenario | Claude Code | Codex |
-| --- | --- | --- |
-| Basic in-place edit | Passed in 10.7 s | Passed in 18.5 s |
-| Native session ID | Emitted | Emitted |
-| Continuation | Same session, passed in 6.1 s | Same thread, passed in 16.4 s |
-| Live tool events | Bash/tool events | command/file-change events |
-| File watcher | Detected create/change with unified diff | Detected create/change with unified diff |
-| Cancel after 8 s | Stream stopped; process tree gone | Stream stopped; child `sleep 120` survived |
-| Terminal event after cancel | None | None |
+| Scenario                    | Claude Code                              | Codex                                      |
+| --------------------------- | ---------------------------------------- | ------------------------------------------ |
+| Basic in-place edit         | Passed in 10.7 s                         | Passed in 18.5 s                           |
+| Native session ID           | Emitted                                  | Emitted                                    |
+| Continuation                | Same session, passed in 6.1 s            | Same thread, passed in 16.4 s              |
+| Live tool events            | Bash/tool events                         | command/file-change events                 |
+| File watcher                | Detected create/change with unified diff | Detected create/change with unified diff   |
+| Cancel after 8 s            | Stream stopped; process tree gone        | Stream stopped; child `sleep 120` survived |
+| Terminal event after cancel | None                                     | None                                       |
 
 The orphaned Codex test process was verified with parent PID 1 and then
 explicitly terminated. The Claude cancellation left no matching process.

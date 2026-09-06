@@ -1,6 +1,16 @@
-import { randomUUID } from "node:crypto";
-import { appendFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import type { Dirent } from "node:fs";
+
+import { randomUUID } from "node:crypto";
+import {
+  appendFile,
+  mkdir,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import {
@@ -16,9 +26,9 @@ import {
   type JsonValue,
   type ObservedIdentity,
   type ObservedValue,
-  type PolicyEvidence,
   parseContentParts,
   parseStartInvocationRequest,
+  type PolicyEvidence,
   type QualificationEvidence,
   type ResolvedRoute,
   SCHEMA_VERSION,
@@ -30,24 +40,24 @@ import {
 } from "./contract.js";
 import { BridgeError } from "./errors.js";
 
-interface PersistedState {
+type PersistedState = {
   readonly storageVersion: 1;
   readonly invocations: readonly InvocationRecord[];
   readonly tombstones: readonly InvocationTombstone[];
-}
+};
 
-export interface StoreSnapshot {
+export type StoreSnapshot = {
   readonly invocations: readonly InvocationRecord[];
   readonly tombstones: readonly InvocationTombstone[];
-}
+};
 
 type UnknownRecord = Record<string, unknown>;
 
-interface FileSizes {
+type FileSizes = {
   events: number;
   metadata: number;
   outcome: number;
-}
+};
 
 function corrupt(message: string): never {
   throw new BridgeError({
@@ -101,7 +111,7 @@ function jsonObject(value: unknown, field: string): Readonly<Record<string, Json
   if (!isJsonValue(source)) {
     corrupt(`${field} must contain only JSON values.`);
   }
-  return source as Readonly<Record<string, JsonValue>>;
+  return source;
 }
 
 function parseQualification(value: unknown, field: string): readonly QualificationEvidence[] {
@@ -196,12 +206,23 @@ function parseUsage(value: unknown, field: string): Usage {
   };
 }
 
-function parsePolicy(value: unknown, field: string, requestPolicy: PolicyEvidence["requestedPolicy"]): PolicyEvidence {
+function parsePolicy(
+  value: unknown,
+  field: string,
+  requestPolicy: PolicyEvidence["requestedPolicy"],
+): PolicyEvidence {
   const source = objectValue(value, field);
   return {
     requestedPolicy: requestPolicy,
-    effectiveNativePolicy: jsonObject(source.effectiveNativePolicy, `${field}.effectiveNativePolicy`),
-    assurance: literal<Assurance>(source.assurance, `${field}.assurance`, ["none", "native", "isolated"]),
+    effectiveNativePolicy: jsonObject(
+      source.effectiveNativePolicy,
+      `${field}.effectiveNativePolicy`,
+    ),
+    assurance: literal<Assurance>(source.assurance, `${field}.assurance`, [
+      "none",
+      "native",
+      "isolated",
+    ]),
   };
 }
 
@@ -214,13 +235,27 @@ function parseEffect(value: unknown, field: string): WorkspaceEffect {
   return {
     path: requiredString(source.path, `${field}.path`),
     ...(previousPath === undefined ? {} : { previousPath }),
-    kind: literal(source.kind, `${field}.kind`, ["created", "deleted", "modified", "renamed", "unknown"] as const),
-    evidence: literal(source.evidence, `${field}.evidence`, ["git-status", "harness-reported"] as const),
+    kind: literal(source.kind, `${field}.kind`, [
+      "created",
+      "deleted",
+      "modified",
+      "renamed",
+      "unknown",
+    ] as const),
+    evidence: literal(source.evidence, `${field}.evidence`, [
+      "git-status",
+      "harness-reported",
+    ] as const),
     ...(source.outsideWorkspace === true ? { outsideWorkspace: true } : {}),
   };
 }
 
-function parseEvent(value: unknown, field: string, invocationId: string, expectedSequence: number): InvocationEvent {
+function parseEvent(
+  value: unknown,
+  field: string,
+  invocationId: string,
+  expectedSequence: number,
+): InvocationEvent {
   const source = objectValue(value, field);
   const sequence = finiteNumber(source.sequence, `${field}.sequence`);
   if (!Number.isSafeInteger(sequence) || sequence !== expectedSequence) {
@@ -229,9 +264,13 @@ function parseEvent(value: unknown, field: string, invocationId: string, expecte
   if (source.invocationId !== invocationId || source.schemaVersion !== SCHEMA_VERSION) {
     corrupt(`${field} identity does not match its invocation.`);
   }
-  const content = source.content === undefined ? undefined : parseContentParts(source.content, `${field}.content`);
+  const content =
+    source.content === undefined
+      ? undefined
+      : parseContentParts(source.content, `${field}.content`);
   const data = source.data === undefined ? undefined : jsonObject(source.data, `${field}.data`);
-  const native = source.native === undefined ? undefined : jsonObject(source.native, `${field}.native`);
+  const native =
+    source.native === undefined ? undefined : jsonObject(source.native, `${field}.native`);
   const provenanceSource = objectValue(source.provenance, `${field}.provenance`);
   const adapter = optionalString(provenanceSource.adapter, `${field}.provenance.adapter`);
   return {
@@ -253,21 +292,31 @@ function parseEvent(value: unknown, field: string, invocationId: string, expecte
     ...(content === undefined ? {} : { content }),
     ...(data === undefined ? {} : { data }),
     provenance: {
-      source: literal(provenanceSource.source, `${field}.provenance.source`, ["adapter", "bridge"] as const),
+      source: literal(provenanceSource.source, `${field}.provenance.source`, [
+        "adapter",
+        "bridge",
+      ] as const),
       ...(adapter === undefined ? {} : { adapter }),
     },
     ...(native === undefined ? {} : { native }),
   };
 }
 
-function parseOutcome(value: unknown, field: string, invocationId: string, policy: PolicyEvidence): InvocationOutcome {
+function parseOutcome(
+  value: unknown,
+  field: string,
+  invocationId: string,
+  policy: PolicyEvidence,
+): InvocationOutcome {
   const source = objectValue(value, field);
   if (source.schemaVersion !== SCHEMA_VERSION || source.invocationId !== invocationId) {
     corrupt(`${field} identity does not match its invocation.`);
   }
   const startedAt = optionalString(source.startedAt, `${field}.startedAt`);
   const durationMs =
-    source.durationMs === undefined ? undefined : finiteNumber(source.durationMs, `${field}.durationMs`);
+    source.durationMs === undefined
+      ? undefined
+      : finiteNumber(source.durationMs, `${field}.durationMs`);
   if (durationMs !== undefined && durationMs < 0) {
     corrupt(`${field}.durationMs must not be negative.`);
   }
@@ -302,10 +351,15 @@ function parseOutcome(value: unknown, field: string, invocationId: string, polic
     ]),
     content: parseContentParts(source.content, `${field}.content`),
     artifacts: parseContentParts(source.artifacts, `${field}.artifacts`),
-    effects: source.effects.map((effect, index) => parseEffect(effect, `${field}.effects[${index}]`)),
+    effects: source.effects.map((effect, index) =>
+      parseEffect(effect, `${field}.effects[${index}]`),
+    ),
     effectObservation: {
       complete: effectObservation.complete,
-      diagnostics: stringList(effectObservation.diagnostics ?? [], `${field}.effectObservation.diagnostics`),
+      diagnostics: stringList(
+        effectObservation.diagnostics ?? [],
+        `${field}.effectObservation.diagnostics`,
+      ),
     },
     ...(usage === undefined ? {} : { usage }),
     observedIdentity: parseObservedIdentity(source.observedIdentity, `${field}.observedIdentity`),
@@ -357,17 +411,24 @@ function parseInvocation(value: unknown, index: number): InvocationRecord {
     parseEvent(event, `${field}.events[${eventIndex}]`, invocationId, eventIndex + 1),
   );
   const persistedEventCount =
-    source.eventCount === undefined ? events.length : finiteNumber(source.eventCount, `${field}.eventCount`);
+    source.eventCount === undefined
+      ? events.length
+      : finiteNumber(source.eventCount, `${field}.eventCount`);
   if (!Number.isSafeInteger(persistedEventCount) || persistedEventCount < 0) {
     corrupt(`${field}.eventCount must be a non-negative safe integer.`);
   }
   const eventCount = Math.max(events.length, persistedEventCount);
   const outcome =
-    source.outcome === undefined ? undefined : parseOutcome(source.outcome, `${field}.outcome`, invocationId, policy);
+    source.outcome === undefined
+      ? undefined
+      : parseOutcome(source.outcome, `${field}.outcome`, invocationId, policy);
   if (TERMINAL_STATES.has(state) !== (outcome !== undefined)) {
     corrupt(`${field} must have exactly one outcome if and only if it is terminal.`);
   }
-  const callerCorrelationId = optionalString(source.callerCorrelationId, `${field}.callerCorrelationId`);
+  const callerCorrelationId = optionalString(
+    source.callerCorrelationId,
+    `${field}.callerCorrelationId`,
+  );
   const idempotencyKey = optionalString(source.idempotencyKey, `${field}.idempotencyKey`);
   const startedAt = optionalString(source.startedAt, `${field}.startedAt`);
   return {
@@ -448,7 +509,12 @@ export class InvocationStore {
     try {
       text = await readFile(this.#stateFile, "utf8");
     } catch (error) {
-      if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
+      if (
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        error.code === "ENOENT"
+      ) {
         return this.#loadDirectory();
       }
       throw error;
@@ -484,11 +550,15 @@ export class InvocationStore {
     return { invocations: state.invocations, tombstones: state.tombstones };
   }
 
-  async save(invocations: readonly InvocationRecord[], tombstones: readonly InvocationTombstone[] = []): Promise<void> {
+  async save(
+    invocations: readonly InvocationRecord[],
+    tombstones: readonly InvocationTombstone[] = [],
+  ): Promise<void> {
     const work = async (): Promise<void> => {
       await this.#ensureDirectories();
       await this.#writeRecords(invocations);
       const retained = new Set(invocations.map((record) => record.invocationId));
+      // oxlint-disable-next-line unicorn/no-useless-spread -- the loop body deletes from #knownSequences while iterating it
       for (const invocationId of [...this.#knownSequences.keys()]) {
         if (retained.has(invocationId)) {
           continue;
@@ -521,16 +591,24 @@ export class InvocationStore {
 
   async events(invocationId: string): Promise<readonly InvocationEvent[]> {
     await this.#writeTail;
-    return this.#readEvents(join(this.#invocationDirectory(invocationId), "events.jsonl"), invocationId);
+    return this.#readEvents(
+      join(this.#invocationDirectory(invocationId), "events.jsonl"),
+      invocationId,
+    );
   }
 
   async #loadDirectory(): Promise<StoreSnapshot> {
     const invocations: InvocationRecord[] = [];
-    let entries: Dirent<string>[];
+    let entries: Dirent[];
     try {
       entries = await readdir(this.#invocationsDirectory, { withFileTypes: true });
     } catch (error) {
-      if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
+      if (
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        error.code === "ENOENT"
+      ) {
         await this.#refreshAuxiliarySizes();
         return { invocations: [], tombstones: [] };
       }
@@ -548,9 +626,17 @@ export class InvocationStore {
       const events = await this.#readEvents(join(directory, "events.jsonl"), invocationId);
       let outcome: unknown;
       try {
-        outcome = await this.#readJson(join(directory, "outcome.json"), `outcome for ${invocationId}`);
+        outcome = await this.#readJson(
+          join(directory, "outcome.json"),
+          `outcome for ${invocationId}`,
+        );
       } catch (error) {
-        if (!(typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT")) {
+        if (
+          typeof error !== "object" ||
+          error === null ||
+          !("code" in error) ||
+          error.code !== "ENOENT"
+        ) {
           throw error;
         }
       }
@@ -578,13 +664,21 @@ export class InvocationStore {
     }
     let tombstones: readonly InvocationTombstone[] = [];
     try {
-      const source = objectValue(await this.#readJson(this.#tombstonesFile, "tombstones"), "tombstones");
+      const source = objectValue(
+        await this.#readJson(this.#tombstonesFile, "tombstones"),
+        "tombstones",
+      );
       if (!Array.isArray(source.tombstones)) {
         corrupt("tombstones.tombstones must be an array.");
       }
       tombstones = source.tombstones.map(parseTombstone);
     } catch (error) {
-      if (!(typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT")) {
+      if (
+        typeof error !== "object" ||
+        error === null ||
+        !("code" in error) ||
+        error.code !== "ENOENT"
+      ) {
         throw error;
       }
     }
@@ -605,7 +699,11 @@ export class InvocationStore {
     for (const record of invocations) {
       const directory = this.#invocationDirectory(record.invocationId);
       await mkdir(directory, { recursive: true, mode: 0o700 });
-      const sizes = this.#knownSizes.get(record.invocationId) ?? { events: 0, metadata: 0, outcome: 0 };
+      const sizes = this.#knownSizes.get(record.invocationId) ?? {
+        events: 0,
+        metadata: 0,
+        outcome: 0,
+      };
       const eventsPath = join(directory, "events.jsonl");
       const eventsLoaded = record.events.length === record.eventCount;
       if (eventsLoaded) {
@@ -642,11 +740,17 @@ export class InvocationStore {
   }
 
   async #writeTombstones(tombstones: readonly InvocationTombstone[]): Promise<void> {
-    this.#tombstonesBytes = await this.#writeJson(this.#tombstonesFile, { storageVersion: 2, tombstones });
+    this.#tombstonesBytes = await this.#writeJson(this.#tombstonesFile, {
+      storageVersion: 2,
+      tombstones,
+    });
   }
 
   async #writeManifest(): Promise<void> {
-    this.#manifestBytes = await this.#writeJson(this.#stateFile, { storageVersion: 2, format: "directory-v1" });
+    this.#manifestBytes = await this.#writeJson(this.#stateFile, {
+      storageVersion: 2,
+      format: "directory-v1",
+    });
   }
 
   async #writeJson(path: string, value: unknown): Promise<number> {
@@ -661,7 +765,12 @@ export class InvocationStore {
     try {
       return (await stat(path)).size;
     } catch (error) {
-      if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
+      if (
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        error.code === "ENOENT"
+      ) {
         return 0;
       }
       throw error;
@@ -694,7 +803,12 @@ export class InvocationStore {
     try {
       text = await readFile(path, "utf8");
     } catch (error) {
-      if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
+      if (
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        error.code === "ENOENT"
+      ) {
         return [];
       }
       throw error;

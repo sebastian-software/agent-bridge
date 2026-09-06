@@ -4,14 +4,14 @@ import { join } from "node:path";
 
 import { BridgeError } from "./errors.js";
 
-export interface BrokerPaths {
+export type BrokerPaths = {
   readonly runtimeDirectory: string;
   readonly stateDirectory: string;
   readonly socketPath: string;
   /** Legacy socket retained for one release when migrating from XDG_RUNTIME_DIR/broker.sock. */
   readonly legacySocketPath?: string;
   readonly stateFile: string;
-}
+};
 
 export async function ensurePrivateDirectory(path: string, label: string): Promise<void> {
   await mkdir(path, { recursive: true, mode: 0o700 });
@@ -62,7 +62,10 @@ export function brokerPaths(environment: NodeJS.ProcessEnv = process.env): Broke
     join(tmpdir(), `agent-bridge-${uid}`);
   const stateDirectory =
     usableEnvironmentPath("AGENT_BRIDGE_STATE_DIR", environment) ??
-    join(usableEnvironmentPath("XDG_STATE_HOME", environment) ?? join(homedir(), ".local", "state"), "agent-bridge");
+    join(
+      usableEnvironmentPath("XDG_STATE_HOME", environment) ?? join(homedir(), ".local", "state"),
+      "agent-bridge",
+    );
   return {
     runtimeDirectory,
     stateDirectory,

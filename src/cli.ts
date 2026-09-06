@@ -8,11 +8,11 @@ import { createClient } from "./client.js";
 import { type BrokerConfigValues, loadBrokerConfig } from "./config.js";
 import { BridgeError, errorDetail } from "./errors.js";
 import { BrokerServer, IpcClient } from "./ipc.js";
+import { writeBrokerLog } from "./log.js";
 import { McpServer } from "./mcp.js";
 import { brokerPaths } from "./paths.js";
-import { PACKAGE_VERSION } from "./version.js";
-import { writeBrokerLog } from "./log.js";
 import { messageFrom } from "./util.js";
+import { PACKAGE_VERSION } from "./version.js";
 
 const HELP = `agent-bridge — local harness delegation gateway
 
@@ -69,10 +69,10 @@ Environment:
   AGENT_BRIDGE_SOCKET_PATH      Override the Unix socket path
 `;
 
-interface ParsedArguments {
+type ParsedArguments = {
   readonly positionals: readonly string[];
   readonly options: ReadonlyMap<string, readonly string[]>;
-}
+};
 
 const BOOLEAN_OPTIONS = new Set([
   "active",
@@ -92,6 +92,7 @@ function parseArguments(args: readonly string[]): ParsedArguments {
   const options = new Map<string, string[]>();
   for (let index = 0; index < args.length; index += 1) {
     const token = args[index];
+    // eslint-disable-next-line security/detect-possible-timing-attacks -- `token` is a command-line argument, not a secret
     if (token === undefined) {
       continue;
     }
@@ -184,7 +185,11 @@ function nonNegativeInteger(value: string | undefined, name: string): number | u
   return parsed;
 }
 
-function boundedPositiveInteger(value: string | undefined, name: string, maximum: number): number | undefined {
+function boundedPositiveInteger(
+  value: string | undefined,
+  name: string,
+  maximum: number,
+): number | undefined {
   const parsed = positiveInteger(value, name);
   if (parsed !== undefined && parsed > maximum) {
     throw new BridgeError({
@@ -231,7 +236,12 @@ function human(value: unknown): void {
 }
 
 function textContent(value: unknown): string {
-  if (typeof value !== "object" || value === null || !("content" in value) || !Array.isArray(value.content)) {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("content" in value) ||
+    !Array.isArray(value.content)
+  ) {
     return "";
   }
   return value.content
@@ -252,8 +262,14 @@ function eventSummary(event: unknown): string {
   if (typeof event !== "object" || event === null) {
     return "event";
   }
-  const category = "category" in event && typeof event.category === "string" ? event.category : "event";
-  if ("data" in event && typeof event.data === "object" && event.data !== null && !Array.isArray(event.data)) {
+  const category =
+    "category" in event && typeof event.category === "string" ? event.category : "event";
+  if (
+    "data" in event &&
+    typeof event.data === "object" &&
+    event.data !== null &&
+    !Array.isArray(event.data)
+  ) {
     const data = event.data as Readonly<Record<string, unknown>>;
     if (typeof data.state === "string") {
       return `${category}: ${data.state}`;
@@ -283,7 +299,12 @@ async function readLogDelta(path: string, offset: number): Promise<number> {
       const buffer = Buffer.alloc(64 * 1024);
       let position = start;
       while (position < size) {
-        const { bytesRead } = await file.read(buffer, 0, Math.min(buffer.length, size - position), position);
+        const { bytesRead } = await file.read(
+          buffer,
+          0,
+          Math.min(buffer.length, size - position),
+          position,
+        );
         if (bytesRead === 0) {
           break;
         }
@@ -302,12 +323,21 @@ async function readLogDelta(path: string, offset: number): Promise<number> {
   }
 }
 
-async function promptAndInput(parsed: ParsedArguments): Promise<readonly Record<string, unknown>[]> {
+async function promptAndInput(
+  parsed: ParsedArguments,
+): Promise<ReadonlyArray<Record<string, unknown>>> {
   const inputJson = option(parsed, "input-json");
   const promptFile = option(parsed, "prompt-file");
   const text = option(parsed, "text");
-  if (inputJson !== undefined && (promptFile !== undefined || text !== undefined || parsed.positionals.length > 0)) {
-    throw new BridgeError({ code: "invalid_request", message: "Use only one prompt source.", retryable: false });
+  if (
+    inputJson !== undefined &&
+    (promptFile !== undefined || text !== undefined || parsed.positionals.length > 0)
+  ) {
+    throw new BridgeError({
+      code: "invalid_request",
+      message: "Use only one prompt source.",
+      retryable: false,
+    });
   }
   if (inputJson !== undefined) {
     const raw = inputJson === "-" ? await readStandardInput() : await readFile(inputJson, "utf8");
@@ -316,7 +346,11 @@ async function promptAndInput(parsed: ParsedArguments): Promise<readonly Record<
       decoded = JSON.parse(raw) as unknown;
     } catch (error) {
       throw new BridgeError(
-        { code: "invalid_request", message: "--input-json must contain valid JSON.", retryable: false },
+        {
+          code: "invalid_request",
+          message: "--input-json must contain valid JSON.",
+          retryable: false,
+        },
         { cause: error },
       );
     }
@@ -327,7 +361,7 @@ async function promptAndInput(parsed: ParsedArguments): Promise<readonly Record<
         retryable: false,
       });
     }
-    return decoded as readonly Record<string, unknown>[];
+    return decoded as ReadonlyArray<Record<string, unknown>>;
   }
   let prompt: string | undefined = text;
   if (promptFile !== undefined) {
@@ -387,14 +421,23 @@ async function startParams(parsed: ParsedArguments): Promise<Readonly<Record<str
 }
 
 function routeTable(value: unknown): string {
-  if (typeof value !== "object" || value === null || !("routes" in value) || !Array.isArray(value.routes)) {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("routes" in value) ||
+    !Array.isArray(value.routes)
+  ) {
     return JSON.stringify(value, null, 2);
   }
-  const lines = ["ROUTE                              READINESS    VERSION       AUTH       STRATEGIES"];
+  const lines = [
+    "ROUTE                              READINESS    VERSION       AUTH       STRATEGIES",
+  ];
   for (const route of value.routes) {
     if (typeof route !== "object" || route === null) continue;
     const item = route as Readonly<Record<string, unknown>>;
-    const strategies = Array.isArray(item.interactionStrategies) ? item.interactionStrategies.join(",") : "";
+    const strategies = Array.isArray(item.interactionStrategies)
+      ? item.interactionStrategies.join(",")
+      : "";
     lines.push(
       `${String(item.routeId ?? "").padEnd(34)} ${String(item.readiness ?? "").padEnd(11)} ${String(item.harnessVersion ?? "").padEnd(13)} ${String(item.authenticationMode ?? "").padEnd(10)} ${strategies}`,
     );
@@ -403,10 +446,17 @@ function routeTable(value: unknown): string {
 }
 
 function summaryTable(value: unknown): string {
-  if (typeof value !== "object" || value === null || !("invocations" in value) || !Array.isArray(value.invocations)) {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("invocations" in value) ||
+    !Array.isArray(value.invocations)
+  ) {
     return JSON.stringify(value, null, 2);
   }
-  const lines = ["INVOCATION                         STATE              CREATED                 ROUTE"];
+  const lines = [
+    "INVOCATION                         STATE              CREATED                 ROUTE",
+  ];
   for (const entry of value.invocations) {
     if (typeof entry !== "object" || entry === null) continue;
     const item = entry as Readonly<Record<string, unknown>>;
@@ -424,7 +474,7 @@ async function readStandardInput(): Promise<string> {
   process.stdin.setEncoding("utf8");
   let result = "";
   for await (const chunk of process.stdin) {
-    result += chunk;
+    result += String(chunk);
     if (Buffer.byteLength(result, "utf8") > 1_048_576) {
       throw new BridgeError({
         code: "invalid_request",
@@ -495,7 +545,7 @@ async function requestRunningBroker(operation: string, params: unknown): Promise
 }
 
 async function startMcp(): Promise<void> {
-  await new McpServer((operation, params) => requestBroker(operation, params)).serve();
+  await new McpServer(async (operation, params) => requestBroker(operation, params)).serve();
 }
 
 function parseEventsPage(value: unknown): {
@@ -522,7 +572,8 @@ function parseEventsPage(value: unknown): {
       retryable: true,
     });
   }
-  const nextCursor = "nextCursor" in value && typeof value.nextCursor === "string" ? value.nextCursor : undefined;
+  const nextCursor =
+    "nextCursor" in value && typeof value.nextCursor === "string" ? value.nextCursor : undefined;
   return {
     events: value.events,
     ...(nextCursor === undefined ? {} : { nextCursor }),
@@ -545,17 +596,34 @@ async function runCommand(argv: readonly string[]): Promise<void> {
   if (command === "broker") {
     const action = positional(parsed, 0, "broker action");
     if (action === "serve") {
-      const overrides: { -readonly [Key in keyof BrokerConfigValues]?: BrokerConfigValues[Key] } = {};
+      const overrides: { -readonly [Key in keyof BrokerConfigValues]?: BrokerConfigValues[Key] } =
+        {};
       const retentionCompletedDays = nonNegativeInteger(
         option(parsed, "retention-completed-days"),
         "retention-completed-days",
       );
-      const retentionMaxBytes = positiveInteger(option(parsed, "retention-max-bytes"), "retention-max-bytes");
-      const idleShutdownMinutes = nonNegativeInteger(option(parsed, "idle-shutdown-minutes"), "idle-shutdown-minutes");
-      const effectsMaxFiles = positiveInteger(option(parsed, "effects-max-files"), "effects-max-files");
-      const effectsMaxBytes = positiveInteger(option(parsed, "effects-max-bytes"), "effects-max-bytes");
-      const terminationGraceMs = positiveInteger(option(parsed, "termination-grace-ms"), "termination-grace-ms");
-      if (retentionCompletedDays !== undefined) overrides.retentionCompletedDays = retentionCompletedDays;
+      const retentionMaxBytes = positiveInteger(
+        option(parsed, "retention-max-bytes"),
+        "retention-max-bytes",
+      );
+      const idleShutdownMinutes = nonNegativeInteger(
+        option(parsed, "idle-shutdown-minutes"),
+        "idle-shutdown-minutes",
+      );
+      const effectsMaxFiles = positiveInteger(
+        option(parsed, "effects-max-files"),
+        "effects-max-files",
+      );
+      const effectsMaxBytes = positiveInteger(
+        option(parsed, "effects-max-bytes"),
+        "effects-max-bytes",
+      );
+      const terminationGraceMs = positiveInteger(
+        option(parsed, "termination-grace-ms"),
+        "termination-grace-ms",
+      );
+      if (retentionCompletedDays !== undefined)
+        overrides.retentionCompletedDays = retentionCompletedDays;
       if (retentionMaxBytes !== undefined) overrides.retentionMaxBytes = retentionMaxBytes;
       if (parsed.options.has("diagnostic-mode")) overrides.diagnosticMode = true;
       if (idleShutdownMinutes !== undefined) overrides.idleShutdownMinutes = idleShutdownMinutes;
@@ -566,12 +634,19 @@ async function runCommand(argv: readonly string[]): Promise<void> {
       return;
     }
     if (action === "stop") {
-      output(await requestRunningBroker("system.shutdown", { force: parsed.options.has("force") }), json);
+      output(
+        await requestRunningBroker("system.shutdown", { force: parsed.options.has("force") }),
+        json,
+      );
       return;
     }
     if (action === "status") {
       const status = await requestRunningBroker("system.status", {});
-      json ? output(status, true) : human(status);
+      if (json) {
+        output(status, true);
+      } else {
+        human(status);
+      }
       return;
     }
     if (action === "logs") {
@@ -586,7 +661,12 @@ async function runCommand(argv: readonly string[]): Promise<void> {
       try {
         output(await readFile(`${paths.stateDirectory}/broker.log`, "utf8"), json);
       } catch (error) {
-        if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
+        if (
+          typeof error === "object" &&
+          error !== null &&
+          "code" in error &&
+          error.code === "ENOENT"
+        ) {
           output("", json);
           return;
         }
@@ -622,19 +702,33 @@ async function runCommand(argv: readonly string[]): Promise<void> {
   }
   if (command === "describe") {
     const described = await requestBroker("system.describe", {});
-    json ? output(described, true) : human(described);
+    if (json) {
+      output(described, true);
+    } else {
+      human(described);
+    }
     return;
   }
   if (command === "routes") {
-    const routes = await requestBroker("route.discover", { refresh: parsed.options.has("refresh") });
-    json ? output(routes, true) : process.stdout.write(`${routeTable(routes)}\n`);
+    const routes = await requestBroker("route.discover", {
+      refresh: parsed.options.has("refresh"),
+    });
+    if (json) {
+      output(routes, true);
+    } else {
+      process.stdout.write(`${routeTable(routes)}\n`);
+    }
     return;
   }
   if (command === "start" || command === "run") {
     const params = await startParams(parsed);
     const started = await client.start(params as never);
     if (command === "start") {
-      json ? output(started, true) : human(`${started.invocationId} ${started.state}`);
+      if (json) {
+        output(started, true);
+      } else {
+        human(`${started.invocationId} ${started.state}`);
+      }
       return;
     }
     let interrupted = false;
@@ -659,9 +753,11 @@ async function runCommand(argv: readonly string[]): Promise<void> {
       } else {
         const content = textContent(result.outcome);
         if (content !== "") process.stdout.write(`${content}\n`);
-        if (result.outcome.error !== undefined) process.stderr.write(`${result.outcome.error.message}\n`);
+        if (result.outcome.error !== undefined)
+          process.stderr.write(`${result.outcome.error.message}\n`);
       }
       if (interrupted || result.outcome.status !== "succeeded") {
+        // eslint-disable-next-line require-atomic-updates -- the CLI is the only writer of process.exitCode
         process.exitCode = interrupted ? exitCode("cancelled") : exitCode(result.outcome.status);
       }
       return;
@@ -675,7 +771,11 @@ async function runCommand(argv: readonly string[]): Promise<void> {
       ...(parsed.options.has("active") ? { active: true } : {}),
       ...(correlation === undefined ? {} : { callerCorrelationId: correlation }),
     });
-    json ? output(list, true) : process.stdout.write(`${summaryTable(list)}\n`);
+    if (json) {
+      output(list, true);
+    } else {
+      process.stdout.write(`${summaryTable(list)}\n`);
+    }
     return;
   }
   if (command === "inspect" || command === "get") {
@@ -683,7 +783,11 @@ async function runCommand(argv: readonly string[]): Promise<void> {
     const inspected = await requestBroker(operation, {
       invocationId: positional(parsed, 0, "invocation ID"),
     });
-    json ? output(inspected, true) : human(inspected);
+    if (json) {
+      output(inspected, true);
+    } else {
+      human(inspected);
+    }
     return;
   }
   if (command === "result") {
@@ -712,14 +816,19 @@ async function runCommand(argv: readonly string[]): Promise<void> {
     const invocationId = positional(parsed, 0, "invocation ID");
     const waited = parsed.options.has("until-terminal")
       ? await client.wait(invocationId)
-      : await requestBroker("invocation.wait", { invocationId, ...(timeoutMs === undefined ? {} : { timeoutMs }) });
-    json
-      ? output(waited, true)
-      : human(
-          typeof waited === "object" && waited !== null && "state" in waited
-            ? `${String(waited.state)}${"waited" in waited && waited.waited === false ? " (still active)" : ""}`
-            : waited,
-        );
+      : await requestBroker("invocation.wait", {
+          invocationId,
+          ...(timeoutMs === undefined ? {} : { timeoutMs }),
+        });
+    if (json) {
+      output(waited, true);
+    } else {
+      human(
+        typeof waited === "object" && waited !== null && "state" in waited
+          ? `${String(waited.state)}${"waited" in waited && waited.waited === false ? " (still active)" : ""}`
+          : waited,
+      );
+    }
     return;
   }
   if (command === "events") {
@@ -744,7 +853,11 @@ async function runCommand(argv: readonly string[]): Promise<void> {
         }),
       );
       for (const event of page.events) {
-        json ? output(event, true) : process.stdout.write(`${eventSummary(event)}\n`);
+        if (json) {
+          output(event, true);
+        } else {
+          process.stdout.write(`${eventSummary(event)}\n`);
+        }
       }
       if (page.nextCursor !== undefined) {
         after = page.nextCursor;
@@ -791,7 +904,9 @@ async function runCommand(argv: readonly string[]): Promise<void> {
   });
 }
 
-runCommand(process.argv.slice(2)).catch((error: unknown) => {
+try {
+  await runCommand(process.argv.slice(2));
+} catch (error: unknown) {
   const detail = errorDetail(error);
   const wantsJson = process.argv.includes("--json");
   if (wantsJson) {
@@ -800,4 +915,4 @@ runCommand(process.argv.slice(2)).catch((error: unknown) => {
     process.stderr.write(`agent-bridge: ${detail.message} (${detail.code})\n`);
   }
   process.exitCode = exitCode(detail.code);
-});
+}

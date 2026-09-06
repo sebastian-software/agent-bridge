@@ -3,18 +3,27 @@ import { dirname } from "node:path";
 
 const MAX_LOG_BYTES = 1_048_576;
 
-export type BrokerLogLevel = "warn" | "error" | "info";
+export type BrokerLogLevel = "error" | "info" | "warn";
 
-export async function writeBrokerLog(path: string, level: BrokerLogLevel, message: string): Promise<void> {
+export async function writeBrokerLog(
+  path: string,
+  level: BrokerLogLevel,
+  message: string,
+): Promise<void> {
   try {
     await mkdir(dirname(path), { recursive: true, mode: 0o700 });
     try {
       const info = await stat(path);
       if (info.size >= MAX_LOG_BYTES) {
-        await rename(path, `${path}.1`).catch(() => undefined);
+        await rename(path, `${path}.1`).catch(() => {});
       }
     } catch (error) {
-      if (!(typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT")) {
+      if (
+        typeof error !== "object" ||
+        error === null ||
+        !("code" in error) ||
+        error.code !== "ENOENT"
+      ) {
         return;
       }
     }

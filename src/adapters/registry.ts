@@ -1,11 +1,23 @@
-import type { Assurance, EvidenceStatus, ResolvedRoute, RouteDescriptor, StartInvocationRequest } from "../contract.js";
+import type {
+  Assurance,
+  EvidenceStatus,
+  JsonValue,
+  ResolvedRoute,
+  RouteDescriptor,
+  StartInvocationRequest,
+} from "../contract.js";
+import type { Adapter } from "./types.js";
+
 import { BridgeError } from "../errors.js";
-import { applyUserModelCatalog, defaultCatalogPath, loadUserModelCatalog } from "../model-catalog.js";
+import {
+  applyUserModelCatalog,
+  defaultCatalogPath,
+  loadUserModelCatalog,
+} from "../model-catalog.js";
 import { ClaudeAdapter } from "./claude.js";
 import { CodexAdapter } from "./codex.js";
-import { FakeAdapter } from "./fake.js";
 import { FakeProcessAdapter } from "./fake-process.js";
-import type { Adapter } from "./types.js";
+import { FakeAdapter } from "./fake.js";
 
 const ASSURANCE_RANK: Readonly<Record<Assurance, number>> = {
   none: 0,
@@ -25,7 +37,9 @@ const DISCOVERY_TTL_MS = 60_000;
 export class AdapterRegistry {
   readonly #adapters: ReadonlyMap<string, Adapter>;
   readonly #catalogPath: string;
-  #discoveryCache: { readonly expiresAt: number; readonly routes: readonly RouteDescriptor[] } | undefined;
+  #discoveryCache:
+    | { readonly expiresAt: number; readonly routes: readonly RouteDescriptor[] }
+    | undefined;
 
   constructor(
     adapters: readonly Adapter[] = [
@@ -52,11 +66,19 @@ export class AdapterRegistry {
     return adapter;
   }
 
-  async discover(options: { readonly refresh?: boolean } = {}): Promise<readonly RouteDescriptor[]> {
-    if (options.refresh !== true && this.#discoveryCache !== undefined && this.#discoveryCache.expiresAt > Date.now()) {
+  async discover(
+    options: { readonly refresh?: boolean } = {},
+  ): Promise<readonly RouteDescriptor[]> {
+    if (
+      options.refresh !== true &&
+      this.#discoveryCache !== undefined &&
+      this.#discoveryCache.expiresAt > Date.now()
+    ) {
       return this.#discoveryCache.routes;
     }
-    const routeGroups = await Promise.all([...this.#adapters.values()].map((adapter) => adapter.discover()));
+    const routeGroups = await Promise.all(
+      [...this.#adapters.values()].map(async (adapter) => adapter.discover()),
+    );
     const catalog = await loadUserModelCatalog(this.#catalogPath);
     const discoveredAt = new Date().toISOString();
     const routes = [...applyUserModelCatalog(routeGroups.flat(), catalog)]
@@ -69,7 +91,7 @@ export class AdapterRegistry {
   async resolve(request: StartInvocationRequest): Promise<{
     readonly route: ResolvedRoute;
     readonly descriptor: RouteDescriptor;
-    readonly effectiveNativePolicy: Readonly<Record<string, import("../contract.js").JsonValue>>;
+    readonly effectiveNativePolicy: Readonly<Record<string, JsonValue>>;
   }> {
     const routes = await this.discover();
     const evaluated = routes.map((route) => {
@@ -89,11 +111,15 @@ export class AdapterRegistry {
         route.model === selector.model &&
         (selector.via === undefined || route.via === selector.via) &&
         (selector.effort === undefined || route.efforts.includes(selector.effort)) &&
-        selector.requiredCapabilities.every((capability) => route.capabilities.includes(capability)) &&
+        selector.requiredCapabilities.every((capability) =>
+          route.capabilities.includes(capability),
+        ) &&
         route.interactionStrategies.includes(request.interactionStrategy) &&
         (selector.minimumObservedEvidence === undefined ||
-          EVIDENCE_RANK[route.runtimeIdentityEvidence] >= EVIDENCE_RANK[selector.minimumObservedEvidence]) &&
-        ASSURANCE_RANK[route.assurance] >= ASSURANCE_RANK[request.requestedPolicy.minimumAssurance] &&
+          EVIDENCE_RANK[route.runtimeIdentityEvidence] >=
+            EVIDENCE_RANK[selector.minimumObservedEvidence]) &&
+        ASSURANCE_RANK[route.assurance] >=
+          ASSURANCE_RANK[request.requestedPolicy.minimumAssurance] &&
         policy.supported
       );
     });
@@ -110,7 +136,9 @@ export class AdapterRegistry {
           candidates: routes,
           unsupportedPolicies: evaluated
             .filter(({ policy }) => !policy.supported)
-            .flatMap(({ route, policy }) => policy.unsupported.map((field) => ({ routeId: route.routeId, field }))),
+            .flatMap(({ route, policy }) =>
+              policy.unsupported.map((field) => ({ routeId: route.routeId, field })),
+            ),
         },
       });
     }
@@ -136,8 +164,12 @@ export class AdapterRegistry {
       descriptor: candidate.route,
       route: {
         routeId: candidate.route.routeId,
-        ...(candidate.route.executable === undefined ? {} : { executable: candidate.route.executable }),
-        ...(candidate.route.canonicalModel === undefined ? {} : { canonicalModel: candidate.route.canonicalModel }),
+        ...(candidate.route.executable === undefined
+          ? {}
+          : { executable: candidate.route.executable }),
+        ...(candidate.route.canonicalModel === undefined
+          ? {}
+          : { canonicalModel: candidate.route.canonicalModel }),
         adapter: candidate.route.adapter,
         harnessVersion: candidate.route.harnessVersion,
         authenticationMode: candidate.route.authenticationMode,

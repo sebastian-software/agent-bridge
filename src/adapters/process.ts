@@ -6,25 +6,27 @@ import type {
   JsonValue,
   ObservedIdentity,
   ObservedValue,
+  RouteDescriptor,
   StartInvocationRequest,
   Usage,
   WorkspaceEffect,
 } from "../contract.js";
-import { BridgeError } from "../errors.js";
 import type { Adapter, AdapterEvent, AdapterRunContext, AdapterRunResult } from "./types.js";
 
+import { BridgeError } from "../errors.js";
+
 const MAX_NATIVE_EVENT_BYTES = 64 * 1024;
-const TERMINATION_GRACE_MS = 2_000;
+const TERMINATION_GRACE_MS = 2000;
 const REDACTED_ARGUMENT_FLAGS = new Set(["--text", "--prompt", "--prompt-file"]);
 
-export interface CommandSpec {
+export type CommandSpec = {
   readonly executable: string;
   readonly args: readonly string[];
   readonly env?: NodeJS.ProcessEnv;
   readonly envDenyList?: readonly string[];
   readonly stdin?: string;
   readonly keepStdinOpen?: boolean;
-}
+};
 
 function textContent(request: StartInvocationRequest): string {
   return request.input
@@ -100,7 +102,7 @@ function diagnosticArgs(args: readonly string[]): readonly string[] {
 export abstract class ProcessAdapter implements Adapter {
   abstract readonly id: string;
 
-  abstract discover(): Promise<readonly import("../contract.js").RouteDescriptor[]>;
+  abstract discover(): Promise<readonly RouteDescriptor[]>;
 
   protected abstract command(context: AdapterRunContext): CommandSpec;
 
@@ -128,9 +130,11 @@ export abstract class ProcessAdapter implements Adapter {
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     });
-    let streamError: { readonly stream: "stdin" | "stdout" | "stderr"; readonly error: Error } | undefined;
-    const streamDiagnostics: Promise<void>[] = [];
-    const reportStreamError = (stream: "stdin" | "stdout" | "stderr", error: Error): void => {
+    let streamError:
+      | { readonly stream: "stderr" | "stdin" | "stdout"; readonly error: Error }
+      | undefined;
+    const streamDiagnostics: Array<Promise<void>> = [];
+    const reportStreamError = (stream: "stderr" | "stdin" | "stdout", error: Error): void => {
       streamError ??= { stream, error };
       streamDiagnostics.push(
         context
@@ -143,22 +147,31 @@ export abstract class ProcessAdapter implements Adapter {
               message: error.message,
             },
           })
-          .catch(() => undefined),
+          .catch(() => {}),
       );
     };
-    child.stdin?.on("error", (error) => reportStreamError("stdin", error));
-    child.stdout?.on("error", (error) => reportStreamError("stdout", error));
-    child.stderr?.on("error", (error) => reportStreamError("stderr", error));
+    child.stdin?.on("error", (error) => {
+      reportStreamError("stdin", error);
+    });
+    child.stdout?.on("error", (error) => {
+      reportStreamError("stdout", error);
+    });
+    child.stderr?.on("error", (error) => {
+      reportStreamError("stderr", error);
+    });
     let childError: Error | undefined;
-    const exitPromise = new Promise<{ readonly code: number | null; readonly signal: NodeJS.Signals | null }>(
-      (resolve) => {
-        child.once("error", (error) => {
-          childError = error;
-          resolve({ code: null, signal: null });
-        });
-        child.once("close", (code, signal) => resolve({ code, signal }));
-      },
-    );
+    const exitPromise = new Promise<{
+      readonly code: null | number;
+      readonly signal: NodeJS.Signals | null;
+    }>((resolve) => {
+      child.once("error", (error) => {
+        childError = error;
+        resolve({ code: null, signal: null });
+      });
+      child.once("close", (code, signal) => {
+        resolve({ code, signal });
+      });
+    });
     if (command.keepStdinOpen === true) {
       if (command.stdin !== undefined) {
         child.stdin?.write(command.stdin);
@@ -179,7 +192,7 @@ export abstract class ProcessAdapter implements Adapter {
       content: new ContentAccumulator(),
       effects: [] as WorkspaceEffect[],
       pendingEffects: new Map<string, WorkspaceEffect>(),
-      usage: undefined as Usage | undefined,
+      usage: undefined as undefined | Usage,
       failure: undefined as AdapterEvent["failure"],
     };
     let terminationTimer: NodeJS.Timeout | undefined;
@@ -190,14 +203,23 @@ export abstract class ProcessAdapter implements Adapter {
       }
       terminationStarted = true;
       killProcessGroup(child, "SIGINT");
-      terminationTimer = setTimeout(
-        () => killProcessGroup(child, "SIGKILL"),
-        context.terminationGraceMs ?? TERMINATION_GRACE_MS,
-      );
+      terminationTimer = setTimeout(() => {
+        killProcessGroup(child, "SIGKILL");
+      }, context.terminationGraceMs ?? TERMINATION_GRACE_MS);
       terminationTimer.unref();
     };
-    const onAbort = (): void => terminate();
+    const onAbort = (): void => {
+      terminate();
+    };
     context.signal.addEventListener("abort", onAbort, { once: true });
+
+    // Attach the stdout consumer before the first await. When the child exits,
+    // Node flushes and discards every stdio stream nobody is reading yet, so a
+    // harness that finishes while the process_started event is still being
+    // persisted would otherwise lose its whole output and be reported as
+    // succeeded with empty content.
+    const lines = child.stdout === null ? undefined : createInterface({ input: child.stdout });
+    const lineStream = lines?.[Symbol.asyncIterator]();
 
     try {
       await context.emit({
@@ -208,10 +230,11 @@ export abstract class ProcessAdapter implements Adapter {
           deniedEnvironment: [...deniedEnvironment].sort(),
         },
       });
-      const lines = child.stdout === null ? undefined : createInterface({ input: child.stdout });
-      if (lines !== undefined) {
-        void exitPromise.then(() => lines.close());
-        for await (const line of lines) {
+      if (lines !== undefined && lineStream !== undefined) {
+        void exitPromise.then(() => {
+          lines.close();
+        });
+        for await (const line of lineStream) {
           if (typeof line !== "string" || line.trim() === "") {
             continue;
           }
@@ -260,17 +283,20 @@ export abstract class ProcessAdapter implements Adapter {
                 ...event,
                 category: "input_required",
                 data: {
-                  ...(event.data ?? {}),
+                  ...event.data,
                   requestId: event.inputRequest.requestId,
                   kind: event.inputRequest.kind,
                   prompt: event.inputRequest.prompt,
-                  ...(event.inputRequest.toolName === undefined ? {} : { toolName: event.inputRequest.toolName }),
+                  ...(event.inputRequest.toolName === undefined
+                    ? {}
+                    : { toolName: event.inputRequest.toolName }),
                 },
               });
               if (context.awaitInput === undefined || child.stdin === null) {
                 throw new BridgeError({
                   code: "unsupported_capability",
-                  message: "The adapter reported an input request but no response channel is available.",
+                  message:
+                    "The adapter reported an input request but no response channel is available.",
                   retryable: false,
                 });
               }
@@ -300,7 +326,11 @@ export abstract class ProcessAdapter implements Adapter {
             } else {
               await context.emit(event);
             }
-            if (event.data?.state === "native_result" && child.stdin !== null && command.keepStdinOpen === true) {
+            if (
+              event.data?.state === "native_result" &&
+              child.stdin !== null &&
+              command.keepStdinOpen === true
+            ) {
               child.stdin.end();
             }
           }
@@ -356,6 +386,7 @@ export abstract class ProcessAdapter implements Adapter {
         ...(state.usage === undefined ? {} : { usage: state.usage }),
       };
     } finally {
+      lines?.close();
       context.signal.removeEventListener("abort", onAbort);
       if (terminationTimer !== undefined) {
         clearTimeout(terminationTimer);
@@ -371,7 +402,7 @@ export class ContentAccumulator {
   readonly #fallback: Array<{ readonly type: "text"; readonly text: string }> = [];
   #final: string | undefined;
 
-  get parts(): readonly { readonly type: "text"; readonly text: string }[] {
+  get parts(): ReadonlyArray<{ readonly type: "text"; readonly text: string }> {
     return this.#final === undefined ? this.#fallback : [{ type: "text", text: this.#final }];
   }
 

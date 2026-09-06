@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
+
 import { SCHEMA_VERSION } from "../src/contract.js";
 import { describeContract, SCHEMA_DEFINITIONS } from "../src/operations.js";
 

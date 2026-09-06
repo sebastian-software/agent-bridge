@@ -1,27 +1,27 @@
 export type BridgeErrorCode =
   | "auth_required"
+  | "broker_unavailable"
   | "harness_failed"
+  | "internal_error"
   | "invalid_request"
   | "invocation_conflict"
   | "invocation_evicted"
   | "invocation_not_active"
   | "invocation_not_found"
+  | "output_unparseable"
   | "protocol_version_mismatch"
   | "route_ambiguous"
   | "route_unavailable"
-  | "output_unparseable"
-  | "unsupported_operation"
   | "unsupported_capability"
-  | "version_unqualified"
-  | "broker_unavailable"
-  | "internal_error";
+  | "unsupported_operation"
+  | "version_unqualified";
 
-export interface BridgeErrorDetail {
+export type BridgeErrorDetail = {
   readonly code: BridgeErrorCode;
   readonly message: string;
   readonly retryable: boolean;
   readonly details?: Readonly<Record<string, unknown>>;
-}
+};
 
 export class BridgeError extends Error {
   readonly code: BridgeErrorCode;
