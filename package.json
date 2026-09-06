@@ -57,8 +57,9 @@
     "test:coverage": "pnpm run build && node --test --experimental-test-coverage --test-coverage-lines=75 'dist/test/**/*.test.js'",
     "package:check": "pnpm run build && pnpm pack --dry-run",
     "lint:workflows": "node scripts/check-workflow-pins.mjs",
+    "docs:adr-index": "node scripts/check-adr-index.mjs",
     "agent:check": "pnpm lint && pnpm lint:workflows && pnpm format:check && pnpm typecheck && pnpm build && pnpm test",
-    "check": "pnpm agent:check && pnpm test:coverage && pnpm package:check",
+    "check": "pnpm agent:check && pnpm docs:adr-index && pnpm test:coverage && pnpm package:check",
     "fake-harness": "node scripts/fake-harness.mjs",
     "version:sync": "node scripts/sync-version.mjs"
   },
