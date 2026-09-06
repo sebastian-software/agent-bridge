@@ -59,4 +59,4 @@ same bridge adapter qualification suite.
 ## Evidence
 
 See the measured spike report in
-[`spikes/tanstack-ai/RESULTS.md`](../../spikes/tanstack-ai/RESULTS.md).
+[`docs/research/tanstack-ai-spike.md`](../research/tanstack-ai-spike.md).

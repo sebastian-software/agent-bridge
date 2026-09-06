@@ -10,8 +10,6 @@ config.unshift({
     "pnpm-lock.yaml",
     "**/*.json",
     "**/*.md",
-    // Self-contained spike with its own package.json, lockfile and tsconfig.
-    "spikes/**",
     // Plain .mjs developer scripts live outside the TypeScript project, so the
     // type-aware rules cannot resolve them; oxlint still covers them.
     "scripts/**",
