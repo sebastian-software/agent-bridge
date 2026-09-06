@@ -2,7 +2,8 @@
 //
 // Contract test for the workflow pin check. Every case here is a shape that
 // previously slipped through a naive line scan, so the checker must keep
-// rejecting it.
+// rejecting it - plus the compliant shapes it must keep accepting, because a
+// checker that rejects a correctly pinned step is just as broken.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -18,6 +19,27 @@ const cases = [
     name: "block form with a full SHA and a version comment",
     workflow: `jobs:\n  a:\n    steps:\n      - uses: ${pinned} # v7\n`,
     status: 0,
+  },
+  {
+    name: "flow mapping with the version comment after the closing brace",
+    workflow: `jobs:\n  a:\n    steps:\n      - { uses: ${pinned} } # v7\n`,
+    status: 0,
+  },
+  {
+    name: "flow mapping with a nested mapping and a trailing version comment",
+    workflow: `jobs:\n  a:\n    steps:\n      - { uses: ${pinned}, with: { fetch-depth: 0 } } # v7\n`,
+    status: 0,
+  },
+  {
+    name: "flow mapping with the version comment inside the braces",
+    workflow: `jobs:\n  a:\n    steps:\n      - { uses: ${pinned} # v7 }\n`,
+    status: 0,
+  },
+  {
+    name: "flow mapping without any version comment",
+    workflow: `jobs:\n  a:\n    steps:\n      - { uses: ${pinned} }\n`,
+    status: 1,
+    expect: "is missing the trailing",
   },
   {
     name: "flow mapping form",

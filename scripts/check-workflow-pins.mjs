@@ -22,6 +22,7 @@ const workflowDir = process.argv[2]
 const USES_KEY = /(?:^|[\s{,])(?:uses|"uses"|'uses')\s*:/;
 const BLOCK_USES = /^\s*(?:-\s*)?(?:uses|"uses"|'uses')\s*:\s*(?<ref>[^\s#]+)\s*(?<rest>.*)$/;
 const FLOW_USES = /(?:^|[\s{,])(?:uses|"uses"|'uses')\s*:\s*(?<ref>[^\s,}]+)(?<rest>[^,}]*)/g;
+const LINE_COMMENT = /(?:^|\s)(?<comment>#.*)$/;
 const PINNED = /^[^\s@]+@[0-9a-f]{40}$/;
 const VERSION_COMMENT = /#\s*\S/;
 
@@ -36,9 +37,16 @@ function usesReferences(line) {
   if (block) return [{ ref: unquote(block.groups.ref), rest: block.groups.rest }];
 
   if (line.includes("{")) {
+    // A flow mapping ends before its version comment: `- { uses: x } # v7`
+    // puts the comment outside the braces, so the per-reference `rest` stops
+    // at the closing brace and never sees it. YAML comments run to the end of
+    // the line, so the line's own comment documents every reference on it -
+    // append it to each. The inside-the-braces shape a strict YAML parser
+    // rejects keeps working through `rest`.
+    const comment = LINE_COMMENT.exec(line)?.groups.comment ?? "";
     const flow = [...line.matchAll(FLOW_USES)].map((match) => ({
       ref: unquote(match.groups.ref),
-      rest: match.groups.rest,
+      rest: `${match.groups.rest} ${comment}`,
     }));
     if (flow.length > 0) return flow;
   }
