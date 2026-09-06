@@ -6,7 +6,7 @@ import { CodexAdapter } from "../src/adapters/codex.js";
 import { parseVersion, satisfiesVersionRange } from "../src/adapters/discovery.js";
 import { type CommandSpec, ContentAccumulator, ProcessAdapter } from "../src/adapters/process.js";
 import type { AdapterEvent, AdapterRunContext } from "../src/adapters/types.js";
-import type { JsonValue, ObservedIdentity, ResolvedRoute, RouteDescriptor } from "../src/contract.js";
+import type { JsonValue, ObservedIdentity, ResolvedRoute, RouteDescriptor, WorkspaceEffect } from "../src/contract.js";
 
 const route = (adapter: string, executable: string): ResolvedRoute => ({
   routeId: `${adapter}:test`,
@@ -173,7 +173,11 @@ class InspectableCodexAdapter extends CodexAdapter {
   }
 }
 
-function nativeState(): { identity: ObservedIdentity; content: ContentAccumulator } {
+function nativeState(): {
+  identity: ObservedIdentity;
+  content: ContentAccumulator;
+  pendingEffects: Map<string, WorkspaceEffect>;
+} {
   return {
     identity: {
       provider: { evidence: "unverified" },
@@ -182,6 +186,7 @@ function nativeState(): { identity: ObservedIdentity; content: ContentAccumulato
       nativeSessionId: { evidence: "unverified" },
     },
     content: new ContentAccumulator(),
+    pendingEffects: new Map(),
   };
 }
 
@@ -307,6 +312,50 @@ test("Claude keeps the final result once and captures reported usage", () => {
   assert.equal(result?.category, "usage");
   assert.deepEqual(state.content.parts, [{ type: "text", text: "pong" }]);
   assert.equal(result?.usage?.inputTokens, 3);
+});
+
+test("Claude confirms file effects only from successful tool results", () => {
+  const adapter = new InspectableClaudeAdapter();
+  const state = nativeState();
+  assert.equal(
+    adapter.normalize(
+      {
+        type: "assistant",
+        message: {
+          content: [{ type: "tool_use", id: "write_1", name: "Write", input: { file_path: "probe.txt" } }],
+        },
+      },
+      state,
+    ),
+    undefined,
+  );
+  assert.equal(
+    adapter.normalize(
+      {
+        type: "user",
+        message: { content: [{ type: "tool_result", tool_use_id: "write_1", is_error: true, content: "Denied" }] },
+      },
+      state,
+    ),
+    undefined,
+  );
+
+  assert.equal(
+    adapter.normalize(
+      {
+        type: "assistant",
+        message: {
+          content: [{ type: "tool_use", id: "write_2", name: "Write", input: { file_path: "probe.txt" } }],
+        },
+      },
+      state,
+    ),
+    undefined,
+  );
+  assert.deepEqual(
+    adapter.normalize({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "write_2" }] } }, state),
+    { category: "effect", effects: [{ path: "probe.txt", kind: "modified", evidence: "harness-reported" }] },
+  );
 });
 
 test("Claude maps native permission requests to an input request", () => {

@@ -130,6 +130,18 @@ function persistedNative(
   return summary;
 }
 
+function isEffectOnlyCarrier(event: AdapterEvent): boolean {
+  return (
+    event.category === "effect" &&
+    (event.effects?.length ?? 0) > 0 &&
+    (event.content === undefined || event.content.length === 0) &&
+    (event.data === undefined || Object.keys(event.data).length === 0) &&
+    event.usage === undefined &&
+    event.failure === undefined &&
+    event.inputRequest === undefined
+  );
+}
+
 function usageFromEvent(value: JsonValue | undefined): Usage | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return undefined;
@@ -808,41 +820,44 @@ export class Broker {
         return { value: undefined, changed: false };
       }
       const timestamp = new Date().toISOString();
-      const sequence = current.eventCount + 1;
-      const appended: InvocationEvent = {
-        schemaVersion: SCHEMA_VERSION,
-        invocationId,
-        sequence,
-        cursor: eventCursor(sequence),
-        timestamp,
-        category: event.category,
-        ...(event.content === undefined ? {} : { content: event.content }),
-        ...(event.data === undefined && event.inputRequest === undefined && event.usage === undefined
-          ? {}
-          : {
-              data: {
-                ...(event.data ?? {}),
-                ...(event.usage === undefined ? {} : { usage: { ...event.usage } }),
-                ...(event.inputRequest === undefined
-                  ? {}
-                  : {
-                      requestId: event.inputRequest.requestId,
-                      kind: event.inputRequest.kind,
-                      prompt: event.inputRequest.prompt,
-                      ...(event.inputRequest.toolName === undefined ? {} : { toolName: event.inputRequest.toolName }),
-                    }),
-              },
-            }),
-        provenance: { source: "adapter", adapter: current.resolvedRoute.adapter },
-        ...(event.native === undefined ? {} : { native: persistedNative(event.native, this.#diagnosticMode) }),
-      };
-      let updated: InvocationRecord = {
-        ...current,
-        ...(event.category === "input_required" ? { state: "waiting_for_input" as const } : {}),
-        updatedAt: timestamp,
-        eventCount: sequence,
-        events: [...current.events, appended],
-      };
+      let updated: InvocationRecord = current;
+      if (!isEffectOnlyCarrier(event)) {
+        const sequence = current.eventCount + 1;
+        const appended: InvocationEvent = {
+          schemaVersion: SCHEMA_VERSION,
+          invocationId,
+          sequence,
+          cursor: eventCursor(sequence),
+          timestamp,
+          category: event.category,
+          ...(event.content === undefined ? {} : { content: event.content }),
+          ...(event.data === undefined && event.inputRequest === undefined && event.usage === undefined
+            ? {}
+            : {
+                data: {
+                  ...(event.data ?? {}),
+                  ...(event.usage === undefined ? {} : { usage: { ...event.usage } }),
+                  ...(event.inputRequest === undefined
+                    ? {}
+                    : {
+                        requestId: event.inputRequest.requestId,
+                        kind: event.inputRequest.kind,
+                        prompt: event.inputRequest.prompt,
+                        ...(event.inputRequest.toolName === undefined ? {} : { toolName: event.inputRequest.toolName }),
+                      }),
+                },
+              }),
+          provenance: { source: "adapter", adapter: current.resolvedRoute.adapter },
+          ...(event.native === undefined ? {} : { native: persistedNative(event.native, this.#diagnosticMode) }),
+        };
+        updated = {
+          ...current,
+          ...(event.category === "input_required" ? { state: "waiting_for_input" as const } : {}),
+          updatedAt: timestamp,
+          eventCount: sequence,
+          events: [...current.events, appended],
+        };
+      }
       const effects = (event.effects ?? []).map((effect) =>
         effect.evidence === "harness-reported"
           ? normalizeHarnessEffect(effect, current.request.workingDirectory)
