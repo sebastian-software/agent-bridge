@@ -34,7 +34,7 @@ It is composed of the scripts in `package.json`:
 | `typecheck`      | `tsc -p tsconfig.json --noEmit`           | Types for `src`, `test`, and the lint configs        |
 | `build`          | `tsc -p tsconfig.build.json`              | Compiles `src` and `test` into `dist`                |
 | `test`           | `node --test 'dist/test/**/*.test.js'`    | The suite, after a build                             |
-| `test:coverage`  | the suite with `--test-coverage-lines=75` | The line-coverage floor                              |
+| `test:coverage`  | the suite with the coverage flags         | The coverage floors, as set in `package.json`        |
 | `package:check`  | `pnpm pack --dry-run`                     | The published tarball contents                       |
 | `docs:adr-index` | `node scripts/check-adr-index.mjs`        | `docs/adr/README.md` lists every ADR, and only those |
 
