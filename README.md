@@ -1,5 +1,11 @@
 # agent-bridge
 
+**Local harness-to-harness delegation gateway.**
+
+[![CI](https://github.com/sebastian-software/agent-bridge/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/sebastian-software/agent-bridge/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Node](https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg)](package.json)
+
 `agent-bridge` is a local, model-first delegation gateway. It lets an
 orchestrating agent delegate one bounded invocation to an installed harness,
 observe progress, and regain control with a normalized outcome. It is not a
@@ -91,8 +97,21 @@ check, TypeScript validation, the build, and the tests. `pnpm check` adds
 coverage and the package dry-run, and is what CI runs. Conventions for agents
 and contributors live in [`AGENTS.md`](AGENTS.md); architecture and terminology
 live in [`CONTEXT.md`](CONTEXT.md) and the [`docs/adr/`](docs/adr/) decision
-records. Work is tracked in GitHub issues; see the `epic` label for grouped
-work.
+records. Adapter authors start at [`docs/adapters.md`](docs/adapters.md), which
+describes the SPI, the manifest fields, the normalization rules, and the tests
+a new harness adapter is expected to bring. Work is tracked in GitHub issues;
+see the `epic` label for grouped work.
+
+## From the same workshop
+
+`agent-bridge` and [dalo](https://github.com/sebastian-software/dalo) are two
+halves of one story. Dalo distributes the skills an agent runs: one approved,
+versioned set delivered to every agent folder. `agent-bridge` handles the other
+direction, delegating one bounded invocation to another installed harness and
+returning a normalized outcome. Skills in, delegation out.
+
+The rest of the workshop is at
+[oss.sebastian-software.com](https://oss.sebastian-software.com).
 
 ---
 
