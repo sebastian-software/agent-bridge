@@ -1,6 +1,7 @@
+import type { Readable, Writable } from "node:stream";
+
 import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
-import type { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 
 import { errorDetail } from "./errors.js";
@@ -10,22 +11,26 @@ const MCP_PROTOCOL_VERSION = "2025-06-18";
 const SUPPORTED_PROTOCOL_VERSIONS = new Set([MCP_PROTOCOL_VERSION, "2025-03-26", "2024-11-05"]);
 const TOOL_PREFIX = "agent_bridge_";
 
-type RpcId = string | number | null;
+type RpcId = null | number | string;
 type OperationHandler = (operation: string, params: unknown) => Promise<unknown>;
 type UnknownRecord = Record<string, unknown>;
 
-interface RpcRequest {
+type RpcRequest = {
   readonly id?: RpcId;
   readonly method: string;
   readonly params?: unknown;
-}
+};
 
-function record(value: unknown): UnknownRecord | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as UnknownRecord) : undefined;
+function record(value: unknown): undefined | UnknownRecord {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as UnknownRecord)
+    : undefined;
 }
 
 function id(value: unknown): RpcId | undefined {
-  return value === null || typeof value === "string" || typeof value === "number" ? value : undefined;
+  return value === null || typeof value === "string" || typeof value === "number"
+    ? value
+    : undefined;
 }
 
 function toolName(operation: string): string {
@@ -51,7 +56,9 @@ function schemaFile(name: string): Readonly<Record<string, unknown>> {
   ];
   for (const candidate of candidates) {
     try {
-      return JSON.parse(readFileSync(fileURLToPath(candidate), "utf8")) as Readonly<Record<string, unknown>>;
+      return JSON.parse(readFileSync(fileURLToPath(candidate), "utf8")) as Readonly<
+        Record<string, unknown>
+      >;
     } catch {
       // Try the source-tree path when tests execute TypeScript directly.
     }
@@ -81,7 +88,10 @@ function inlineSchema(value: unknown, root: Readonly<Record<string, unknown>>): 
   );
 }
 
-const INVOCATION_REQUEST_SCHEMA = inlineSchema(schemaFile("invocation-request"), schemaFile("invocation-request"));
+const INVOCATION_REQUEST_SCHEMA = inlineSchema(
+  schemaFile("invocation-request"),
+  schemaFile("invocation-request"),
+);
 
 function definition(name: string): (typeof OPERATION_DEFINITIONS)[number] | undefined {
   return OPERATION_DEFINITIONS.find((entry) => entry.name === name);
@@ -109,7 +119,11 @@ function rpcError(requestId: RpcId, code: number, message: string, data?: unknow
 function parseRequest(value: unknown): RpcRequest {
   const source = record(value);
   const requestId = source === undefined ? undefined : id(source.id);
-  if (source === undefined || typeof source.method !== "string" || ("id" in source && requestId === undefined)) {
+  if (
+    source === undefined ||
+    typeof source.method !== "string" ||
+    ("id" in source && requestId === undefined)
+  ) {
     throw new Error("MCP request must contain a method and an optional scalar id.");
   }
   return {
@@ -131,7 +145,9 @@ export class McpServer {
     try {
       request = parseRequest(JSON.parse(line) as unknown);
     } catch (error) {
-      return JSON.stringify(rpcError(null, -32700, error instanceof Error ? error.message : "Invalid MCP request."));
+      return JSON.stringify(
+        rpcError(null, -32_700, error instanceof Error ? error.message : "Invalid MCP request."),
+      );
     }
     if (request.id === undefined) {
       return undefined;
@@ -157,14 +173,14 @@ export class McpServer {
     if (request.method === "tools/list") {
       return JSON.stringify(
         response(request.id, {
-          tools: OPERATION_DEFINITIONS.filter((definition) => definition.availability === "implemented").map(
-            (definition) => ({
-              name: toolName(definition.name),
-              description: definition.summary,
-              inputSchema: toolSchema(definition.name, "input"),
-              outputSchema: toolSchema(definition.name, "output"),
-            }),
-          ),
+          tools: OPERATION_DEFINITIONS.filter(
+            (definition) => definition.availability === "implemented",
+          ).map((definition) => ({
+            name: toolName(definition.name),
+            description: definition.summary,
+            inputSchema: toolSchema(definition.name, "input"),
+            outputSchema: toolSchema(definition.name, "output"),
+          })),
         }),
       );
     }
@@ -199,7 +215,9 @@ export class McpServer {
         );
       }
     }
-    return JSON.stringify(rpcError(request.id, -32601, `Unsupported MCP method: ${request.method}`));
+    return JSON.stringify(
+      rpcError(request.id, -32_601, `Unsupported MCP method: ${request.method}`),
+    );
   }
 
   async serve(input: Readable = process.stdin, output: Writable = process.stdout): Promise<void> {

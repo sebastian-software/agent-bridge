@@ -6,26 +6,26 @@ import { promisify } from "node:util";
 import type { InteractionStrategy, RouteDescriptor } from "../contract.js";
 
 const execFileAsync = promisify(execFile);
-const PROBE_TIMEOUT_MS = 2_500;
+const PROBE_TIMEOUT_MS = 2500;
 
-export interface AdapterModelManifest {
+export type AdapterModelManifest = {
   readonly model: string;
   readonly canonicalModel?: string;
   readonly aliases?: readonly string[];
   readonly efforts: readonly string[];
   readonly capabilities: readonly string[];
   readonly interactionStrategies: readonly InteractionStrategy[];
-}
+};
 
-export interface AdapterQualificationManifest {
+export type AdapterQualificationManifest = {
   readonly qualificationId: string;
   readonly testedAt: string;
   readonly harnessVersion: string;
   readonly testSuite: string;
   readonly testCommit: string;
-}
+};
 
-export interface AdapterManifest {
+export type AdapterManifest = {
   readonly id: string;
   readonly provider: string;
   readonly via: string;
@@ -38,18 +38,21 @@ export interface AdapterManifest {
   readonly qualification: AdapterQualificationManifest;
   readonly qualificationClaim: string;
   readonly policySupport?: Readonly<Record<string, readonly string[]>>;
-}
+};
 
-export interface DiscoveryProbe {
+export type DiscoveryProbe = {
   readonly findExecutable?: (command: string) => Promise<string | undefined>;
-  readonly readVersion?: (executable: string, args: readonly string[]) => Promise<string | undefined>;
+  readonly readVersion?: (
+    executable: string,
+    args: readonly string[],
+  ) => Promise<string | undefined>;
   readonly checkAuthentication?: (executable: string, args: readonly string[]) => Promise<boolean>;
-}
+};
 
-interface ExpandedModelManifest extends AdapterModelManifest {
+type ExpandedModelManifest = {
   readonly requestModel: string;
   readonly canonicalModel: string;
-}
+} & AdapterModelManifest;
 
 function expandedModels(manifest: AdapterManifest): readonly ExpandedModelManifest[] {
   return manifest.models.flatMap((model) => {
@@ -62,26 +65,32 @@ function expandedModels(manifest: AdapterManifest): readonly ExpandedModelManife
   });
 }
 
-export interface ParsedVersion {
+export type ParsedVersion = {
   readonly major: number;
   readonly minor: number;
   readonly patch: number;
   readonly value: string;
-}
+};
 
 export function parseVersion(value: string | undefined): ParsedVersion | undefined {
   if (value === undefined) {
     return undefined;
   }
+  // eslint-disable-next-line security/detect-unsafe-regex -- no nested quantifiers: every group repeats a single character class once
   const match = /(?:^|\s|v)(\d+)\.(\d+)(?:\.(\d+))?(?:[-+][0-9A-Za-z.-]+)?(?:\s|$)/.exec(value);
-  if (match === null || match[1] === undefined || match[2] === undefined) {
+  if (match?.[1] === undefined || match[2] === undefined) {
     return undefined;
   }
-  return { major: Number(match[1]), minor: Number(match[2]), patch: Number(match[3] ?? "0"), value: match[0].trim() };
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3] ?? "0"),
+    value: match[0].trim(),
+  };
 }
 
 function versionNumber(version: ParsedVersion): number {
-  return version.major * 1_000_000 + version.minor * 1_000 + version.patch;
+  return version.major * 1_000_000 + version.minor * 1000 + version.patch;
 }
 
 export function satisfiesVersionRange(version: ParsedVersion, range: string): boolean {
@@ -90,11 +99,11 @@ export function satisfiesVersionRange(version: ParsedVersion, range: string): bo
     .split(/\s+/)
     .filter(Boolean)
     .map((part) => {
-      const match = /^(>=|<=|>|<|=)?(\d+)\.(\d+)\.(\d+)$/.exec(part);
-      if (match === null || match[2] === undefined || match[3] === undefined || match[4] === undefined) {
-        return undefined;
+      const match = /^(>=|<=|[><=])?(\d+)\.(\d+)\.(\d+)$/.exec(part);
+      if (match?.[2] === undefined || match[3] === undefined || match[4] === undefined) {
+        return;
       }
-      const target = Number(match[2]) * 1_000_000 + Number(match[3]) * 1_000 + Number(match[4]);
+      const target = Number(match[2]) * 1_000_000 + Number(match[3]) * 1000 + Number(match[4]);
       return { operator: match[1] ?? "=", target };
     });
   return checks.every(
@@ -122,13 +131,21 @@ async function findExecutable(command: string): Promise<string | undefined> {
   }
 }
 
-async function readVersion(executable: string, args: readonly string[]): Promise<string | undefined> {
+async function readVersion(
+  executable: string,
+  args: readonly string[],
+): Promise<string | undefined> {
   try {
     const result = await execFileAsync(executable, [...args], { timeout: PROBE_TIMEOUT_MS });
     const output = `${result.stdout}\n${result.stderr}`.trim();
     return output === "" ? undefined : output;
   } catch (error) {
-    if (typeof error === "object" && error !== null && "stdout" in error && typeof error.stdout === "string") {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "stdout" in error &&
+      typeof error.stdout === "string"
+    ) {
       return error.stdout.trim() || undefined;
     }
     return undefined;
@@ -159,7 +176,8 @@ export async function discoverManifestRoutes(
 ): Promise<readonly RouteDescriptor[]> {
   const probe = options?.probe ?? {};
   const models = expandedModels(manifest);
-  const executable = options?.executable ?? (await (probe.findExecutable ?? findExecutable)(manifest.command));
+  const executable =
+    options?.executable ?? (await (probe.findExecutable ?? findExecutable)(manifest.command));
   if (executable === undefined || !(await isExecutable(executable))) {
     return models.map((model) => ({
       routeId: `${manifest.id}:${model.requestModel}`,
@@ -210,7 +228,10 @@ export async function discoverManifestRoutes(
     }));
   }
 
-  const authenticated = await (probe.checkAuthentication ?? checkAuthentication)(executable, manifest.authArgs);
+  const authenticated = await (probe.checkAuthentication ?? checkAuthentication)(
+    executable,
+    manifest.authArgs,
+  );
   return models.map((model) => ({
     routeId: `${manifest.id}:${model.requestModel}`,
     executable,
@@ -236,7 +257,11 @@ export async function discoverManifestRoutes(
     ],
     ...(manifest.policySupport === undefined ? {} : { policySupport: manifest.policySupport }),
     diagnostics: authenticated
-      ? ["Authentication status probe succeeded; readiness remains provisional until an invocation succeeds."]
-      : [`${manifest.command} authentication status could not be verified without starting a paid invocation.`],
+      ? [
+          "Authentication status probe succeeded; readiness remains provisional until an invocation succeeds.",
+        ]
+      : [
+          `${manifest.command} authentication status could not be verified without starting a paid invocation.`,
+        ],
   }));
 }

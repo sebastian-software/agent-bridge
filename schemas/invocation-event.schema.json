@@ -4,21 +4,46 @@
   "title": "Agent Bridge invocation event",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "invocationId", "sequence", "cursor", "timestamp", "category", "provenance"],
+  "required": [
+    "schemaVersion",
+    "invocationId",
+    "sequence",
+    "cursor",
+    "timestamp",
+    "category",
+    "provenance"
+  ],
   "properties": {
     "schemaVersion": { "const": "1.0" },
     "invocationId": { "type": "string", "minLength": 1 },
     "sequence": { "type": "integer", "minimum": 1 },
     "cursor": { "type": "string", "pattern": "^v1:[0-9]+$" },
     "timestamp": { "type": "string", "format": "date-time" },
-    "category": { "enum": ["activity", "diagnostic", "effect", "input_accepted", "input_required", "lifecycle", "output", "usage"] },
-    "content": { "type": "array", "items": { "$ref": "invocation-request.schema.json#/$defs/content-part" } },
+    "category": {
+      "enum": [
+        "activity",
+        "diagnostic",
+        "effect",
+        "input_accepted",
+        "input_required",
+        "lifecycle",
+        "output",
+        "usage"
+      ]
+    },
+    "content": {
+      "type": "array",
+      "items": { "$ref": "invocation-request.schema.json#/$defs/content-part" }
+    },
     "data": { "type": "object" },
     "provenance": {
       "type": "object",
       "additionalProperties": false,
       "required": ["source"],
-      "properties": { "source": { "enum": ["adapter", "bridge"] }, "adapter": { "type": "string", "minLength": 1 } }
+      "properties": {
+        "source": { "enum": ["adapter", "bridge"] },
+        "adapter": { "type": "string", "minLength": 1 }
+      }
     },
     "native": { "type": "object" }
   }

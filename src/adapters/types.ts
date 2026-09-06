@@ -12,7 +12,7 @@ import type {
   WorkspaceEffect,
 } from "../contract.js";
 
-export interface AdapterEvent {
+export type AdapterEvent = {
   readonly category: EventCategory;
   readonly content?: readonly ContentPart[];
   readonly data?: Readonly<Record<string, JsonValue>>;
@@ -21,36 +21,42 @@ export interface AdapterEvent {
   readonly usage?: Usage;
   readonly failure?: { readonly code: string; readonly message: string };
   readonly inputRequest?: InputRequest;
-}
+};
 
-export interface AdapterRunContext {
+export type AdapterRunContext = {
   readonly invocationId: string;
   readonly request: StartInvocationRequest;
   readonly route: ResolvedRoute;
   readonly signal: AbortSignal;
   readonly emit: (event: AdapterEvent) => Promise<void>;
   readonly reportPartial?: (result: Partial<AdapterRunResult>) => void;
-  readonly awaitInput?: (requestId: string, signal?: AbortSignal) => Promise<Pick<InputResponse, "decision">>;
+  readonly awaitInput?: (
+    requestId: string,
+    signal?: AbortSignal,
+  ) => Promise<Pick<InputResponse, "decision">>;
   readonly terminationGraceMs?: number;
-}
+};
 
-export interface AdapterRunResult {
+export type AdapterRunResult = {
   readonly content: readonly ContentPart[];
   readonly artifacts: readonly ContentPart[];
   readonly effects: readonly WorkspaceEffect[];
   readonly observedIdentity: ObservedIdentity;
   readonly usage?: Usage;
-}
+};
 
-export interface PolicyResolution {
+export type PolicyResolution = {
   readonly supported: boolean;
   readonly unsupported: readonly string[];
   readonly effectiveNativePolicy: Readonly<Record<string, JsonValue>>;
-}
+};
 
-export interface Adapter {
+export type Adapter = {
   readonly id: string;
-  discover(): Promise<readonly RouteDescriptor[]>;
-  run(context: AdapterRunContext): Promise<AdapterRunResult>;
-  resolvePolicy?(request: StartInvocationRequest, route: RouteDescriptor): PolicyResolution;
-}
+  readonly discover: () => Promise<readonly RouteDescriptor[]>;
+  readonly run: (context: AdapterRunContext) => Promise<AdapterRunResult>;
+  readonly resolvePolicy?: (
+    request: StartInvocationRequest,
+    route: RouteDescriptor,
+  ) => PolicyResolution;
+};

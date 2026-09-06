@@ -4,13 +4,30 @@
   "title": "Agent Bridge invocation outcome",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "invocationId", "status", "content", "artifacts", "effects", "effectObservation", "observedIdentity", "policy", "completedAt"],
+  "required": [
+    "schemaVersion",
+    "invocationId",
+    "status",
+    "content",
+    "artifacts",
+    "effects",
+    "effectObservation",
+    "observedIdentity",
+    "policy",
+    "completedAt"
+  ],
   "properties": {
     "schemaVersion": { "const": "1.0" },
     "invocationId": { "type": "string", "minLength": 1 },
     "status": { "enum": ["cancelled", "failed", "interrupted", "succeeded", "timed_out"] },
-    "content": { "type": "array", "items": { "$ref": "invocation-request.schema.json#/$defs/content-part" } },
-    "artifacts": { "type": "array", "items": { "$ref": "invocation-request.schema.json#/$defs/content-part" } },
+    "content": {
+      "type": "array",
+      "items": { "$ref": "invocation-request.schema.json#/$defs/content-part" }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": { "$ref": "invocation-request.schema.json#/$defs/content-part" }
+    },
     "effects": {
       "type": "array",
       "items": {
@@ -59,7 +76,10 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["code", "message"],
-      "properties": { "code": { "type": "string", "minLength": 1 }, "message": { "type": "string", "minLength": 1 } }
+      "properties": {
+        "code": { "type": "string", "minLength": 1 },
+        "message": { "type": "string", "minLength": 1 }
+      }
     }
   }
 }

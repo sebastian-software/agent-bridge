@@ -9,50 +9,57 @@ const execFileAsync = promisify(execFile);
 const MAX_FILES = 10_000;
 const MAX_BYTES = 256 * 1024 * 1024;
 
-export interface SnapshotLimits {
+export type SnapshotLimits = {
   readonly maxFiles?: number;
   readonly maxBytes?: number;
-}
+};
 
-interface FileFingerprint {
+type FileFingerprint = {
   readonly size: number;
   readonly modifiedAt: number;
   readonly mode: number;
-}
+};
 
-export interface WorkspaceSnapshot {
+export type WorkspaceSnapshot = {
   readonly root: string;
   readonly files: ReadonlyMap<string, FileFingerprint>;
   readonly complete: boolean;
   readonly diagnostics: readonly string[];
-}
+};
 
-export interface EffectObservation {
+export type EffectObservation = {
   readonly effects: readonly WorkspaceEffect[];
   readonly complete: boolean;
   readonly diagnostics: readonly string[];
-}
+};
 
-interface NormalizedPath {
+type NormalizedPath = {
   readonly path: string;
   readonly outsideWorkspace: boolean;
-}
+};
 
 function normalizeHarnessPath(path: string, workspace: string): NormalizedPath {
   const absolute = resolve(workspace, path);
   const relativePath = relative(workspace, absolute);
-  const outsideWorkspace = relativePath === ".." || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath);
+  const outsideWorkspace =
+    relativePath === ".." || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath);
   return {
     path: outsideWorkspace ? absolute : relativePath === "" ? "." : relativePath,
     outsideWorkspace,
   };
 }
 
-export function normalizeHarnessEffect(effect: WorkspaceEffect, workspace: string): WorkspaceEffect {
+export function normalizeHarnessEffect(
+  effect: WorkspaceEffect,
+  workspace: string,
+): WorkspaceEffect {
   const normalizedPath = normalizeHarnessPath(effect.path, workspace);
   const normalizedPreviousPath =
-    effect.previousPath === undefined ? undefined : normalizeHarnessPath(effect.previousPath, workspace);
-  const outsideWorkspace = normalizedPath.outsideWorkspace || (normalizedPreviousPath?.outsideWorkspace ?? false);
+    effect.previousPath === undefined
+      ? undefined
+      : normalizeHarnessPath(effect.previousPath, workspace);
+  const outsideWorkspace =
+    normalizedPath.outsideWorkspace || (normalizedPreviousPath?.outsideWorkspace ?? false);
   return {
     ...effect,
     path: normalizedPath.path,
@@ -79,15 +86,19 @@ function statusRenames(value: string): ReadonlyMap<string, string> {
       continue;
     }
     const path = status.slice(3);
-    if ((status.startsWith("R") || status.startsWith("C")) && tokens[index + 1] !== undefined) {
-      renames.set(path, tokens[index + 1] as string);
+    const target = tokens[index + 1];
+    if ((status.startsWith("R") || status.startsWith("C")) && target !== undefined) {
+      renames.set(path, target);
       index += 1;
     }
   }
   return renames;
 }
 
-export async function captureWorkspaceSnapshot(root: string, limits: SnapshotLimits = {}): Promise<WorkspaceSnapshot> {
+export async function captureWorkspaceSnapshot(
+  root: string,
+  limits: SnapshotLimits = {},
+): Promise<WorkspaceSnapshot> {
   const maxFiles = limits.maxFiles ?? MAX_FILES;
   const maxBytes = limits.maxBytes ?? MAX_BYTES;
   let listed: string;
@@ -118,7 +129,12 @@ export async function captureWorkspaceSnapshot(root: string, limits: SnapshotLim
     try {
       info = await lstat(`${root}/${relativePath}`);
     } catch (error) {
-      if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
+      if (
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        error.code === "ENOENT"
+      ) {
         continue;
       }
       complete = false;
@@ -146,7 +162,7 @@ export async function captureWorkspaceSnapshot(root: string, limits: SnapshotLim
 }
 
 export async function observeWorkspaceEffects(
-  before: WorkspaceSnapshot | undefined,
+  before: undefined | WorkspaceSnapshot,
   after: WorkspaceSnapshot,
 ): Promise<EffectObservation> {
   if (before === undefined) {
@@ -168,7 +184,9 @@ export async function observeWorkspaceEffects(
     } else if (
       oldFile !== undefined &&
       newFile !== undefined &&
-      (oldFile.size !== newFile.size || oldFile.modifiedAt !== newFile.modifiedAt || oldFile.mode !== newFile.mode)
+      (oldFile.size !== newFile.size ||
+        oldFile.modifiedAt !== newFile.modifiedAt ||
+        oldFile.mode !== newFile.mode)
     ) {
       effects.push({ path, kind: "modified", evidence: "git-status" });
     }
@@ -178,11 +196,15 @@ export async function observeWorkspaceEffects(
   const created = effects.filter((effect) => effect.kind === "created");
   for (const oldEffect of deleted) {
     const oldFingerprint = before.files.get(oldEffect.path);
+    if (oldFingerprint === undefined) {
+      continue;
+    }
     const match = created.find((newEffect) => {
       const newFingerprint = after.files.get(newEffect.path);
+      if (newFingerprint === undefined) {
+        return false;
+      }
       return (
-        oldFingerprint !== undefined &&
-        newFingerprint !== undefined &&
         oldFingerprint.size === newFingerprint.size &&
         oldFingerprint.modifiedAt === newFingerprint.modifiedAt &&
         oldFingerprint.mode === newFingerprint.mode
@@ -195,19 +217,38 @@ export async function observeWorkspaceEffects(
     const newIndex = effects.indexOf(match);
     effects.splice(Math.max(oldIndex, newIndex), 1);
     effects.splice(Math.min(oldIndex, newIndex), 1);
-    effects.push({ path: match.path, previousPath: oldEffect.path, kind: "renamed", evidence: "git-status" });
+    effects.push({
+      path: match.path,
+      previousPath: oldEffect.path,
+      kind: "renamed",
+      evidence: "git-status",
+    });
   }
 
   try {
-    const status = await git(after.root, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
+    const status = await git(after.root, [
+      "status",
+      "--porcelain=v1",
+      "-z",
+      "--untracked-files=all",
+    ]);
     const renames = statusRenames(status);
     for (const [oldPath, newPath] of renames) {
-      const oldIndex = effects.findIndex((effect) => effect.path === oldPath && effect.kind === "deleted");
-      const newIndex = effects.findIndex((effect) => effect.path === newPath && effect.kind === "created");
+      const oldIndex = effects.findIndex(
+        (effect) => effect.path === oldPath && effect.kind === "deleted",
+      );
+      const newIndex = effects.findIndex(
+        (effect) => effect.path === newPath && effect.kind === "created",
+      );
       if (oldIndex !== -1 && newIndex !== -1) {
         effects.splice(Math.max(oldIndex, newIndex), 1);
         effects.splice(Math.min(oldIndex, newIndex), 1);
-        effects.push({ path: newPath, previousPath: oldPath, kind: "renamed", evidence: "git-status" });
+        effects.push({
+          path: newPath,
+          previousPath: oldPath,
+          kind: "renamed",
+          evidence: "git-status",
+        });
       }
     }
   } catch (error) {

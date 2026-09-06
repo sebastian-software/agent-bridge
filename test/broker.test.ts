@@ -3,17 +3,19 @@ import { chmod, cp, mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { AdapterRegistry } from "../src/adapters/registry.js";
+
 import type { Adapter, AdapterRunContext, AdapterRunResult } from "../src/adapters/types.js";
-import { Broker } from "../src/broker.js";
 import type {
   ObservedIdentity,
   RouteDescriptor,
   StartInvocationRequest,
   StartInvocationResult,
 } from "../src/contract.js";
-import { BridgeError } from "../src/errors.js";
 import type { BrokerPaths } from "../src/paths.js";
+
+import { AdapterRegistry } from "../src/adapters/registry.js";
+import { Broker } from "../src/broker.js";
+import { BridgeError } from "../src/errors.js";
 import { ensurePrivateDirectory } from "../src/paths.js";
 
 function paths(root: string): BrokerPaths {
@@ -25,7 +27,11 @@ function paths(root: string): BrokerPaths {
   };
 }
 
-function request(root: string, model: string, overrides?: Partial<StartInvocationRequest>): StartInvocationRequest {
+function request(
+  root: string,
+  model: string,
+  overrides?: Partial<StartInvocationRequest>,
+): StartInvocationRequest {
   return {
     selector: {
       provider: "agent-bridge",
@@ -43,16 +49,26 @@ function request(root: string, model: string, overrides?: Partial<StartInvocatio
 }
 
 function stateOf(value: unknown): string {
-  if (typeof value !== "object" || value === null || !("state" in value) || typeof value.state !== "string") {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("state" in value) ||
+    typeof value.state !== "string"
+  ) {
     assert.fail("Expected an object with a string state.");
   }
   return value.state;
 }
 
-async function waitForTerminal(broker: Broker, invocationId: string): Promise<Readonly<Record<string, unknown>>> {
+async function waitForTerminal(
+  broker: Broker,
+  invocationId: string,
+): Promise<Readonly<Record<string, unknown>>> {
   for (let attempt = 0; attempt < 200; attempt += 1) {
     const inspected = await broker.inspect(invocationId);
-    if (["cancelled", "failed", "interrupted", "succeeded", "timed_out"].includes(stateOf(inspected))) {
+    if (
+      ["cancelled", "failed", "interrupted", "succeeded", "timed_out"].includes(stateOf(inspected))
+    ) {
       return inspected;
     }
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -98,7 +114,10 @@ class InteractiveAdapter implements Adapter {
     });
     assert.ok(context.awaitInput);
     const response = await context.awaitInput("permission-1", context.signal);
-    await context.emit({ category: "output", content: [{ type: "text", text: response.decision }] });
+    await context.emit({
+      category: "output",
+      content: [{ type: "text", text: response.decision }],
+    });
     const identity: ObservedIdentity = {
       provider: { value: "agent-bridge", evidence: "verified", source: "interactive-fixture" },
       model: { value: "interactive", evidence: "verified", source: "interactive-fixture" },
@@ -134,7 +153,11 @@ class NativePayloadAdapter implements Adapter {
         runtimeIdentityEvidence: "verified",
         readiness: "ready",
         qualification: [
-          { qualificationId: "native-v1", testedAt: "2026-08-27T00:00:00.000Z", claim: "Native payload fixture." },
+          {
+            qualificationId: "native-v1",
+            testedAt: "2026-08-27T00:00:00.000Z",
+            claim: "Native payload fixture.",
+          },
         ],
         diagnostics: [],
       },
@@ -182,7 +205,7 @@ test("broker runs asynchronously, persists events, and deduplicates starts", asy
     const listed = (await broker.execute("invocation.list", {
       callerCorrelationId: undefined,
       includeTombstones: false,
-    })) as { invocations: readonly { invocationId: string; resolvedRouteId: string }[] };
+    })) as { invocations: ReadonlyArray<{ invocationId: string; resolvedRouteId: string }> };
     assert.equal(listed.invocations[0]?.invocationId, started.invocationId);
     assert.equal(listed.invocations[0]?.resolvedRouteId, "fake:fake-echo");
 
@@ -243,8 +266,13 @@ test("store persists invocation metadata and events in separate files", async ()
     assert.equal(metadata.events, undefined);
     assert.equal(metadata.outcome, undefined);
     assert.equal(metadata.state, "succeeded");
-    const eventLines = (await readFile(join(invocationDirectory, "events.jsonl"), "utf8")).trim().split("\n");
-    assert.equal(eventLines.length, (await broker.events({ invocationId: started.invocationId })).events.length);
+    const eventLines = (await readFile(join(invocationDirectory, "events.jsonl"), "utf8"))
+      .trim()
+      .split("\n");
+    assert.equal(
+      eventLines.length,
+      (await broker.events({ invocationId: started.invocationId })).events.length,
+    );
     assert.ok(await readFile(join(invocationDirectory, "outcome.json"), "utf8"));
   } finally {
     await broker.close();
@@ -333,7 +361,10 @@ test("forced broker shutdown records active invocations as interrupted", async (
     await broker.close();
     const terminal = await broker.inspect(started.invocationId);
     assert.equal(stateOf(terminal), "interrupted");
-    assert.equal((terminal.outcome as { error?: { code?: string } }).error?.code, "broker_shutdown");
+    assert.equal(
+      (terminal.outcome as { error?: { code?: string } }).error?.code,
+      "broker_shutdown",
+    );
   } finally {
     await broker.close();
     await rm(root, { recursive: true, force: true });
@@ -385,20 +416,25 @@ test("broker supervises the fake harness process across success and failure scen
       const terminal = await waitForTerminal(broker, started.invocationId);
       assert.equal(stateOf(terminal), scenario.state);
       if ("errorCode" in scenario) {
-        assert.equal((terminal.outcome as { error?: { code?: string } }).error?.code, scenario.errorCode);
+        assert.equal(
+          (terminal.outcome as { error?: { code?: string } }).error?.code,
+          scenario.errorCode,
+        );
       }
       if (scenario.model === "success") {
-        assert.deepEqual((terminal.outcome as { content: unknown }).content, [{ type: "text", text: "echo this" }]);
+        assert.deepEqual((terminal.outcome as { content: unknown }).content, [
+          { type: "text", text: "echo this" },
+        ]);
       }
       if (scenario.model === "effects") {
         assert.ok(
-          (terminal.outcome as { effects: readonly { path: string }[] }).effects.some((effect) =>
-            effect.path.endsWith("fake-renamed.txt"),
+          (terminal.outcome as { effects: ReadonlyArray<{ path: string }> }).effects.some(
+            (effect) => effect.path.endsWith("fake-renamed.txt"),
           ),
         );
-        const effectEvents = (await broker.events({ invocationId: started.invocationId })).events.filter(
-          (event) => event.category === "effect",
-        );
+        const effectEvents = (
+          await broker.events({ invocationId: started.invocationId })
+        ).events.filter((event) => event.category === "effect");
         assert.ok(effectEvents.length > 0);
         assert.ok(effectEvents.every((event) => typeof event.data?.path === "string"));
       }
@@ -424,7 +460,11 @@ test("broker turns an early harness exit while writing stdin into a failed invoc
     const terminal = await waitForTerminal(broker, started.invocationId);
     assert.equal(stateOf(terminal), "failed");
     const events = (await broker.events({ invocationId: started.invocationId })).events;
-    assert.ok(events.some((event) => event.category === "diagnostic" && event.data?.phase === "stream_error"));
+    assert.ok(
+      events.some(
+        (event) => event.category === "diagnostic" && event.data?.phase === "stream_error",
+      ),
+    );
   } finally {
     await broker.close();
     await rm(root, { recursive: true, force: true });
@@ -465,7 +505,9 @@ test("broker cancellation terminates a supervised fake harness process", async (
 
 test("broker resumes an invocation after an orchestrator input response", async () => {
   const root = await mkdtemp(join(tmpdir(), "agent-bridge-input-"));
-  const broker = new Broker(paths(root), { registry: new AdapterRegistry([new InteractiveAdapter()]) });
+  const broker = new Broker(paths(root), {
+    registry: new AdapterRegistry([new InteractiveAdapter()]),
+  });
   await broker.initialize();
   try {
     const started = await broker.start(
@@ -493,7 +535,9 @@ test("broker resumes an invocation after an orchestrator input response", async 
     assert.equal(response.accepted, true);
     const terminal = await waitForTerminal(broker, started.invocationId);
     assert.equal(stateOf(terminal), "succeeded");
-    assert.deepEqual((terminal.outcome as { content: unknown }).content, [{ type: "text", text: "allow" }]);
+    assert.deepEqual((terminal.outcome as { content: unknown }).content, [
+      { type: "text", text: "allow" },
+    ]);
   } finally {
     await broker.close();
     await rm(root, { recursive: true, force: true });
@@ -503,7 +547,10 @@ test("broker resumes an invocation after an orchestrator input response", async 
 test("broker keeps native payloads bounded unless diagnostic mode is enabled", async () => {
   const regularRoot = await mkdtemp(join(tmpdir(), "agent-bridge-native-regular-"));
   const diagnosticRoot = await mkdtemp(join(tmpdir(), "agent-bridge-native-diagnostic-"));
-  const run = async (root: string, diagnosticMode: boolean): Promise<Readonly<Record<string, unknown>>> => {
+  const run = async (
+    root: string,
+    diagnosticMode: boolean,
+  ): Promise<Readonly<Record<string, unknown>>> => {
     const broker = new Broker(paths(root), {
       registry: new AdapterRegistry([new NativePayloadAdapter()]),
       diagnosticMode,
@@ -536,7 +583,9 @@ test("broker keeps native payloads bounded unless diagnostic mode is enabled", a
       const broker = new Broker(paths(regularRoot), { diagnosticMode: false });
       await broker.initialize();
       try {
-        return broker.events({ invocationId: (regular as { invocationId: string }).invocationId });
+        return await broker.events({
+          invocationId: (regular as { invocationId: string }).invocationId,
+        });
       } finally {
         await broker.close();
       }
@@ -547,12 +596,16 @@ test("broker keeps native payloads bounded unless diagnostic mode is enabled", a
       const broker = new Broker(paths(diagnosticRoot), { diagnosticMode: true });
       await broker.initialize();
       try {
-        return broker.events({ invocationId: (diagnostic as { invocationId: string }).invocationId });
+        return await broker.events({
+          invocationId: (diagnostic as { invocationId: string }).invocationId,
+        });
       } finally {
         await broker.close();
       }
     })();
-    const diagnosticNative = diagnosticEvents.events.find((event) => event.category === "output")?.native;
+    const diagnosticNative = diagnosticEvents.events.find(
+      (event) => event.category === "output",
+    )?.native;
     assert.equal(diagnosticNative?.secret, "do-not-persist");
   } finally {
     await rm(regularRoot, { recursive: true, force: true });
@@ -613,12 +666,15 @@ test("cancelled process invocations retain output and usage observed before term
     const terminal = await waitForTerminal(broker, started.invocationId);
     assert.equal(stateOf(terminal), "cancelled");
     const outcome = terminal.outcome as {
-      content: readonly { type: string; text?: string }[];
+      content: ReadonlyArray<{ type: string; text?: string }>;
       usage?: { inputTokens?: number; outputTokens?: number };
     };
     assert.deepEqual(outcome.content, [{ type: "text", text: "echo this" }]);
     assert.deepEqual(
-      outcome.usage && { inputTokens: outcome.usage.inputTokens, outputTokens: outcome.usage.outputTokens },
+      outcome.usage && {
+        inputTokens: outcome.usage.inputTokens,
+        outputTokens: outcome.usage.outputTokens,
+      },
       {
         inputTokens: 1,
         outputTokens: 1,
@@ -681,7 +737,9 @@ test("restart reconciliation marks a persisted active snapshot interrupted", asy
       }
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
-    await cp(paths(liveRoot).stateDirectory, paths(restartRoot).stateDirectory, { recursive: true });
+    await cp(paths(liveRoot).stateDirectory, paths(restartRoot).stateDirectory, {
+      recursive: true,
+    });
   } finally {
     await liveBroker.close();
   }
@@ -704,7 +762,7 @@ test("retention evicts completed records and persists tombstones", async () => {
   const brokerOptions = { retention: { completedMs: 0, maxBytes: 1_073_741_824 } };
   const broker = new Broker(paths(root), brokerOptions);
   await broker.initialize();
-  let invocationId = "";
+  let invocationId: string;
   try {
     invocationId = (await broker.start(request(root, "fake-echo"))).invocationId;
     await new Promise((resolve) => setTimeout(resolve, 100));

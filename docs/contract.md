@@ -9,20 +9,20 @@ route descriptors. The JSON files in
 
 ## Operations
 
-| Operation | Purpose | Next affordances |
-| --- | --- | --- |
-| `system.describe` | Describe versions, operations, and settings | — |
-| `system.status` | Inspect broker readiness, counts, and environment names | `broker stop` |
-| `system.shutdown` | Stop the broker, optionally forcing active work to interrupt | — |
-| `route.discover` | Discover qualified and authenticated routes | `invocation.start` |
-| `invocation.start` | Resolve one route and enqueue one invocation | `invocation.events`, `invocation.cancel` |
-| `invocation.list` | List lightweight retained summaries and optional tombstones | `invocation.inspect` |
-| `invocation.inspect` / `get` | Read state, policy, route, and event cursor | `invocation.events`, `invocation.cancel` |
-| `invocation.events` | Read events after a cursor, with bounded long polling | repeat with `nextCursor` |
-| `invocation.wait` | Wait for terminal state with a maximum 30-second poll | `invocation.result` |
-| `invocation.result` | Read the immutable terminal outcome | — |
-| `invocation.cancel` | Request cancellation of active work | `invocation.events` |
-| `invocation.respond` | Answer a pending permission request | `invocation.events` |
+| Operation                    | Purpose                                                      | Next affordances                         |
+| ---------------------------- | ------------------------------------------------------------ | ---------------------------------------- |
+| `system.describe`            | Describe versions, operations, and settings                  | —                                        |
+| `system.status`              | Inspect broker readiness, counts, and environment names      | `broker stop`                            |
+| `system.shutdown`            | Stop the broker, optionally forcing active work to interrupt | —                                        |
+| `route.discover`             | Discover qualified and authenticated routes                  | `invocation.start`                       |
+| `invocation.start`           | Resolve one route and enqueue one invocation                 | `invocation.events`, `invocation.cancel` |
+| `invocation.list`            | List lightweight retained summaries and optional tombstones  | `invocation.inspect`                     |
+| `invocation.inspect` / `get` | Read state, policy, route, and event cursor                  | `invocation.events`, `invocation.cancel` |
+| `invocation.events`          | Read events after a cursor, with bounded long polling        | repeat with `nextCursor`                 |
+| `invocation.wait`            | Wait for terminal state with a maximum 30-second poll        | `invocation.result`                      |
+| `invocation.result`          | Read the immutable terminal outcome                          | —                                        |
+| `invocation.cancel`          | Request cancellation of active work                          | `invocation.events`                      |
+| `invocation.respond`         | Answer a pending permission request                          | `invocation.events`                      |
 
 An invocation request contains a model-first `selector`, one or more typed
 `input` content parts, an absolute `workingDirectory`, an interaction strategy,

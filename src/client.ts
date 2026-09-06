@@ -12,6 +12,7 @@ import type {
   StartInvocationRequest,
   StartInvocationResult,
 } from "./contract.js";
+
 import { BridgeError } from "./errors.js";
 import { IpcClient } from "./ipc.js";
 import { brokerPaths } from "./paths.js";
@@ -20,13 +21,16 @@ import { PACKAGE_VERSION } from "./version.js";
 const MAX_STARTUP_DIAGNOSTIC_BYTES = 4 * 1024;
 
 function normalizeStartupDiagnostic(line: string): string {
-  return line
-    .replace(/^agent-bridge:\s*/i, "")
-    .replace(/\s+\([A-Za-z0-9_]+\)\s*$/, "")
-    .trim();
+  return (
+    line
+      .replace(/^agent-bridge:\s*/i, "")
+      // eslint-disable-next-line regexp/no-super-linear-move -- input is one bounded diagnostic line produced by this CLI
+      .replace(/\s+\(\w+\)\s*$/, "")
+      .trim()
+  );
 }
 
-export interface InspectionResult {
+export type InspectionResult = {
   readonly schemaVersion: string;
   readonly invocationId: string;
   readonly state: InvocationState;
@@ -41,26 +45,26 @@ export interface InspectionResult {
   readonly lastCursor?: string;
   readonly outcome?: InvocationOutcome;
   readonly next: readonly string[];
-}
+};
 
-export interface WaitResult extends InspectionResult {
+export type WaitResult = {
   readonly waited: boolean;
-}
+} & InspectionResult;
 
-export interface ResultResult {
+export type ResultResult = {
   readonly invocationId: string;
   readonly state: InvocationState;
   readonly outcome: InvocationOutcome;
-}
+};
 
-export interface CancelResult {
+export type CancelResult = {
   readonly invocationId: string;
   readonly state: InvocationState;
   readonly accepted: boolean;
   readonly terminal: boolean;
-}
+};
 
-export interface BrokerStatus {
+export type BrokerStatus = {
   readonly ready?: boolean;
   readonly running: boolean;
   readonly packageVersion?: string;
@@ -76,25 +80,25 @@ export interface BrokerStatus {
   readonly tombstones?: number;
   readonly diagnosticMode?: boolean;
   readonly environmentVariableNames?: readonly string[];
-}
+};
 
-export interface ContractDescription {
+export type ContractDescription = {
   readonly schemaVersion: string;
   readonly operationsVersion: string;
-  readonly schemas: readonly Readonly<Record<string, unknown>>[];
-  readonly operations: readonly Readonly<Record<string, unknown>>[];
+  readonly schemas: ReadonlyArray<Readonly<Record<string, unknown>>>;
+  readonly operations: ReadonlyArray<Readonly<Record<string, unknown>>>;
   readonly broker?: Readonly<Record<string, unknown>>;
   readonly retention?: Readonly<Record<string, unknown>>;
   readonly diagnostics?: Readonly<Record<string, unknown>>;
   readonly configuration?: Readonly<Record<string, unknown>>;
-}
+};
 
-export interface ClientOptions {
+export type ClientOptions = {
   /** Unix socket override; defaults to the standard broker path. */
   readonly socketPath?: string;
   /** Start a user-owned broker automatically when the socket is unavailable. */
   readonly autostart?: boolean;
-}
+};
 
 type OperationResultMap = {
   readonly "system.describe": ContractDescription;
@@ -116,14 +120,18 @@ function brokerVersion(value: unknown): string | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return undefined;
   }
-  return "packageVersion" in value && typeof value.packageVersion === "string" ? value.packageVersion : undefined;
+  return "packageVersion" in value && typeof value.packageVersion === "string"
+    ? value.packageVersion
+    : undefined;
 }
 
 function activeInvocations(value: unknown): number {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return 0;
   }
-  return "activeInvocations" in value && typeof value.activeInvocations === "number" ? value.activeInvocations : 0;
+  return "activeInvocations" in value && typeof value.activeInvocations === "number"
+    ? value.activeInvocations
+    : 0;
 }
 
 export class AgentBridgeClient {
@@ -140,27 +148,29 @@ export class AgentBridgeClient {
     this.#autostart = options.autostart ?? true;
   }
 
-  describe(): Promise<ContractDescription> {
+  async describe(): Promise<ContractDescription> {
     return this.#request("system.describe", {});
   }
 
-  routes(options: { readonly refresh?: boolean } = {}): Promise<{ readonly routes: readonly RouteDescriptor[] }> {
+  async routes(
+    options: { readonly refresh?: boolean } = {},
+  ): Promise<{ readonly routes: readonly RouteDescriptor[] }> {
     return this.#request("route.discover", { refresh: options.refresh ?? false });
   }
 
-  start(request: StartInvocationRequest): Promise<StartInvocationResult> {
+  async start(request: StartInvocationRequest): Promise<StartInvocationResult> {
     return this.#request("invocation.start", request);
   }
 
-  inspect(invocationId: string): Promise<InspectionResult> {
+  async inspect(invocationId: string): Promise<InspectionResult> {
     return this.#request("invocation.inspect", { invocationId });
   }
 
-  get(invocationId: string): Promise<InspectionResult> {
+  async get(invocationId: string): Promise<InspectionResult> {
     return this.#request("invocation.get", { invocationId });
   }
 
-  events(
+  async events(
     invocationId: string,
     options: { readonly after?: string; readonly waitMs?: number } = {},
   ): Promise<EventsResult> {
@@ -174,7 +184,10 @@ export class AgentBridgeClient {
   async *follow(invocationId: string): AsyncGenerator<InvocationEvent, void, undefined> {
     let after: string | undefined;
     while (true) {
-      const page = await this.events(invocationId, { ...(after === undefined ? {} : { after }), waitMs: 30_000 });
+      const page = await this.events(invocationId, {
+        ...(after === undefined ? {} : { after }),
+        waitMs: 30_000,
+      });
       for (const event of page.events) {
         yield event;
       }
@@ -196,15 +209,15 @@ export class AgentBridgeClient {
     }
   }
 
-  result(invocationId: string): Promise<ResultResult> {
+  async result(invocationId: string): Promise<ResultResult> {
     return this.#request("invocation.result", { invocationId });
   }
 
-  cancel(invocationId: string): Promise<CancelResult> {
+  async cancel(invocationId: string): Promise<CancelResult> {
     return this.#request("invocation.cancel", { invocationId });
   }
 
-  list(
+  async list(
     options: {
       readonly active?: boolean;
       readonly state?: InvocationState;
@@ -217,14 +230,18 @@ export class AgentBridgeClient {
     return this.#request("invocation.list", {
       ...(options.active === undefined ? {} : { active: options.active }),
       ...(options.state === undefined ? {} : { state: options.state }),
-      ...(options.callerCorrelationId === undefined ? {} : { callerCorrelationId: options.callerCorrelationId }),
+      ...(options.callerCorrelationId === undefined
+        ? {}
+        : { callerCorrelationId: options.callerCorrelationId }),
       ...(options.since === undefined ? {} : { since: options.since }),
       ...(options.limit === undefined ? {} : { limit: options.limit }),
-      ...(options.includeTombstones === undefined ? {} : { includeTombstones: options.includeTombstones }),
+      ...(options.includeTombstones === undefined
+        ? {}
+        : { includeTombstones: options.includeTombstones }),
     });
   }
 
-  status(): Promise<BrokerStatus> {
+  async status(): Promise<BrokerStatus> {
     return this.#request("system.status", {}, false).catch((error: unknown) => {
       if (error instanceof BridgeError && error.code === "broker_unavailable") {
         return { running: false, socketPath: this.#socketPath };
@@ -233,11 +250,11 @@ export class AgentBridgeClient {
     });
   }
 
-  shutdown(force = false): Promise<Readonly<Record<string, unknown>>> {
+  async shutdown(force = false): Promise<Readonly<Record<string, unknown>>> {
     return this.#request("system.shutdown", { force });
   }
 
-  execute(operation: string, params: unknown): Promise<unknown> {
+  async execute(operation: string, params: unknown): Promise<unknown> {
     return this.#request(operation as keyof OperationResultMap, params);
   }
 
@@ -252,7 +269,8 @@ export class AgentBridgeClient {
     params: unknown,
     allowAutostart = this.#autostart,
   ): Promise<OperationResultMap[K]> {
-    const request = (client: IpcClient): Promise<OperationResultMap[K]> => this.#requestVia(client, operation, params);
+    const request = async (client: IpcClient): Promise<OperationResultMap[K]> =>
+      this.#requestVia(client, operation, params);
     const client = new IpcClient(this.#socketPath);
     try {
       return await request(client);
@@ -291,7 +309,7 @@ export class AgentBridgeClient {
       }
     }
 
-    const cliPath = fileURLToPath(new URL("./cli.js", import.meta.url));
+    const cliPath = fileURLToPath(new URL("cli.js", import.meta.url));
     const child = spawn(process.execPath, [cliPath, "broker", "serve"], {
       detached: true,
       stdio: ["ignore", "ignore", "pipe"],
@@ -304,7 +322,7 @@ export class AgentBridgeClient {
         startupStderr += chunk.slice(0, MAX_STARTUP_DIAGNOSTIC_BYTES);
       }
     });
-    child.stderr?.on("error", () => undefined);
+    child.stderr?.on("error", () => {});
     child.unref();
     const disposeStartupStderr = (): void => {
       child.stderr?.removeAllListeners("data");

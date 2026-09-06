@@ -34,12 +34,14 @@ async function waitForBroker(client: IpcClient): Promise<void> {
   assert.fail(`Broker did not become ready: ${String(lastError)}`);
 }
 
-function childExit(child: ChildProcess): Promise<void> {
+async function childExit(child: ChildProcess): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) {
-    return Promise.resolve();
+    return;
   }
   return new Promise((resolve, reject) => {
-    child.once("exit", () => resolve());
+    child.once("exit", () => {
+      resolve();
+    });
     child.once("error", reject);
   });
 }
@@ -71,14 +73,21 @@ test("CLI discovers, starts, follows, and inspects through the Unix socket", asy
     const description = JSON.parse(described.stdout) as { operationsVersion?: unknown };
     assert.equal(description.operationsVersion, "1.0");
 
-    const status = await execFile(process.execPath, [cliPath, "broker", "status", "--json"], { env });
-    const brokerStatus = JSON.parse(status.stdout) as { ready?: unknown; environmentVariableNames?: unknown };
+    const status = await execFile(process.execPath, [cliPath, "broker", "status", "--json"], {
+      env,
+    });
+    const brokerStatus = JSON.parse(status.stdout) as {
+      ready?: unknown;
+      environmentVariableNames?: unknown;
+    };
     assert.equal(brokerStatus.ready, true);
     assert.ok(Array.isArray(brokerStatus.environmentVariableNames));
     assert.ok(brokerStatus.environmentVariableNames.includes("PATH"));
 
     try {
-      await execFile(process.execPath, [cliPath, "start", "--provider", "agent-bridge", "--json"], { env });
+      await execFile(process.execPath, [cliPath, "start", "--provider", "agent-bridge", "--json"], {
+        env,
+      });
       assert.fail("Invalid CLI input should fail.");
     } catch (error) {
       if (!(error instanceof Error) || !("stderr" in error) || typeof error.stderr !== "string") {
@@ -111,27 +120,51 @@ test("CLI discovers, starts, follows, and inspects through the Unix socket", asy
     );
     const invocationId = invocationIdFrom(started.stdout);
 
-    const followed = await execFile(process.execPath, [cliPath, "events", invocationId, "--follow", "--json"], { env });
+    const followed = await execFile(
+      process.execPath,
+      [cliPath, "events", invocationId, "--follow", "--json"],
+      { env },
+    );
     const eventLines = followed.stdout.trim().split("\n").filter(Boolean);
     assert.ok(eventLines.length >= 5);
     const terminalEvent = JSON.parse(eventLines.at(-1) ?? "null") as { data?: { state?: string } };
     assert.equal(terminalEvent.data?.state, "succeeded");
 
-    const inspected = await execFile(process.execPath, [cliPath, "inspect", invocationId, "--json"], { env });
+    const inspected = await execFile(
+      process.execPath,
+      [cliPath, "inspect", invocationId, "--json"],
+      { env },
+    );
     const inspection = JSON.parse(inspected.stdout) as { state?: unknown };
     assert.equal(inspection.state, "succeeded");
 
-    const fetched = await execFile(process.execPath, [cliPath, "get", invocationId, "--json"], { env });
-    assert.equal((JSON.parse(fetched.stdout) as { invocationId?: unknown }).invocationId, invocationId);
+    const fetched = await execFile(process.execPath, [cliPath, "get", invocationId, "--json"], {
+      env,
+    });
+    assert.equal(
+      (JSON.parse(fetched.stdout) as { invocationId?: unknown }).invocationId,
+      invocationId,
+    );
 
-    const waited = await execFile(process.execPath, [cliPath, "wait", invocationId, "--json"], { env });
+    const waited = await execFile(process.execPath, [cliPath, "wait", invocationId, "--json"], {
+      env,
+    });
     assert.equal((JSON.parse(waited.stdout) as { waited?: unknown }).waited, true);
 
-    const result = await execFile(process.execPath, [cliPath, "result", invocationId, "--json"], { env });
+    const result = await execFile(process.execPath, [cliPath, "result", invocationId, "--json"], {
+      env,
+    });
     assert.equal((JSON.parse(result.stdout) as { outcome?: unknown }).outcome !== undefined, true);
 
-    const listed = await execFile(process.execPath, [cliPath, "list", "--correlation", "cli-test", "--json"], { env });
-    assert.equal((JSON.parse(listed.stdout) as { invocations?: readonly unknown[] }).invocations?.length, 1);
+    const listed = await execFile(
+      process.execPath,
+      [cliPath, "list", "--correlation", "cli-test", "--json"],
+      { env },
+    );
+    assert.equal(
+      (JSON.parse(listed.stdout) as { invocations?: readonly unknown[] }).invocations?.length,
+      1,
+    );
 
     const oneShot = await execFile(
       process.execPath,
@@ -159,7 +192,9 @@ test("CLI discovers, starts, follows, and inspects through the Unix socket", asy
       .map((line) => JSON.parse(line) as Record<string, unknown>);
     assert.ok(oneShotLines.some((line) => line.category === "lifecycle"));
     const oneShotOutcome = oneShotLines.at(-1)?.outcome;
-    assert.ok(typeof oneShotOutcome === "object" && oneShotOutcome !== null && "status" in oneShotOutcome);
+    assert.ok(
+      typeof oneShotOutcome === "object" && oneShotOutcome !== null && "status" in oneShotOutcome,
+    );
     assert.equal(oneShotOutcome.status, "succeeded");
 
     const humanRun = await execFile(
@@ -251,17 +286,20 @@ test("autostart includes the broker startup diagnostic when initialization fails
   await chmod(stateDirectory, 0o755);
   const env = testEnvironment(root);
   try {
-    await assert.rejects(execFile(process.execPath, [cliPath, "describe", "--json"], { env }), (error: unknown) => {
-      if (!(error instanceof Error) || !("stderr" in error) || typeof error.stderr !== "string") {
-        return false;
-      }
-      return (
-        error.stderr.includes(stateDirectory) &&
-        error.stderr.includes("broker_unavailable") &&
-        !error.stderr.includes("Startup error: agent-bridge:") &&
-        !error.stderr.includes("(broker_unavailable) (broker_unavailable)")
-      );
-    });
+    await assert.rejects(
+      execFile(process.execPath, [cliPath, "describe", "--json"], { env }),
+      (error: unknown) => {
+        if (!(error instanceof Error) || !("stderr" in error) || typeof error.stderr !== "string") {
+          return false;
+        }
+        return (
+          error.stderr.includes(stateDirectory) &&
+          error.stderr.includes("broker_unavailable") &&
+          !error.stderr.includes("Startup error: agent-bridge:") &&
+          !error.stderr.includes("(broker_unavailable) (broker_unavailable)")
+        );
+      },
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -287,14 +325,20 @@ test("CLI exits after autostarting a healthy broker", async () => {
         "--json",
         "autostart should exit",
       ],
-      { env, timeout: 5_000 },
+      { env, timeout: 5000 },
     );
     const lastLine = result.stdout.trim().split("\n").at(-1);
-    const outcome = lastLine === undefined ? undefined : (JSON.parse(lastLine) as { outcome?: { status?: string } });
+    const outcome =
+      lastLine === undefined
+        ? undefined
+        : (JSON.parse(lastLine) as { outcome?: { status?: string } });
     assert.equal(outcome?.outcome?.status, "succeeded");
   } finally {
     try {
-      await execFile(process.execPath, [cliPath, "broker", "stop", "--json"], { env, timeout: 2_000 });
+      await execFile(process.execPath, [cliPath, "broker", "stop", "--json"], {
+        env,
+        timeout: 2000,
+      });
     } catch {
       // The broker may already have exited after a failed startup.
     }

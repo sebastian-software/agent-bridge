@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { IPC_PROTOCOL_VERSION, parseOperationRequest, parseStartInvocationRequest } from "../src/contract.js";
+import {
+  IPC_PROTOCOL_VERSION,
+  parseOperationRequest,
+  parseStartInvocationRequest,
+} from "../src/contract.js";
 import { BridgeError } from "../src/errors.js";
 
 test("start request parsing applies honest defaults", () => {

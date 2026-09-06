@@ -1,8 +1,16 @@
-import type { JsonValue, RouteDescriptor, StartInvocationRequest, Usage, WorkspaceEffect } from "../contract.js";
+import type {
+  JsonValue,
+  ObservedIdentity,
+  RouteDescriptor,
+  StartInvocationRequest,
+  Usage,
+  WorkspaceEffect,
+} from "../contract.js";
+import type { AdapterEvent, AdapterRunContext, PolicyResolution } from "./types.js";
+
 import { BridgeError } from "../errors.js";
-import { type DiscoveryProbe, discoverManifestRoutes } from "./discovery.js";
+import { discoverManifestRoutes, type DiscoveryProbe } from "./discovery.js";
 import { type CommandSpec, ProcessAdapter, promptFor } from "./process.js";
-import type { AdapterEvent, AdapterRunContext } from "./types.js";
 
 const MANIFEST = {
   id: "codex",
@@ -31,7 +39,8 @@ const MANIFEST = {
     testSuite: "test/adapters.test.ts",
     testCommit: "2473c44fc41befe82847287b13af53245c008a39",
   },
-  qualificationClaim: "Codex CLI exec JSONL contract with native model, sandbox, approval, and workspace mapping.",
+  qualificationClaim:
+    "Codex CLI exec JSONL contract with native model, sandbox, approval, and workspace mapping.",
   policySupport: {
     filesystem: ["read-only", "workspace-write"],
     commands: ["allow"],
@@ -44,13 +53,16 @@ function reasoningEffort(value: string): string {
   return value === "max" ? "xhigh" : value;
 }
 
-function resolvePolicy(request: StartInvocationRequest): import("./types.js").PolicyResolution {
+function resolvePolicy(request: StartInvocationRequest): PolicyResolution {
   const unsupported: string[] = [];
   if (request.requestedPolicy.commands === "deny") {
     unsupported.push("requestedPolicy.commands=deny");
   }
   const controls: Array<Readonly<Record<string, JsonValue>>> = [
-    { flag: "--sandbox", value: request.requestedPolicy.filesystem === "read-only" ? "read-only" : "workspace-write" },
+    {
+      flag: "--sandbox",
+      value: request.requestedPolicy.filesystem === "read-only" ? "read-only" : "workspace-write",
+    },
     { flag: "-c", value: "approval_policy=never" },
   ];
   if (request.requestedPolicy.network === "allow" || request.requestedPolicy.network === "deny") {
@@ -63,7 +75,10 @@ function resolvePolicy(request: StartInvocationRequest): import("./types.js").Po
     controls.push({ flag: "--add-dir", value: directory });
   }
   if (request.selector.effort !== undefined) {
-    controls.push({ flag: "-c", value: `model_reasoning_effort=${reasoningEffort(request.selector.effort)}` });
+    controls.push({
+      flag: "-c",
+      value: `model_reasoning_effort=${reasoningEffort(request.selector.effort)}`,
+    });
   }
   return {
     supported: unsupported.length === 0,
@@ -82,19 +97,27 @@ function sandbox(context: AdapterRunContext): string {
   return "workspace-write";
 }
 
-function usageFrom(value: unknown): Usage | undefined {
+function numberValue(candidate: unknown): number | undefined {
+  return typeof candidate === "number" && Number.isFinite(candidate) && candidate >= 0
+    ? candidate
+    : undefined;
+}
+
+function usageFrom(value: unknown): undefined | Usage {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return undefined;
   }
   const source = value as Record<string, unknown>;
-  const numberValue = (candidate: unknown): number | undefined =>
-    typeof candidate === "number" && Number.isFinite(candidate) && candidate >= 0 ? candidate : undefined;
   const inputTokens = numberValue(source.input_tokens);
   const outputTokens = numberValue(source.output_tokens);
   const cacheReadTokens = numberValue(source.cached_input_tokens);
   const cacheWriteTokens = numberValue(source.cache_creation_input_tokens);
   const turns = numberValue(source.turns);
-  if ([inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, turns].every((item) => item === undefined)) {
+  if (
+    [inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, turns].every(
+      (item) => item === undefined,
+    )
+  ) {
     return undefined;
   }
   return {
@@ -123,7 +146,11 @@ function fileEffects(item: Record<string, unknown>): readonly WorkspaceEffect[] 
       return [];
     }
     const rawKind =
-      typeof source.kind === "string" ? source.kind : typeof source.change === "string" ? source.change : "modified";
+      typeof source.kind === "string"
+        ? source.kind
+        : typeof source.change === "string"
+          ? source.change
+          : "modified";
     const kind =
       rawKind === "add" || rawKind === "create"
         ? "created"
@@ -154,7 +181,7 @@ export class CodexAdapter extends ProcessAdapter {
     });
   }
 
-  resolvePolicy(request: StartInvocationRequest, _route: RouteDescriptor): import("./types.js").PolicyResolution {
+  resolvePolicy(request: StartInvocationRequest, _route: RouteDescriptor): PolicyResolution {
     return resolvePolicy(request);
   }
 
@@ -196,18 +223,26 @@ export class CodexAdapter extends ProcessAdapter {
 
   protected normalizeNative(
     value: Record<string, JsonValue>,
-    state: { identity: import("../contract.js").ObservedIdentity; content: { add(text: string): void } },
+    state: {
+      identity: ObservedIdentity;
+      content: { add: (text: string) => void };
+    },
   ): AdapterEvent | undefined {
     const type = typeof value.type === "string" ? value.type : "unknown";
     const threadId = typeof value.thread_id === "string" ? value.thread_id : undefined;
     const model = typeof value.model === "string" ? value.model : undefined;
     const item =
-      typeof value.item === "object" && value.item !== null ? (value.item as Record<string, unknown>) : undefined;
-    const itemText = item === undefined ? undefined : typeof item.text === "string" ? item.text : undefined;
+      typeof value.item === "object" && value.item !== null
+        ? (value.item as Record<string, unknown>)
+        : undefined;
+    const itemText =
+      item === undefined ? undefined : typeof item.text === "string" ? item.text : undefined;
     if (threadId !== undefined || model !== undefined) {
       state.identity = {
         ...state.identity,
-        ...(model === undefined ? {} : { model: { value: model, evidence: "reported", source: "codex-jsonl" } }),
+        ...(model === undefined
+          ? {}
+          : { model: { value: model, evidence: "reported", source: "codex-jsonl" } }),
         ...(threadId === undefined
           ? {}
           : { nativeSessionId: { value: threadId, evidence: "reported", source: "codex-jsonl" } }),

@@ -2,27 +2,39 @@ import { SCHEMA_VERSION } from "./contract.js";
 
 export type OperationAvailability = "implemented" | "planned";
 
-export interface OperationDefinition {
+export type OperationDefinition = {
   readonly name: string;
   readonly summary: string;
   readonly availability: OperationAvailability;
   readonly cli: readonly string[];
   readonly input: Readonly<Record<string, unknown>>;
   readonly output: Readonly<Record<string, unknown>>;
-}
+};
 
 export const OPERATIONS_VERSION = "1.0" as const;
 
-export interface SchemaDefinition {
+export type SchemaDefinition = {
   readonly name: string;
   readonly version: typeof SCHEMA_VERSION;
   readonly path: string;
-}
+};
 
 export const SCHEMA_DEFINITIONS: readonly SchemaDefinition[] = [
-  { name: "invocation-request", version: SCHEMA_VERSION, path: "schemas/invocation-request.schema.json" },
-  { name: "invocation-event", version: SCHEMA_VERSION, path: "schemas/invocation-event.schema.json" },
-  { name: "invocation-outcome", version: SCHEMA_VERSION, path: "schemas/invocation-outcome.schema.json" },
+  {
+    name: "invocation-request",
+    version: SCHEMA_VERSION,
+    path: "schemas/invocation-request.schema.json",
+  },
+  {
+    name: "invocation-event",
+    version: SCHEMA_VERSION,
+    path: "schemas/invocation-event.schema.json",
+  },
+  {
+    name: "invocation-outcome",
+    version: SCHEMA_VERSION,
+    path: "schemas/invocation-outcome.schema.json",
+  },
   { name: "operations", version: SCHEMA_VERSION, path: "schemas/operations.schema.json" },
 ] as const;
 
@@ -40,7 +52,11 @@ export const OPERATION_DEFINITIONS: readonly OperationDefinition[] = [
     summary: "Gracefully stop the user-owned local broker.",
     availability: "implemented",
     cli: ["broker stop --json"],
-    input: { type: "object", additionalProperties: false, properties: { force: { type: "boolean" } } },
+    input: {
+      type: "object",
+      additionalProperties: false,
+      properties: { force: { type: "boolean" } },
+    },
     output: { type: "object", required: ["accepted", "force", "activeInvocations"] },
   },
   {
@@ -49,14 +65,21 @@ export const OPERATION_DEFINITIONS: readonly OperationDefinition[] = [
     availability: "implemented",
     cli: ["broker status --json"],
     input: { type: "object", additionalProperties: false },
-    output: { type: "object", required: ["ready", "pid", "socketPath", "environmentVariableNames"] },
+    output: {
+      type: "object",
+      required: ["ready", "pid", "socketPath", "environmentVariableNames"],
+    },
   },
   {
     name: "route.discover",
     summary: "List adapter-qualified routes and their readiness evidence.",
     availability: "implemented",
     cli: ["routes --json"],
-    input: { type: "object", additionalProperties: false, properties: { refresh: { type: "boolean" } } },
+    input: {
+      type: "object",
+      additionalProperties: false,
+      properties: { refresh: { type: "boolean" } },
+    },
     output: { type: "object", required: ["routes"] },
   },
   {
@@ -140,7 +163,11 @@ export const OPERATION_DEFINITIONS: readonly OperationDefinition[] = [
     summary: "Wait for terminal state with a bounded long poll.",
     availability: "implemented",
     cli: ["wait <invocation-id> [--timeout-ms <milliseconds>] --json"],
-    input: { type: "object", required: ["invocationId"], properties: { timeoutMs: { maximum: 30000 } } },
+    input: {
+      type: "object",
+      required: ["invocationId"],
+      properties: { timeoutMs: { maximum: 30_000 } },
+    },
     output: { type: "object", required: ["invocationId", "state", "waited"] },
   },
   {
@@ -148,7 +175,11 @@ export const OPERATION_DEFINITIONS: readonly OperationDefinition[] = [
     summary: "Read ordered events after an opaque cursor, optionally with bounded long polling.",
     availability: "implemented",
     cli: ["events <invocation-id> [--after <cursor>] [--follow] --json"],
-    input: { type: "object", required: ["invocationId"], properties: { waitMs: { maximum: 30000 } } },
+    input: {
+      type: "object",
+      required: ["invocationId"],
+      properties: { waitMs: { maximum: 30_000 } },
+    },
     output: { type: "object", required: ["invocationId", "state", "events", "terminal"] },
   },
   {

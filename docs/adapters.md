@@ -46,14 +46,14 @@ treated as a usable route.
 
 Map native messages to the smallest useful bridge category:
 
-| Native observation | Bridge category |
-| --- | --- |
-| assistant answer or final text | `output` |
-| command/tool/reasoning progress | `activity` |
-| stderr or malformed/unsupported detail | `diagnostic` |
-| reported token/cost counters | `usage` |
-| native file/tool changes | `effect` |
-| approval or input request | `input_required` |
+| Native observation                     | Bridge category  |
+| -------------------------------------- | ---------------- |
+| assistant answer or final text         | `output`         |
+| command/tool/reasoning progress        | `activity`       |
+| stderr or malformed/unsupported detail | `diagnostic`     |
+| reported token/cost counters           | `usage`          |
+| native file/tool changes               | `effect`         |
+| approval or input request              | `input_required` |
 
 Assign identity values only from the harness's observed fields. A requested
 model, provider, or session ID is not evidence on its own. Preserve native

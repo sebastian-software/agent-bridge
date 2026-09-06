@@ -3,6 +3,7 @@ import { createConnection, createServer, type Server, type Socket } from "node:n
 import { dirname } from "node:path";
 
 import type { Broker } from "./broker.js";
+
 import {
   IPC_PROTOCOL_VERSION,
   type OperationRequest,
@@ -10,8 +11,8 @@ import {
   parseOperationRequest,
 } from "./contract.js";
 import { BridgeError, type BridgeErrorCode, errorDetail } from "./errors.js";
-import { ensurePrivateDirectory } from "./paths.js";
 import { writeBrokerLog } from "./log.js";
+import { ensurePrivateDirectory } from "./paths.js";
 
 const MAX_MESSAGE_BYTES = 1_048_576;
 
@@ -35,7 +36,9 @@ const BRIDGE_ERROR_CODES: ReadonlySet<string> = new Set<BridgeErrorCode>([
 ]);
 
 function remoteErrorCode(code: unknown): BridgeErrorCode {
-  return typeof code === "string" && BRIDGE_ERROR_CODES.has(code) ? (code as BridgeErrorCode) : "internal_error";
+  return typeof code === "string" && BRIDGE_ERROR_CODES.has(code)
+    ? (code as BridgeErrorCode)
+    : "internal_error";
 }
 
 function brokerUnavailable(message: string, cause?: unknown): BridgeError {
@@ -56,9 +59,15 @@ async function socketAcceptsConnections(socketPath: string): Promise<boolean> {
       socket.destroy();
       resolve(listening);
     };
-    socket.once("connect", () => finish(true));
-    socket.once("error", () => finish(false));
-    socket.setTimeout(250, () => finish(false));
+    socket.once("connect", () => {
+      finish(true);
+    });
+    socket.once("error", () => {
+      finish(false);
+    });
+    socket.setTimeout(250, () => {
+      finish(false);
+    });
   });
 }
 
@@ -117,12 +126,19 @@ export class BrokerServer {
       }
       await unlink(this.#socketPath);
     } catch (error) {
-      if (!(typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT")) {
+      if (
+        typeof error !== "object" ||
+        error === null ||
+        !("code" in error) ||
+        error.code !== "ENOENT"
+      ) {
         throw error;
       }
     }
 
-    const server = createServer((socket) => this.#accept(socket));
+    const server = createServer((socket) => {
+      this.#accept(socket);
+    });
     this.#server = server;
     await new Promise<void>((resolve, reject) => {
       const onError = (error: Error): void => {
@@ -162,7 +178,11 @@ export class BrokerServer {
     const server = this.#server;
     this.#server = undefined;
     if (server !== undefined) {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) =>
+        server.close(() => {
+          resolve();
+        }),
+      );
     }
     await this.#broker.close();
     try {
@@ -171,7 +191,12 @@ export class BrokerServer {
         await unlink(this.#socketPath);
       }
     } catch (error) {
-      if (!(typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT")) {
+      if (
+        typeof error !== "object" ||
+        error === null ||
+        !("code" in error) ||
+        error.code !== "ENOENT"
+      ) {
         throw error;
       }
     }
@@ -208,8 +233,10 @@ export class BrokerServer {
       handled = true;
       const line = received.slice(0, newline);
       this.#handle(line).then(
-        ({ response, shutdown }) => this.#send(socket, response, shutdown),
-        (error: unknown) =>
+        ({ response, shutdown }) => {
+          this.#send(socket, response, shutdown);
+        },
+        (error: unknown) => {
           this.#send(
             socket,
             {
@@ -218,14 +245,17 @@ export class BrokerServer {
               error: errorDetail(error),
             },
             false,
-          ),
+          );
+        },
       );
     });
     socket.on("close", () => this.#sockets.delete(socket));
     socket.on("error", () => this.#sockets.delete(socket));
   }
 
-  async #handle(line: string): Promise<{ readonly response: OperationResponse; readonly shutdown: boolean }> {
+  async #handle(
+    line: string,
+  ): Promise<{ readonly response: OperationResponse; readonly shutdown: boolean }> {
     this.#lastRequestAt = Date.now();
     let decoded: unknown;
     try {
@@ -308,7 +338,7 @@ export class BrokerServer {
     this.#idleTimer.unref();
   }
 
-  async #writeLog(level: "warn" | "error" | "info", message: string): Promise<void> {
+  async #writeLog(level: "error" | "info" | "warn", message: string): Promise<void> {
     await writeBrokerLog(this.#logFile, level, message);
   }
 }
@@ -337,12 +367,16 @@ export class IpcClient {
       let received = "";
       socket.setEncoding("utf8");
       socket.once("connect", () => {
-        socket.write(`${JSON.stringify({ protocolVersion: IPC_PROTOCOL_VERSION, id, operation, params })}\n`);
+        socket.write(
+          `${JSON.stringify({ protocolVersion: IPC_PROTOCOL_VERSION, id, operation, params })}\n`,
+        );
       });
       socket.on("data", (chunk: string) => {
         received += chunk;
         if (Buffer.byteLength(received, "utf8") > MAX_MESSAGE_BYTES * 8) {
-          finish(() => reject(brokerUnavailable("The broker response exceeds the eight-MiB client limit.")));
+          finish(() => {
+            reject(brokerUnavailable("The broker response exceeds the eight-MiB client limit."));
+          });
         }
       });
       socket.once("end", () => {
@@ -354,16 +388,27 @@ export class IpcClient {
           }
         });
       });
-      socket.once("error", (error) =>
-        finish(() => reject(brokerUnavailable(`Cannot connect to broker at ${this.#socketPath}.`, error))),
-      );
-      socket.setTimeout(35_000, () => finish(() => reject(brokerUnavailable("The broker request timed out."))));
+      socket.once("error", (error) => {
+        finish(() => {
+          reject(brokerUnavailable(`Cannot connect to broker at ${this.#socketPath}.`, error));
+        });
+      });
+      socket.setTimeout(35_000, () => {
+        finish(() => {
+          reject(brokerUnavailable("The broker request timed out."));
+        });
+      });
     });
 
     if (typeof response !== "object" || response === null || Array.isArray(response)) {
       throw brokerUnavailable("The broker response envelope is invalid.");
     }
-    if (!("id" in response) || response.id !== id || !("ok" in response) || typeof response.ok !== "boolean") {
+    if (
+      !("id" in response) ||
+      response.id !== id ||
+      !("ok" in response) ||
+      typeof response.ok !== "boolean"
+    ) {
       throw brokerUnavailable("The broker response identity is invalid.");
     }
     if (response.ok) {
@@ -380,7 +425,8 @@ export class IpcClient {
       "message" in remote && typeof remote.message === "string"
         ? remote.message
         : "The broker returned an unspecified error.";
-    const retryable = "retryable" in remote && typeof remote.retryable === "boolean" && remote.retryable;
+    const retryable =
+      "retryable" in remote && typeof remote.retryable === "boolean" && remote.retryable;
     const details =
       "details" in remote &&
       typeof remote.details === "object" &&
