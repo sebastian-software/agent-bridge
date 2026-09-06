@@ -1,0 +1,7 @@
+# Own org packages bypass pnpm 11's default minimumReleaseAge (1440 min) so
+# internal releases install immediately instead of after the 24h cooldown.
+minimumReleaseAgeExclude:
+  - "@sebastian-gmbh/*"
+  - "@sebastian-software/*"
+allowBuilds:
+  unrs-resolver: true

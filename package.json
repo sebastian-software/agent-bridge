@@ -2,49 +2,25 @@
   "name": "@sebastian-software/agent-bridge",
   "version": "0.1.0",
   "description": "Local harness-to-harness delegation gateway",
-  "author": "Sebastian Software GmbH",
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/sebastian-software/agent-bridge.git"
-  },
+  "keywords": [
+    "agent",
+    "cli",
+    "delegation",
+    "harness",
+    "mcp"
+  ],
   "homepage": "https://github.com/sebastian-software/agent-bridge#readme",
   "bugs": {
     "url": "https://github.com/sebastian-software/agent-bridge/issues"
   },
-  "keywords": [
-    "agent",
-    "delegation",
-    "harness",
-    "mcp",
-    "cli"
-  ],
-  "type": "module",
+  "license": "MIT",
+  "author": "Sebastian Software GmbH",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sebastian-software/agent-bridge.git"
+  },
   "bin": {
     "agent-bridge": "./dist/src/cli.js"
-  },
-  "exports": {
-    ".": {
-      "types": "./dist/src/index.d.ts",
-      "import": "./dist/src/index.js"
-    },
-    "./contract": {
-      "types": "./dist/src/contract.d.ts",
-      "import": "./dist/src/contract.js"
-    }
-  },
-  "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "fake-harness": "node scripts/fake-harness.mjs",
-    "version:sync": "node scripts/sync-version.mjs",
-    "format": "pnpm exec biome format --write src test scripts",
-    "format:check": "pnpm exec biome format src test scripts --reporter=summary",
-    "lint": "pnpm exec biome check --formatter-enabled=false --assist-enabled=false src test scripts && node scripts/lint.mjs",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "pnpm run build && node --test 'dist/test/**/*.test.js'",
-    "test:coverage": "pnpm run build && node --test --experimental-test-coverage --test-coverage-lines=75 'dist/test/**/*.test.js'",
-    "package:check": "pnpm run build && pnpm pack --dry-run",
-    "check": "pnpm run format:check && pnpm run lint && pnpm run typecheck && pnpm run test && pnpm run test:coverage && pnpm run package:check"
   },
   "files": [
     "dist/src",
@@ -55,17 +31,48 @@
     "docs/mcp.md",
     "docs/adapters.md"
   ],
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js"
+    },
+    "./contract": {
+      "types": "./dist/src/contract.d.ts",
+      "import": "./dist/src/contract.js"
+    }
+  },
   "publishConfig": {
     "access": "public"
   },
-  "engines": {
-    "node": ">=22"
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "pnpm lint:oxlint && pnpm lint:eslint",
+    "lint:eslint": "eslint . --max-warnings=0",
+    "lint:oxlint": "oxlint -c oxlint.config.ts",
+    "format": "oxfmt --write .",
+    "format:check": "oxfmt --check .",
+    "test": "pnpm run build && node --test 'dist/test/**/*.test.js'",
+    "test:coverage": "pnpm run build && node --test --experimental-test-coverage --test-coverage-lines=75 'dist/test/**/*.test.js'",
+    "package:check": "pnpm run build && pnpm pack --dry-run",
+    "agent:check": "pnpm lint && pnpm format:check && pnpm typecheck && pnpm build && pnpm test",
+    "check": "pnpm agent:check && pnpm test:coverage && pnpm package:check",
+    "fake-harness": "node scripts/fake-harness.mjs",
+    "version:sync": "node scripts/sync-version.mjs"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.12",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@types/node": "24.10.1",
+    "eslint": "^10.10.0",
+    "eslint-config-setup": "^0.5.2",
+    "jiti": "^2.7.0",
+    "oxfmt": "^0.66.0",
+    "oxlint": "^1.81.0",
     "typescript": "5.9.3"
+  },
+  "engines": {
+    "node": ">=22"
   },
   "packageManager": "pnpm@11.24.0"
 }
