@@ -486,6 +486,16 @@ test("policy resolution rejects unsupported fields and records exact controls", 
   );
   assert.equal(claudeInherit.supported, true);
 
+  const claudeOrchestrator = claude.resolvePolicy(
+    { ...request(process.cwd()), interactionStrategy: "orchestrator" },
+    claudeRoute,
+  );
+  assert.deepEqual(claudeOrchestrator.effectiveNativePolicy.controls, [
+    { flag: "--permission-mode", value: "default" },
+    { flag: "--input-format", value: "stream-json" },
+    { flag: "--permission-prompt-tool", value: "stdio" },
+  ]);
+
   const codex = new InspectableCodexAdapter();
   const codexInherit = codex.resolvePolicy(
     {

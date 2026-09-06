@@ -94,6 +94,10 @@ function resolvePolicy(request: StartInvocationRequest): import("./types.js").Po
   const controls: Array<Readonly<Record<string, JsonValue>>> = [
     { flag: "--permission-mode", value: permissionModeFor(request.interactionStrategy, request.requestedPolicy) },
   ];
+  if (request.interactionStrategy === "orchestrator") {
+    controls.push({ flag: "--input-format", value: "stream-json" });
+    controls.push({ flag: "--permission-prompt-tool", value: "stdio" });
+  }
   if (request.requestedPolicy.commands === "deny") {
     controls.push({ flag: "--disallowedTools", value: ["Bash"] });
   }

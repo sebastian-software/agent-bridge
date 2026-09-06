@@ -255,7 +255,12 @@ test("autostart includes the broker startup diagnostic when initialization fails
       if (!(error instanceof Error) || !("stderr" in error) || typeof error.stderr !== "string") {
         return false;
       }
-      return error.stderr.includes(stateDirectory) && error.stderr.includes("broker_unavailable");
+      return (
+        error.stderr.includes(stateDirectory) &&
+        error.stderr.includes("broker_unavailable") &&
+        !error.stderr.includes("Startup error: agent-bridge:") &&
+        !error.stderr.includes("(broker_unavailable) (broker_unavailable)")
+      );
     });
   } finally {
     await rm(root, { recursive: true, force: true });
