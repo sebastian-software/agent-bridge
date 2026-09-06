@@ -231,7 +231,7 @@ export async function discoverManifestRoutes(
       {
         qualificationId: manifest.qualification.qualificationId,
         testedAt: manifest.qualification.testedAt,
-        claim: `${manifest.qualificationClaim} Qualification suite ${manifest.qualification.testSuite} at ${manifest.qualification.testCommit} exercised native model ${model.canonicalModel} with harness ${manifest.qualification.harnessVersion} within ${manifest.qualifiedVersionRange}. Observed version ${version.value} satisfies ${manifest.qualifiedVersionRange}.`,
+        claim: `${manifest.qualificationClaim} Qualification suite ${manifest.qualification.testSuite} at ${manifest.qualification.testCommit} verifies route discovery, command argument construction, and native normalizer fixtures. Observed version ${version.value} satisfies ${manifest.qualifiedVersionRange}; runtime model identity requires a separate opt-in harness qualification run.`,
       },
     ],
     ...(manifest.policySupport === undefined ? {} : { policySupport: manifest.policySupport }),
