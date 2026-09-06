@@ -349,6 +349,36 @@ test("Claude orchestrator mode delegates permission prompts and closes stdin aft
   assert.deepEqual(command.envDenyList, CLAUDE_SESSION_ENVIRONMENT_DENY_LIST);
 });
 
+test("Claude and Codex pass requested model aliases through to the harness", () => {
+  const claude = new InspectableClaudeAdapter({ executable: process.execPath });
+  const claudeCommand = claude.commandFor({
+    invocationId: "inv_claude_alias",
+    request: request(process.cwd()),
+    route: {
+      ...route("claude", process.execPath),
+      model: "opus",
+      canonicalModel: "claude-opus-4-8",
+    },
+    signal: new AbortController().signal,
+    emit: async () => {},
+  });
+  assert.equal(claudeCommand.args[claudeCommand.args.indexOf("--model") + 1], "opus");
+
+  const codex = new InspectableCodexAdapter();
+  const codexCommand = codex.commandFor({
+    invocationId: "inv_codex_alias",
+    request: request(process.cwd()),
+    route: {
+      ...route("codex", process.execPath),
+      model: "gpt-5-codex",
+      canonicalModel: "gpt-5.3-codex",
+    },
+    signal: new AbortController().signal,
+    emit: async () => {},
+  });
+  assert.equal(codexCommand.args[codexCommand.args.indexOf("--model") + 1], "gpt-5-codex");
+});
+
 test("Codex excludes reasoning from answer content and reports file effects", () => {
   const adapter = new InspectableCodexAdapter();
   const state = nativeState();
