@@ -60,6 +60,21 @@ function stateOf(value: unknown): string {
   return value.state;
 }
 
+async function waitForEviction(broker: Broker, invocationId: string): Promise<void> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    try {
+      await broker.inspect(invocationId);
+    } catch (error) {
+      if (error instanceof BridgeError && error.code === "invocation_evicted") {
+        return;
+      }
+      throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.fail(`Invocation ${invocationId} was not evicted by retention.`);
+}
+
 async function waitForTerminal(
   broker: Broker,
   invocationId: string,
@@ -765,11 +780,9 @@ test("retention evicts completed records and persists tombstones", async () => {
   let invocationId: string;
   try {
     invocationId = (await broker.start(request(root, "fake-echo"))).invocationId;
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    await assert.rejects(
-      broker.inspect(invocationId),
-      (error: unknown) => error instanceof BridgeError && error.code === "invocation_evicted",
-    );
+    // Retention runs once the invocation completes; wait for the eviction
+    // instead of assuming the fake harness finishes within a fixed delay.
+    await waitForEviction(broker, invocationId);
   } finally {
     await broker.close();
   }
