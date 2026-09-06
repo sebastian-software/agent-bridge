@@ -4,13 +4,7 @@ import { defineConfig, type OxlintConfig } from "oxlint";
 // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- getOxlintConfig() is not yet typed against oxlint's own OxlintConfig
 const config = getOxlintConfig({ node: true }) as OxlintConfig;
 
-config.ignorePatterns = [
-  "**/dist/**",
-  "coverage/**",
-  "node_modules/**",
-  // Self-contained spike with its own package.json, lockfile and tsconfig.
-  "spikes/**",
-];
+config.ignorePatterns = ["**/dist/**", "coverage/**", "node_modules/**"];
 
 // The suite runs on node:test, not vitest. The shared config turns the vitest
 // rules on for every *.test.ts file, where they report on a runner they do not

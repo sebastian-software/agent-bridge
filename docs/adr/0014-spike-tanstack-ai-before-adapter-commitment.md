@@ -46,7 +46,7 @@ TanStack persistence model the bridge's normative external contract.
 ## Result
 
 The 2026-08-27 run is documented in
-[`spikes/tanstack-ai/RESULTS.md`](../../spikes/tanstack-ai/RESULTS.md). It proved
+[`docs/research/tanstack-ai-spike.md`](../research/tanstack-ai-spike.md). It proved
 basic execution and continuation for both harnesses, while finding blocking
 gaps in active steering, approvals, workspace transparency, and Codex process
 teardown. The resulting production-dependency recommendation remains subject

@@ -54,7 +54,7 @@
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",
     "test": "pnpm run build && node --test 'dist/test/**/*.test.js'",
-    "test:coverage": "pnpm run build && node --test --experimental-test-coverage --test-coverage-lines=75 'dist/test/**/*.test.js'",
+    "test:coverage": "pnpm run build && node --test --experimental-test-coverage --test-coverage-lines=75 --test-coverage-branches=65 'dist/test/**/*.test.js'",
     "package:check": "pnpm run build && pnpm pack --dry-run",
     "docs:adr-index": "node scripts/check-adr-index.mjs",
     "agent:check": "pnpm lint && pnpm format:check && pnpm typecheck && pnpm build && pnpm test",

@@ -1,5 +1,12 @@
 # TanStack AI harness spike results
 
+Archived measurement behind [ADR-0014](../adr/0014-spike-tanstack-ai-before-adapter-commitment.md)
+and [ADR-0015](../adr/0015-use-native-harness-integrations-for-mvp.md). The
+runner it describes lived in `spikes/tanstack-ai/`, a self-contained package
+with its own lockfile that no longer ships with the repository; its source is in
+the Git history. Package versions and results are frozen at the date below, and
+the reproduction commands only work against that historical checkout.
+
 - **Date:** 2026-08-27
 - **Environment:** macOS 26.5.2 arm64, Node.js 24.19.0
 - **Harnesses:** Claude Code 2.1.235, Codex CLI 0.149.1
@@ -107,6 +114,8 @@ model field contained the requested alias or model ID, not independently
 verified runtime identity.
 
 ## Reproduction
+
+From the spike package as it stood on 2026-08-27:
 
 ```sh
 pnpm install
