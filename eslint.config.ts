@@ -52,6 +52,20 @@ config.push({
   },
 });
 
+// package.json exposes the compiled dist/src/cli.js as the `agent-bridge` bin.
+// Without this mapping node/hashbang sees src/cli.ts as a plain module and its
+// autofix strips the shebang (#124); with it the rule requires the shebang on
+// exactly the sources that compile to a bin entry.
+config.push({
+  files: ["src/**/*.ts"],
+  rules: {
+    "node/hashbang": [
+      "error",
+      { convertPath: { "src/**/*.ts": ["^src/(.+?)\\.ts$", "dist/src/$1.js"] } },
+    ],
+  },
+});
+
 config.push({
   files: ["test/**/*.ts"],
   rules: {

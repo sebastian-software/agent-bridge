@@ -1,3 +1,5 @@
+#!/usr/bin/env node
+
 import { open, readFile } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 

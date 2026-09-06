@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { type ChildProcess, execFile as execFileCallback, spawn } from "node:child_process";
-import { chmod, mkdir, mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import test from "node:test";
@@ -10,6 +10,16 @@ import { IpcClient } from "../src/ipc.js";
 
 const execFile = promisify(execFileCallback);
 const cliPath = join(process.cwd(), "dist", "src", "cli.js");
+
+test("the published bin keeps its shebang", async () => {
+  const manifest = JSON.parse(await readFile(join(process.cwd(), "package.json"), "utf8")) as {
+    readonly bin: Readonly<Record<string, string>>;
+  };
+  assert.equal(join(process.cwd(), manifest.bin["agent-bridge"] ?? ""), cliPath);
+
+  const [firstLine] = (await readFile(cliPath, "utf8")).split("\n", 1);
+  assert.equal(firstLine, "#!/usr/bin/env node");
+});
 
 function testEnvironment(root: string): NodeJS.ProcessEnv {
   return {
