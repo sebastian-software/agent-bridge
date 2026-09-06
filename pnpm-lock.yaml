@@ -11,6 +11,9 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.30.0
         version: 1.30.0(supports-color@9.4.0)(zod@4.5.4)
+      '@sebastian-software/standards':
+        specifier: 0.9.0
+        version: 0.9.0
       '@types/node':
         specifier: 24.10.1
         version: 24.10.1
@@ -809,6 +812,11 @@ packages:
   '@pkgr/core@0.3.6':
     resolution: {integrity: sha512-SEeaJLb3qBNF/OaXnaR1NmmBbFYk1zC0ZH/52fATcRPLFg/p791YrcyFFy44Bo9sLaGuSuLp5Q6axbb/O+v/RA==}
     engines: {node: ^14.18.0 || >=16.0.0}
+
+  '@sebastian-software/standards@0.9.0':
+    resolution: {integrity: sha512-uVsrjTS0XwCJH2xeWV01B+bz6byex1bIYQyJxkxH51qr7zWZghxsHmFBQqqgtZ8SeGLuuU6nmVH+y8WlTOTgLA==}
+    engines: {node: '>=24.0.0'}
+    hasBin: true
 
   '@sindresorhus/base62@1.0.0':
     resolution: {integrity: sha512-TeheYy0ILzBEI/CO55CP6zJCSdSWeRtGnHy8U8dWSUH4I68iqTsy7HkMktR4xakThc9jotkPQUXT4ITdbV7cHA==}
@@ -4011,6 +4019,8 @@ snapshots:
     optional: true
 
   '@pkgr/core@0.3.6': {}
+
+  '@sebastian-software/standards@0.9.0': {}
 
   '@sindresorhus/base62@1.0.0': {}
 
