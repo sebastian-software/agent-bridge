@@ -42,3 +42,27 @@ release automation.
 Usually out of scope: reports without a concrete impact path, vulnerabilities in
 third-party dependencies used as documented, and problems that require an
 already-compromised machine or a deliberately corrupted local state.
+
+### What agent-bridge defends
+
+`agent-bridge` supervises harness processes with the caller's own permissions;
+it is not a sandbox around them. The "Process and security boundary invariants"
+in [CONTEXT.md](CONTEXT.md) describe that boundary. A report is in scope when it
+breaks one of them, for example:
+
+- a route that resolves to an executable, URL, or shell fragment no adapter
+  qualified, or a harness launched through a shell string built from caller
+  input;
+- credentials that reach argv, invocation input, events, outcomes, logs, or
+  repository files;
+- a cancelled or timed-out invocation that leaves a running descendant process;
+- broker runtime or state paths that another local user can read, write, or
+  redirect, including the socket and the persisted events and outcomes;
+- malformed or incomplete harness output that yields a `completed` outcome, or
+  untrusted harness output that the bridge follows as an instruction instead of
+  reporting it as data.
+
+Out of scope by design: what a delegated harness does inside the caller-chosen
+working directory. The harness keeps the effective permissions of its process,
+its native configuration, and its authenticated session, and effect observation
+reports changes rather than providing isolation, attribution proof, or rollback.
