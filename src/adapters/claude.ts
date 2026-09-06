@@ -114,7 +114,7 @@ function commandArgs(context: AdapterRunContext): readonly string[] {
     "stream-json",
     "--verbose",
     "--model",
-    context.route.canonicalModel ?? context.route.model,
+    context.route.model,
     "--permission-mode",
     permissionMode(context),
   ];

@@ -31,8 +31,10 @@ and terminal error handling.
 
 Model entries also declare one canonical native model ID and optional request
 aliases. Discovery publishes one route for the canonical ID and one for each
-alias; resolution keeps the requested ID in `model` while passing
-`canonicalModel` to the harness.
+alias; resolution keeps the requested ID in `model` and passes that requested
+ID to the harness. `canonicalModel` remains an expected-resolution hint for
+route metadata; the harness may resolve an alias differently, so the observed
+runtime model is recorded separately from both values.
 
 Discovery records the absolute executable, observed version, authentication
 readiness, diagnostics, and a qualification record. Missing executables are
