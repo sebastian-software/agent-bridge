@@ -9,33 +9,49 @@ permissions:
   contents: read
 
 jobs:
-  check:
-    name: Node ${{ matrix.node }} / ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-        node: ["22.x"]
+  pr-title:
+    name: Conventional pull request title
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read
+    steps:
+      # release-please derives the changelog and the next version from the
+      # squashed pull request title, so the title has to parse.
+      - uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6.1.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  workflow-pins:
+    name: Workflow action pins
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Verify the pin check itself
+        run: node scripts/test-check-workflow-pins.mjs
+      - name: Verify every workflow action is pinned by commit SHA
+        run: node scripts/check-workflow-pins.mjs
+
+  standards:
+    name: Org standards
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Set up pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 11.24.0
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          node-version: ${{ matrix.node }}
-          cache: pnpm
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+          # The standards CLI declares node >=24; 22 only warns, but the
+          # drift lane is repository-level and has no reason to run older.
+          node-version: 24.x
       - name: "Guard: agent step not yet completed for this PR"
         run: test ! -f .standards/pending.json
-      - name: Run repository checks
-        run: pnpm check
       # minimum-release-age=0 mirrors the apply invocation in
       # renovate-config/standards.json: pnpm 11 defaults minimumReleaseAge to
       # 1440 (24h), so without the bypass `check` resolves the newest standards
@@ -43,6 +59,33 @@ jobs:
       # latest - a freshly released version then reads as false drift.
       - name: Check org standards
         run: pnpm --config.minimum-release-age=0 dlx @sebastian-software/standards check
-      - name: Audit production dependencies
-        run: pnpm audit --prod
-        continue-on-error: true
+
+  check:
+    name: Node ${{ matrix.node }} / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        # 22.x is the engines floor, 24.x the version the release publishes on.
+        node: ["22.x", "24.x"]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Verify the committed runtime version
+        run: |
+          pnpm version:sync
+          git diff --exit-code src/version.ts
+      - name: Run repository checks
+        run: pnpm check
