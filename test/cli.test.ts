@@ -261,3 +261,38 @@ test("autostart includes the broker startup diagnostic when initialization fails
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("CLI exits after autostarting a healthy broker", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-bridge-autostart-exit-"));
+  const env = testEnvironment(root);
+  try {
+    const result = await execFile(
+      process.execPath,
+      [
+        cliPath,
+        "run",
+        "--provider",
+        "agent-bridge",
+        "--model",
+        "fake-echo",
+        "--via",
+        "fake",
+        "--cwd",
+        root,
+        "--json",
+        "autostart should exit",
+      ],
+      { env, timeout: 5_000 },
+    );
+    const lastLine = result.stdout.trim().split("\n").at(-1);
+    const outcome = lastLine === undefined ? undefined : (JSON.parse(lastLine) as { outcome?: { status?: string } });
+    assert.equal(outcome?.outcome?.status, "succeeded");
+  } finally {
+    try {
+      await execFile(process.execPath, [cliPath, "broker", "stop", "--json"], { env, timeout: 2_000 });
+    } catch {
+      // The broker may already have exited after a failed startup.
+    }
+    await rm(root, { recursive: true, force: true });
+  }
+});

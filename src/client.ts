@@ -299,35 +299,43 @@ export class AgentBridgeClient {
     });
     child.stderr?.on("error", () => undefined);
     child.unref();
+    const disposeStartupStderr = (): void => {
+      child.stderr?.removeAllListeners("data");
+      child.stderr?.destroy();
+    };
     let lastError: unknown;
-    for (let attempt = 0; attempt < 50; attempt += 1) {
-      await delay(50);
-      try {
-        const result = (await client.request(operation, params)) as OperationResultMap[K];
-        this.#brokerVersionChecked = true;
-        this.#cachedBrokerStatus = { packageVersion: PACKAGE_VERSION, activeInvocations: 0 };
-        return result;
-      } catch (error) {
-        lastError = error;
-        if (!(error instanceof BridgeError) || error.code !== "broker_unavailable") {
-          throw error;
+    try {
+      for (let attempt = 0; attempt < 50; attempt += 1) {
+        await delay(50);
+        try {
+          const result = (await client.request(operation, params)) as OperationResultMap[K];
+          this.#brokerVersionChecked = true;
+          this.#cachedBrokerStatus = { packageVersion: PACKAGE_VERSION, activeInvocations: 0 };
+          return result;
+        } catch (error) {
+          lastError = error;
+          if (!(error instanceof BridgeError) || error.code !== "broker_unavailable") {
+            throw error;
+          }
         }
       }
+      const startupDiagnostic = startupStderr
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .find((line) => line !== "");
+      throw new BridgeError(
+        {
+          code: "broker_unavailable",
+          message: `The broker did not become ready at ${this.#socketPath}.${
+            startupDiagnostic === undefined ? "" : ` Startup error: ${startupDiagnostic}`
+          }`,
+          retryable: true,
+        },
+        { cause: lastError },
+      );
+    } finally {
+      disposeStartupStderr();
     }
-    const startupDiagnostic = startupStderr
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .find((line) => line !== "");
-    throw new BridgeError(
-      {
-        code: "broker_unavailable",
-        message: `The broker did not become ready at ${this.#socketPath}.${
-          startupDiagnostic === undefined ? "" : ` Startup error: ${startupDiagnostic}`
-        }`,
-        retryable: true,
-      },
-      { cause: lastError },
-    );
   }
 
   async #requestVia<K extends keyof OperationResultMap>(
