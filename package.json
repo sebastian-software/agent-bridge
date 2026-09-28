@@ -66,6 +66,9 @@
     "fake-harness": "node scripts/fake-harness.mjs",
     "version:sync": "node scripts/sync-version.mjs"
   },
+  "dependencies": {
+    "smol-toml": "1.8.0"
+  },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@sebastian-software/standards": "0.13.0",

@@ -37,6 +37,8 @@ export type AdapterRunContext = {
   readonly route: ResolvedRoute;
   /** Adapter-owned native context from a predecessor invocation, never caller supplied. */
   readonly continuationHandle?: AdapterContinuationHandle;
+  /** Internal immutable named-context snapshot. Never include its native ref in public data. */
+  readonly connection?: AdapterConnectionContext;
   readonly signal: AbortSignal;
   readonly emit: (event: AdapterEvent) => Promise<void>;
   readonly reportPartial?: (result: Partial<AdapterRunResult>) => void;

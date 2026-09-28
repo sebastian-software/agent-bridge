@@ -5,6 +5,8 @@ import { promisify } from "node:util";
 
 import type { InteractionStrategy, RouteDescriptor } from "../contract.js";
 
+import { childEnvironment } from "./environment.js";
+
 const execFileAsync = promisify(execFile);
 const PROBE_TIMEOUT_MS = 2500;
 
@@ -45,8 +47,18 @@ export type DiscoveryProbe = {
   readonly readVersion?: (
     executable: string,
     args: readonly string[],
+    environment?: NodeJS.ProcessEnv,
   ) => Promise<string | undefined>;
-  readonly checkAuthentication?: (executable: string, args: readonly string[]) => Promise<boolean>;
+  readonly checkAuthentication?: (
+    executable: string,
+    args: readonly string[],
+    environment?: NodeJS.ProcessEnv,
+  ) => Promise<boolean>;
+};
+
+export type DiscoveryEnvironment = {
+  readonly overrides: NodeJS.ProcessEnv;
+  readonly denyList: readonly string[];
 };
 
 type ExpandedModelManifest = {
@@ -134,9 +146,13 @@ async function findExecutable(command: string): Promise<string | undefined> {
 async function readVersion(
   executable: string,
   args: readonly string[],
+  environment?: NodeJS.ProcessEnv,
 ): Promise<string | undefined> {
   try {
-    const result = await execFileAsync(executable, [...args], { timeout: PROBE_TIMEOUT_MS });
+    const result = await execFileAsync(executable, [...args], {
+      timeout: PROBE_TIMEOUT_MS,
+      ...(environment === undefined ? {} : { env: environment }),
+    });
     const output = `${result.stdout}\n${result.stderr}`.trim();
     return output === "" ? undefined : output;
   } catch (error) {
@@ -152,9 +168,16 @@ async function readVersion(
   }
 }
 
-async function checkAuthentication(executable: string, args: readonly string[]): Promise<boolean> {
+async function checkAuthentication(
+  executable: string,
+  args: readonly string[],
+  environment?: NodeJS.ProcessEnv,
+): Promise<boolean> {
   try {
-    await execFileAsync(executable, [...args], { timeout: PROBE_TIMEOUT_MS });
+    await execFileAsync(executable, [...args], {
+      timeout: PROBE_TIMEOUT_MS,
+      ...(environment === undefined ? {} : { env: environment }),
+    });
     return true;
   } catch {
     return false;
@@ -172,9 +195,19 @@ async function isExecutable(path: string): Promise<boolean> {
 
 export async function discoverManifestRoutes(
   manifest: AdapterManifest,
-  options?: { readonly executable?: string; readonly probe?: DiscoveryProbe },
+  options?: {
+    readonly executable?: string;
+    readonly probe?: DiscoveryProbe;
+    readonly environment?: DiscoveryEnvironment;
+    readonly authenticationArgs?: readonly string[];
+    readonly requiredVersion?: string;
+  },
 ): Promise<readonly RouteDescriptor[]> {
   const probe = options?.probe ?? {};
+  const environment =
+    options?.environment === undefined
+      ? undefined
+      : childEnvironment(options.environment.overrides, options.environment.denyList);
   const models = expandedModels(manifest);
   const executable =
     options?.executable ?? (await (probe.findExecutable ?? findExecutable)(manifest.command));
@@ -201,9 +234,21 @@ export async function discoverManifestRoutes(
     }));
   }
 
-  const versionOutput = await (probe.readVersion ?? readVersion)(executable, manifest.versionArgs);
+  const versionOutput = await (probe.readVersion ?? readVersion)(
+    executable,
+    manifest.versionArgs,
+    environment,
+  );
   const version = parseVersion(versionOutput);
-  if (version === undefined || !satisfiesVersionRange(version, manifest.qualifiedVersionRange)) {
+  if (
+    version === undefined ||
+    !satisfiesVersionRange(version, manifest.qualifiedVersionRange) ||
+    (options?.requiredVersion !== undefined && version.value !== options.requiredVersion)
+  ) {
+    const diagnostic =
+      options?.requiredVersion === undefined
+        ? `Installed ${manifest.command} version does not satisfy qualified range ${manifest.qualifiedVersionRange}.`
+        : `Named native contexts require ${manifest.command} ${options.requiredVersion}; detected ${version?.value ?? "an unknown version"}. Install the supported version or use the default login route.`;
     return models.map((model) => ({
       routeId: `${manifest.id}:${model.requestModel}`,
       executable,
@@ -221,16 +266,15 @@ export async function discoverManifestRoutes(
       runtimeIdentityEvidence: "unverified",
       readiness: "unqualified",
       qualification: [],
-      diagnostics: [
-        `Installed ${manifest.command} version does not satisfy qualified range ${manifest.qualifiedVersionRange}.`,
-      ],
+      diagnostics: [diagnostic],
       ...(manifest.policySupport === undefined ? {} : { policySupport: manifest.policySupport }),
     }));
   }
 
   const authenticated = await (probe.checkAuthentication ?? checkAuthentication)(
     executable,
-    manifest.authArgs,
+    options?.authenticationArgs ?? manifest.authArgs,
+    environment,
   );
   return models.map((model) => ({
     routeId: `${manifest.id}:${model.requestModel}`,
@@ -263,5 +307,30 @@ export async function discoverManifestRoutes(
       : [
           `${manifest.command} authentication status could not be verified without starting a paid invocation.`,
         ],
+  }));
+}
+
+export function unavailableManifestRoutes(
+  manifest: AdapterManifest,
+  diagnostic: string,
+): readonly RouteDescriptor[] {
+  return expandedModels(manifest).map((model) => ({
+    routeId: `${manifest.id}:${model.requestModel}`,
+    provider: manifest.provider,
+    model: model.requestModel,
+    canonicalModel: model.canonicalModel,
+    efforts: model.efforts,
+    via: manifest.via,
+    adapter: manifest.id,
+    harnessVersion: "unknown",
+    authenticationMode: manifest.authenticationMode,
+    capabilities: model.capabilities,
+    interactionStrategies: model.interactionStrategies,
+    assurance: "native",
+    runtimeIdentityEvidence: "unverified",
+    readiness: "unavailable",
+    qualification: [],
+    diagnostics: [diagnostic],
+    ...(manifest.policySupport === undefined ? {} : { policySupport: manifest.policySupport }),
   }));
 }

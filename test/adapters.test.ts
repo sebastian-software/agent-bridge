@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -19,6 +19,8 @@ import { CodexAdapter } from "../src/adapters/codex.js";
 import { parseVersion, satisfiesVersionRange } from "../src/adapters/discovery.js";
 import { FakeProcessAdapter } from "../src/adapters/fake-process.js";
 import { type CommandSpec, ContentAccumulator, ProcessAdapter } from "../src/adapters/process.js";
+import { AdapterRegistry } from "../src/adapters/registry.js";
+import { createHarnessConnection, writeUserConnections } from "../src/connections.js";
 
 const route = (adapter: string, executable: string): ResolvedRoute => ({
   routeId: `${adapter}:test`,
@@ -296,6 +298,369 @@ test("Codex discovery exposes canonical model IDs and documented family aliases"
     alias?.qualification[0]?.claim ?? "",
     /runtime model identity requires a separate opt-in/,
   );
+});
+
+test("named Claude discovery probes only the selected native configuration and exact version", async () => {
+  const nativeContext = await mkdtemp(join(tmpdir(), "harness-relay-claude-context-"));
+  const originalApiKey = process.env.ANTHROPIC_API_KEY;
+  process.env.ANTHROPIC_API_KEY = "fixture-inherited-api-key";
+  try {
+    let versionEnvironment: NodeJS.ProcessEnv | undefined;
+    let authenticationEnvironment: NodeJS.ProcessEnv | undefined;
+    let authenticationArguments: readonly string[] | undefined;
+    const adapter = new InspectableClaudeAdapter({
+      executable: process.execPath,
+      probe: {
+        async readVersion(_executable, _args, environment) {
+          versionEnvironment = environment;
+          return "2.1.282 (Claude Code)";
+        },
+        async checkAuthentication(_executable, args, environment) {
+          authenticationArguments = args;
+          authenticationEnvironment = environment;
+          return true;
+        },
+      },
+    });
+    const connection = {
+      id: "analysis",
+      harness: "claude",
+      nativeContextRef: nativeContext,
+      revision: "revision-1",
+    };
+    const routes = await adapter.discoverConnection(connection);
+    assert.ok(routes.every((candidate) => candidate.readiness === "ready"));
+    assert.equal(versionEnvironment?.CLAUDE_CONFIG_DIR, nativeContext);
+    assert.equal(authenticationEnvironment?.CLAUDE_CONFIG_DIR, nativeContext);
+    assert.equal(versionEnvironment?.ANTHROPIC_API_KEY, undefined);
+    assert.equal(authenticationEnvironment?.ANTHROPIC_API_KEY, undefined);
+    assert.deepEqual(authenticationArguments, ["--setting-sources", "user", "auth", "status"]);
+
+    const context = {
+      invocationId: "inv_named_claude",
+      request: request(process.cwd()),
+      route: route("claude", process.execPath),
+      connection,
+      signal: new AbortController().signal,
+      async emit(_event: AdapterEvent) {},
+    };
+    const namedCommand = adapter.commandFor(context);
+    assert.equal(namedCommand.env?.CLAUDE_CONFIG_DIR, nativeContext);
+    assert.deepEqual(namedCommand.args.slice(0, 2), ["--setting-sources", "user"]);
+    assert.ok(namedCommand.envDenyList?.includes("ANTHROPIC_API_KEY"));
+    const defaultContext: AdapterRunContext = {
+      invocationId: context.invocationId,
+      request: context.request,
+      route: context.route,
+      signal: context.signal,
+      async emit(event) {
+        await context.emit(event);
+      },
+    };
+    assert.deepEqual(
+      adapter.commandFor(defaultContext).envDenyList,
+      CLAUDE_SESSION_ENVIRONMENT_DENY_LIST,
+    );
+    assert.equal(adapter.commandFor(defaultContext).args.includes("--setting-sources"), false);
+
+    let authenticationCalls = 0;
+    const oldVersion = new InspectableClaudeAdapter({
+      executable: process.execPath,
+      probe: {
+        readVersion: async () => "2.1.281 (Claude Code)",
+        async checkAuthentication() {
+          authenticationCalls += 1;
+          return true;
+        },
+      },
+    });
+    const unqualified = await oldVersion.discoverConnection(connection);
+    assert.ok(unqualified.every((candidate) => candidate.readiness === "unqualified"));
+    assert.ok(unqualified.every((candidate) => candidate.diagnostics[0]?.includes("2.1.282")));
+    assert.equal(authenticationCalls, 0);
+
+    await writeFile(
+      join(nativeContext, "settings.json"),
+      JSON.stringify({ apiKeyHelper: "/opt/fixture/auth-helper" }),
+      "utf8",
+    );
+    let helperAuthenticationCalls = 0;
+    const configuredHelper = new InspectableClaudeAdapter({
+      executable: process.execPath,
+      probe: {
+        readVersion: async () => "2.1.282 (Claude Code)",
+        async checkAuthentication() {
+          helperAuthenticationCalls += 1;
+          return true;
+        },
+      },
+    });
+    const helperRoutes = await configuredHelper.discoverConnection(connection);
+    assert.ok(helperRoutes.every((candidate) => candidate.readiness === "unavailable"));
+    assert.ok(
+      helperRoutes.every((candidate) =>
+        candidate.diagnostics.some((item) => item.includes("apiKeyHelper")),
+      ),
+    );
+    assert.equal(helperAuthenticationCalls, 0);
+    await assert.rejects(
+      adapter.runConnection(context),
+      (error: unknown) => error instanceof Error && error.message.includes("apiKeyHelper"),
+    );
+  } finally {
+    if (originalApiKey === undefined) {
+      delete process.env.ANTHROPIC_API_KEY;
+    } else {
+      process.env.ANTHROPIC_API_KEY = originalApiKey;
+    }
+    await rm(nativeContext, { recursive: true, force: true });
+  }
+});
+
+test("Codex named contexts use native login, reject profiles, and redact overlapping paths", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-relay-codex-context-"));
+  const alphaHome = join(root, "account-alpha");
+  const betaHome = join(root, "account-beta");
+  const gammaHome = join(root, "account-gamma");
+  const alphaWorkspace = join(root, "workspace-alpha");
+  const gammaWorkspace = join(root, "workspace-gamma");
+  const originalApiKey = process.env.CODEX_API_KEY;
+  const originalProfile = process.env.CODEX_PROFILE;
+  process.env.CODEX_API_KEY = "fixture-inherited-api-key";
+  delete process.env.CODEX_PROFILE;
+  try {
+    await mkdir(join(alphaHome, "bin"), { recursive: true });
+    await mkdir(betaHome);
+    await mkdir(gammaHome);
+    await mkdir(alphaWorkspace);
+    await mkdir(gammaWorkspace);
+    await writeFile(join(alphaHome, "auth.json"), "fixture-account-alpha", "utf8");
+    await writeFile(join(gammaHome, "auth.json"), "fixture-account-gamma", "utf8");
+    const executable = join(alphaHome, "bin", "codex-fixture");
+    const script = [
+      `#!${process.execPath}`,
+      "const fs = require('node:fs');",
+      "const path = require('node:path');",
+      "const args = process.argv.slice(2);",
+      "if (args[0] === '--version') { console.log('codex-cli 0.155.1'); process.exit(0); }",
+      "const home = process.env.CODEX_HOME;",
+      "if (args[0] === 'login' && args[1] === 'status') { process.exit(process.env.CODEX_API_KEY || (home && fs.existsSync(path.join(home, 'auth.json'))) ? 0 : 1); }",
+      "if (args[0] === 'exec' && home && !args.some((value, index) => value === 'model_provider=\"openai\"' && args[index - 1] === '-c')) { process.stderr.write('missing explicit native provider'); process.exit(9); }",
+      "if (args[0] === 'exec') { let input = ''; process.stdin.setEncoding('utf8'); process.stdin.on('data', chunk => input += chunk); process.stdin.on('end', () => { if (input.includes('fixture-failure')) { process.stderr.write(home || 'missing-context'); process.exit(1); } const account = process.env.CODEX_API_KEY || (home ? fs.readFileSync(path.join(home, 'auth.json'), 'utf8') : 'missing-context'); console.log(JSON.stringify({type:'item.completed', model:home, item:{type:'agent_message', text:account + '|' + home}})); console.log(JSON.stringify({type:'turn.completed', status:'completed'})); }); }",
+    ].join("\n");
+    await writeFile(executable, script, "utf8");
+    await chmod(executable, 0o700);
+
+    const adapter = new CodexAdapter({ executable });
+    const connectionsPath = join(root, "connections.json");
+    const catalogPath = join(root, "catalog.json");
+    const alpha = createHarnessConnection({
+      id: "alpha",
+      harness: "codex",
+      nativeContextRef: alphaHome,
+      purpose: "analysis",
+    });
+    const beta = createHarnessConnection({
+      id: "beta",
+      harness: "codex",
+      nativeContextRef: betaHome,
+    });
+    const gamma = createHarnessConnection({
+      id: "gamma",
+      harness: "codex",
+      nativeContextRef: gammaHome,
+      purpose: "review",
+    });
+    await writeUserConnections([alpha, beta, gamma], connectionsPath);
+
+    const defaultRoutes = await adapter.discover();
+    assert.ok(defaultRoutes.every((candidate) => candidate.readiness === "ready"));
+    const registry = new AdapterRegistry([adapter], { connectionsPath, catalogPath });
+    const betaRoutes = await registry.discover({ connectionId: "beta" });
+    assert.ok(betaRoutes.every((candidate) => candidate.readiness === "unavailable"));
+    assert.ok(betaRoutes.every((candidate) => !JSON.stringify(candidate).includes(betaHome)));
+    assert.ok(betaRoutes.every((candidate) => !JSON.stringify(candidate).includes(alphaHome)));
+    assert.ok(betaRoutes.every((candidate) => !JSON.stringify(candidate).includes(gammaHome)));
+
+    const invocationRequest = {
+      ...request(alphaWorkspace),
+      selector: {
+        provider: "openai",
+        model: "gpt-5.5",
+        via: "codex",
+        connectionId: "alpha",
+        requiredCapabilities: ["core.input.text"],
+      },
+    };
+    const resolved = await registry.resolve(invocationRequest);
+    assert.equal(resolved.descriptor.readiness, "ready");
+    assert.ok(!JSON.stringify(resolved.descriptor).includes(alphaHome));
+    assert.ok(!JSON.stringify(resolved.route).includes(alphaHome));
+    assert.equal(resolved.connectionContext?.executable, executable);
+
+    const gammaRequest = {
+      ...request(gammaWorkspace),
+      selector: {
+        provider: "openai",
+        model: "gpt-5.5",
+        via: "codex",
+        connectionId: "gamma",
+        requiredCapabilities: ["core.input.text"],
+      },
+    };
+    const gammaResolved = await registry.resolve(gammaRequest);
+    assert.equal(gammaResolved.descriptor.readiness, "ready");
+    assert.equal(gammaResolved.connectionContext?.id, "gamma");
+    assert.equal(gammaResolved.connectionContext?.revision, gamma.revision);
+    assert.equal(resolved.connectionContext?.id, "alpha");
+    assert.equal(resolved.connectionContext?.revision, alpha.revision);
+
+    const alphaEvents: AdapterEvent[] = [];
+    const alphaRunContext = {
+      invocationId: "inv_named_codex",
+      request: invocationRequest,
+      route: resolved.route,
+      connection: resolved.connectionContext,
+      signal: new AbortController().signal,
+      async emit(event: AdapterEvent) {
+        alphaEvents.push(event);
+      },
+    };
+    const gammaEvents: AdapterEvent[] = [];
+    const gammaRunContext = {
+      invocationId: "inv_named_codex_gamma",
+      request: gammaRequest,
+      route: gammaResolved.route,
+      connection: gammaResolved.connectionContext,
+      signal: new AbortController().signal,
+      async emit(event: AdapterEvent) {
+        gammaEvents.push(event);
+      },
+    };
+    const [alphaResult, gammaResult] = await Promise.all([
+      adapter.runConnection(alphaRunContext),
+      adapter.runConnection(gammaRunContext),
+    ]);
+    for (const [result, events, expected, forbidden] of [
+      [alphaResult, alphaEvents, "fixture-account-alpha", "fixture-account-gamma"],
+      [gammaResult, gammaEvents, "fixture-account-gamma", "fixture-account-alpha"],
+    ] as const) {
+      const answer = result.content[0];
+      assert.equal(answer?.type, "text");
+      if (answer?.type !== "text") {
+        assert.fail("Codex fixture did not return text.");
+      }
+      assert.ok(answer.text.includes(expected));
+      assert.ok(!answer.text.includes(forbidden));
+      assert.match(answer.text, /\[redacted native context\]/);
+      assert.equal(result.observedIdentity.model.evidence, "reported");
+      assert.ok(!JSON.stringify([result, events]).includes(alphaHome));
+      assert.ok(!JSON.stringify([result, events]).includes(gammaHome));
+      assert.ok(JSON.stringify([result, events]).includes("[redacted native context]"));
+    }
+
+    await assert.rejects(
+      adapter.runConnection({
+        ...alphaRunContext,
+        request: {
+          ...invocationRequest,
+          input: [{ type: "text", text: "fixture-failure" }],
+        },
+      }),
+      (error: unknown) =>
+        error instanceof Error &&
+        error.message.includes("[redacted native context]") &&
+        !error.message.includes(alphaHome),
+    );
+
+    await writeFile(join(betaHome, "config.toml"), '"model_provider" = "azure"\n', "utf8");
+    const quotedProviderRoutes = await registry.discover({ connectionId: "beta" });
+    assert.ok(quotedProviderRoutes.every((candidate) => candidate.readiness === "unavailable"));
+    assert.ok(
+      quotedProviderRoutes.every((candidate) =>
+        candidate.diagnostics.some((item) => item.includes("model_provider")),
+      ),
+    );
+    assert.ok(
+      quotedProviderRoutes.every((candidate) => !JSON.stringify(candidate).includes(betaHome)),
+    );
+
+    await writeFile(
+      join(betaHome, "config.toml"),
+      '[model_providers.openai]\nbase_url = "https://fixture.invalid/v1"\n',
+      "utf8",
+    );
+    const providerTableRoutes = await registry.discover({ connectionId: "beta" });
+    assert.ok(providerTableRoutes.every((candidate) => candidate.readiness === "unavailable"));
+    assert.ok(
+      providerTableRoutes.every((candidate) =>
+        candidate.diagnostics.some((item) => item.includes("model_providers")),
+      ),
+    );
+
+    await writeFile(join(betaHome, "config.toml"), 'profile = "work"\n', "utf8");
+    const profileRoutes = await registry.discover({ connectionId: "beta" });
+    assert.ok(profileRoutes.every((candidate) => candidate.readiness === "unavailable"));
+    assert.ok(
+      profileRoutes.every((candidate) =>
+        candidate.diagnostics.some((item) => item.includes("profile")),
+      ),
+    );
+    assert.ok(profileRoutes.every((candidate) => !JSON.stringify(candidate).includes(betaHome)));
+
+    await writeFile(join(gammaWorkspace, "config.toml"), '"model_provider" = "azure"\n', "utf8");
+    await assert.rejects(
+      adapter.runConnection(gammaRunContext),
+      (error: unknown) =>
+        error instanceof Error &&
+        error.message.includes("model_provider") &&
+        !error.message.includes(gammaHome),
+    );
+    await rm(join(gammaWorkspace, "config.toml"));
+
+    await mkdir(join(gammaWorkspace, ".codex"));
+    await writeFile(
+      join(gammaWorkspace, ".codex", "config.toml"),
+      '[model_providers.openai]\nbase_url = "https://fixture.invalid/v1"\n',
+      "utf8",
+    );
+    await assert.rejects(
+      adapter.runConnection(gammaRunContext),
+      (error: unknown) => error instanceof Error && error.message.includes("model_providers"),
+    );
+    await rm(join(gammaWorkspace, ".codex"), { recursive: true, force: true });
+
+    const realWorkspace = join(root, "workspace-real");
+    const realWorkspaceChild = join(realWorkspace, "child");
+    const symlinkWorkspace = join(root, "workspace-alias");
+    await mkdir(join(realWorkspace, ".codex"), { recursive: true });
+    await mkdir(realWorkspaceChild, { recursive: true });
+    await symlink(realWorkspaceChild, symlinkWorkspace, "dir");
+    await writeFile(
+      join(realWorkspace, ".codex", "config.toml"),
+      '[model_providers.openai]\nbase_url = "https://fixture.invalid/v1"\n',
+      "utf8",
+    );
+    await assert.rejects(
+      adapter.runConnection({
+        ...gammaRunContext,
+        request: { ...gammaRequest, workingDirectory: symlinkWorkspace },
+      }),
+      (error: unknown) => error instanceof Error && error.message.includes("model_providers"),
+    );
+  } finally {
+    if (originalApiKey === undefined) {
+      delete process.env.CODEX_API_KEY;
+    } else {
+      process.env.CODEX_API_KEY = originalApiKey;
+    }
+    if (originalProfile === undefined) {
+      delete process.env.CODEX_PROFILE;
+    } else {
+      process.env.CODEX_PROFILE = originalProfile;
+    }
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("route discovery fails closed for an unqualified harness version", async () => {

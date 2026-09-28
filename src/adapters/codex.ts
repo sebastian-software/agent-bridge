@@ -1,3 +1,8 @@
+import { readFile, realpath } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
+import { parse as parseToml, type TomlTable } from "smol-toml";
+
+import type { AdapterConnectionContext } from "../connections.js";
 import type {
   JsonValue,
   ObservedIdentity,
@@ -6,11 +11,114 @@ import type {
   Usage,
   WorkspaceEffect,
 } from "../contract.js";
-import type { AdapterEvent, AdapterRunContext, PolicyResolution } from "./types.js";
+import type {
+  AdapterConnectionRunContext,
+  AdapterEvent,
+  AdapterRunContext,
+  PolicyResolution,
+} from "./types.js";
 
 import { BridgeError } from "../errors.js";
-import { discoverManifestRoutes, type DiscoveryProbe } from "./discovery.js";
+import {
+  discoverManifestRoutes,
+  type DiscoveryProbe,
+  unavailableManifestRoutes,
+} from "./discovery.js";
+import { inspectNativeContextDirectory } from "./environment.js";
 import { type CommandSpec, ProcessAdapter, promptFor } from "./process.js";
+
+const CODEX_NAMED_CONTEXT_VERSION = "0.155.1";
+const CODEX_SESSION_ENVIRONMENT_DENY_LIST = ["CODEX_THREAD_ID", "CODEX_SESSION_ID"] as const;
+const CODEX_NAMED_AUTH_ENVIRONMENT_DENY_LIST = [
+  ...CODEX_SESSION_ENVIRONMENT_DENY_LIST,
+  "CODEX_API_KEY",
+  "CODEX_ACCESS_TOKEN",
+  "CODEX_PROFILE",
+  "OPENAI_API_KEY",
+  "OPENAI_BASE_URL",
+  "OPENAI_ORG_ID",
+  "OPENAI_ORGANIZATION",
+  "OPENAI_PROJECT_ID",
+] as const;
+
+async function codexConfigPaths(
+  nativeContextPath: string,
+  workingDirectory?: string,
+): Promise<readonly string[] | undefined> {
+  const systemConfigPath =
+    process.platform === "win32"
+      ? join(process.env.ProgramData ?? "C:\\ProgramData", "OpenAI", "Codex", "config.toml")
+      : "/etc/codex/config.toml";
+  const paths = [systemConfigPath, join(nativeContextPath, "config.toml")];
+  if (workingDirectory !== undefined) {
+    const lexicalDirectory = resolve(workingDirectory);
+    let canonicalDirectory: string;
+    try {
+      canonicalDirectory = await realpath(lexicalDirectory);
+    } catch {
+      return undefined;
+    }
+    for (const root of new Set([lexicalDirectory, canonicalDirectory])) {
+      let directory = root;
+      paths.push(join(directory, "config.toml"));
+      while (true) {
+        paths.push(join(directory, ".codex", "config.toml"));
+        const parent = dirname(directory);
+        if (parent === directory) {
+          break;
+        }
+        directory = parent;
+      }
+    }
+  }
+  return [...new Set(paths)];
+}
+
+async function unsupportedCodexContextMode(
+  nativeContextPath: string,
+  workingDirectory?: string,
+): Promise<string | undefined> {
+  if (process.env.CODEX_PROFILE !== undefined && process.env.CODEX_PROFILE !== "") {
+    return "Named Codex connections do not support the inherited CODEX_PROFILE selector. Clear it and use a dedicated CODEX_HOME with native login. The default Codex route is unchanged.";
+  }
+  const configPaths = await codexConfigPaths(nativeContextPath, workingDirectory);
+  if (configPaths === undefined) {
+    return "The named Codex working directory cannot be resolved safely. Confirm it exists and retry.";
+  }
+  for (const configPath of configPaths) {
+    let source: string;
+    try {
+      source = await readFile(configPath, "utf8");
+    } catch (error) {
+      if (
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        error.code === "ENOENT"
+      ) {
+        continue;
+      }
+      return "A Codex configuration used by this named connection cannot be inspected safely. Check its permissions and retry.";
+    }
+
+    let config: TomlTable;
+    try {
+      config = parseToml(source);
+    } catch {
+      return "A Codex configuration used by this named connection is not valid TOML. Fix the configuration or use a native context without it.";
+    }
+    if (Object.hasOwn(config, "profile")) {
+      return "Named Codex connections do not support config.toml profile selection. Remove profile selectors and use a dedicated CODEX_HOME with native login. The default Codex route is unchanged.";
+    }
+    if (Object.hasOwn(config, "model_provider") && config.model_provider !== "openai") {
+      return "Named Codex connections support only Codex's native OpenAI provider. Remove model_provider overrides from the selected context and working directory. The default Codex route is unchanged.";
+    }
+    if (Object.hasOwn(config, "model_providers")) {
+      return "Named Codex connections cannot qualify custom model-provider tables. Remove model_providers tables from the selected context and working directory. The default Codex route is unchanged.";
+    }
+  }
+  return undefined;
+}
 
 const MANIFEST = {
   id: "codex",
@@ -187,6 +295,48 @@ export class CodexAdapter extends ProcessAdapter {
     });
   }
 
+  async discoverConnection(
+    connection: AdapterConnectionContext,
+  ): Promise<readonly RouteDescriptor[]> {
+    const nativeContext = await inspectNativeContextDirectory(connection.nativeContextRef);
+    if (nativeContext === undefined) {
+      return unavailableManifestRoutes(
+        MANIFEST,
+        "Named Codex connections require an existing readable native configuration directory. Create or select that directory, authenticate Codex there, and retry discovery.",
+      );
+    }
+    const unsupportedMode = await unsupportedCodexContextMode(nativeContext.path);
+    if (unsupportedMode !== undefined) {
+      return unavailableManifestRoutes(MANIFEST, unsupportedMode);
+    }
+    return discoverManifestRoutes(MANIFEST, {
+      ...(this.#executable === undefined ? {} : { executable: this.#executable }),
+      ...(this.#probe === undefined ? {} : { probe: this.#probe }),
+      environment: {
+        overrides: { CODEX_HOME: nativeContext.path },
+        denyList: CODEX_NAMED_AUTH_ENVIRONMENT_DENY_LIST,
+      },
+      requiredVersion: CODEX_NAMED_CONTEXT_VERSION,
+    });
+  }
+
+  protected override async validateConnectionInvocation(
+    context: AdapterConnectionRunContext,
+  ): Promise<void> {
+    const unsupportedMode = await unsupportedCodexContextMode(
+      context.connection.nativeContextRef,
+      context.request.workingDirectory,
+    );
+    if (unsupportedMode !== undefined) {
+      throw new BridgeError({
+        code: "route_unavailable",
+        message: unsupportedMode,
+        retryable: false,
+        details: { connectionId: context.connection.id },
+      });
+    }
+  }
+
   resolvePolicy(request: StartInvocationRequest, _route: RouteDescriptor): PolicyResolution {
     return resolvePolicy(request);
   }
@@ -213,6 +363,9 @@ export class CodexAdapter extends ProcessAdapter {
       'approval_policy="never"',
       "-",
     ];
+    if (context.connection !== undefined) {
+      args.splice(-1, 0, "-c", 'model_provider="openai"');
+    }
     if (context.route.effort !== undefined) {
       args.splice(-1, 0, "-c", `model_reasoning_effort=${reasoningEffort(context.route.effort)}`);
     }
@@ -234,7 +387,12 @@ export class CodexAdapter extends ProcessAdapter {
       executable: context.route.executable,
       args,
       stdin: promptFor(context),
-      envDenyList: ["CODEX_THREAD_ID", "CODEX_SESSION_ID"],
+      ...(context.connection === undefined
+        ? { envDenyList: CODEX_SESSION_ENVIRONMENT_DENY_LIST }
+        : {
+            env: { CODEX_HOME: context.connection.nativeContextRef },
+            envDenyList: CODEX_NAMED_AUTH_ENVIRONMENT_DENY_LIST,
+          }),
     };
   }
 
