@@ -1,9 +1,6 @@
-import { constants } from "node:fs";
-import { access } from "node:fs/promises";
 import { spawn } from "node:child_process";
-import { writeSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { resolve } from "node:path";
+import { constants, writeSync } from "node:fs";
+import { access } from "node:fs/promises";
 
 import {
   MAX_PI_WORKER_MESSAGE_BYTES,
@@ -13,10 +10,14 @@ import {
 
 type RunnerResult = {
   readonly type: "result";
-  readonly exitCode: number | null;
-  readonly signal: string | null;
+  readonly exitCode: null | number;
+  readonly signal: null | string;
   readonly error?: string;
 };
+
+function setExitCode(code: number): void {
+  process.exitCode = code;
+}
 
 function writeResult(result: RunnerResult): void {
   const line = `${JSON.stringify(result)}\n`;
@@ -46,7 +47,7 @@ async function runPiToolRunner(): Promise<void> {
   try {
     const startLine = await input.next();
     if (startLine.done) {
-      process.exitCode = 70;
+      setExitCode(70);
       return;
     }
     const start = parsePiToolRunnerStart(JSON.parse(startLine.value) as unknown);
@@ -54,7 +55,7 @@ async function runPiToolRunner(): Promise<void> {
     if (controlLine.done) {
       // The worker may exit before the Relay process group registration ACK.
       // The shell has not been spawned at this point.
-      process.exitCode = 70;
+      setExitCode(70);
       return;
     }
     const control = JSON.parse(controlLine.value) as unknown;
@@ -63,7 +64,7 @@ async function runPiToolRunner(): Promise<void> {
       control === null ||
       (control as Record<string, unknown>).type !== "registered"
     ) {
-      process.exitCode = 70;
+      setExitCode(70);
       return;
     }
 
@@ -91,7 +92,7 @@ async function runPiToolRunner(): Promise<void> {
       });
     await access(start.cwd, constants.F_OK);
     if (parentLost) {
-      process.exitCode = 70;
+      setExitCode(70);
       return;
     }
     const args =
@@ -147,13 +148,13 @@ async function runPiToolRunner(): Promise<void> {
         error: error instanceof Error ? error.message : String(error),
       });
     } catch {
-      process.exitCode = 71;
+      setExitCode(71);
     }
   }
 }
 
 export { runPiToolRunner };
 
-if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  void runPiToolRunner();
+if (process.argv[1] !== undefined && process.argv[1] === import.meta.filename) {
+  await runPiToolRunner();
 }

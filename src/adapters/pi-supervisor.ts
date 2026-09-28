@@ -1,27 +1,28 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 
 import type { ContentPart, ObservedIdentity, Usage, WorkspaceEffect } from "../contract.js";
+import type { AdapterRunContext, AdapterRunResult } from "./types.js";
+
 import { BridgeError } from "../errors.js";
-import { promptFor } from "./process.js";
 import {
   MAX_PI_WORKER_EVENT_BYTES,
   MAX_PI_WORKER_MESSAGE_BYTES,
-  PI_WORKER_PROTOCOL_VERSION,
   parsePiWorkerLine,
-  readBoundedLines,
+  PI_WORKER_PROTOCOL_VERSION,
   type PiToolName,
   type PiWorkerControl,
   type PiWorkerOutput,
   type PiWorkerStart,
+  readBoundedLines,
 } from "./pi-protocol.js";
-import type { AdapterRunContext, AdapterRunResult } from "./types.js";
+import { promptFor } from "./process.js";
 
-const GROUP_CLEANUP_LIMIT_MS = 3_000;
+const GROUP_CLEANUP_LIMIT_MS = 3000;
 const MAX_WORKER_DIAGNOSTIC_BYTES = 16 * 1024;
 
 export type PiRuntimeConfiguration = {
@@ -54,20 +55,24 @@ function groupExists(processGroupId: number): boolean {
   if (process.platform === "win32") {
     return false;
   }
+  if (!Number.isSafeInteger(processGroupId) || processGroupId <= 1) {
+    return true;
+  }
   try {
     process.kill(-processGroupId, 0);
     return true;
   } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ESRCH") {
-      return false;
-    }
     // EPERM and unknown failures do not prove that the process group is gone.
-    return true;
+    return error instanceof Error && "code" in error ? error.code !== "ESRCH" : true;
   }
 }
 
 function killGroup(processGroupId: number): void {
-  if (process.platform === "win32") {
+  if (
+    process.platform === "win32" ||
+    !Number.isSafeInteger(processGroupId) ||
+    processGroupId <= 1
+  ) {
     return;
   }
   try {
@@ -78,6 +83,9 @@ function killGroup(processGroupId: number): void {
 }
 
 async function terminateGroup(processGroupId: number): Promise<boolean> {
+  if (!Number.isSafeInteger(processGroupId) || processGroupId <= 1) {
+    return false;
+  }
   killGroup(processGroupId);
   const deadline = Date.now() + GROUP_CLEANUP_LIMIT_MS;
   while (groupExists(processGroupId) && Date.now() < deadline) {
@@ -121,7 +129,9 @@ async function sendControl(child: ChildProcess, control: PiWorkerControl): Promi
     await new Promise<void>((resolve, reject) => {
       child.stdin?.once("drain", resolve);
       child.stdin?.once("error", reject);
-      child.stdin?.once("close", () => reject(new Error("Pi worker control channel closed.")));
+      child.stdin?.once("close", () => {
+        reject(new Error("Pi worker control channel closed."));
+      });
     });
   }
 }
@@ -150,7 +160,12 @@ function abortError(): Error {
 }
 
 function killWorker(child: ChildProcess): void {
-  if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) {
+  if (
+    child.pid === undefined ||
+    child.pid <= 1 ||
+    child.exitCode !== null ||
+    child.signalCode !== null
+  ) {
     return;
   }
   if (process.platform !== "win32") {
@@ -171,7 +186,7 @@ export async function runPiWorker(
   return supervisePiWorker(
     context,
     configuration,
-    fileURLToPath(new URL("./pi-worker.js", import.meta.url)),
+    fileURLToPath(new URL("pi-worker.js", import.meta.url)),
   );
 }
 
@@ -223,10 +238,13 @@ export async function supervisePiWorker(
     spawnError = error;
   });
   const closePromise = new Promise<void>((resolve) => {
-    child.once("close", () => resolve());
+    child.once("close", () => {
+      resolve();
+    });
   });
   if (
     child.pid === undefined ||
+    child.pid <= 1 ||
     child.stdin === null ||
     child.stdout === null ||
     child.stderr === null
@@ -271,7 +289,7 @@ export async function supervisePiWorker(
   let protocolError: Error | undefined;
   let cancelTimer: NodeJS.Timeout | undefined;
   let cancellationWrite: Promise<void> | undefined;
-  const terminationGraceMs = Math.max(0, context.terminationGraceMs ?? 2_000);
+  const terminationGraceMs = Math.max(0, context.terminationGraceMs ?? 2000);
   const onAbort = (): void => {
     cancellationWrite ??= sendControl(child, { type: "cancel" }).catch(() => {});
     cancelTimer ??= setTimeout(() => {
@@ -305,7 +323,7 @@ export async function supervisePiWorker(
 
   const cleanupGroups = async (): Promise<boolean> => {
     const results = await Promise.all(
-      [...groups.values()].map((group) => terminateGroup(group.processGroupId)),
+      [...groups.values()].map(async (group) => terminateGroup(group.processGroupId)),
     );
     return results.every(Boolean);
   };
@@ -355,11 +373,7 @@ export async function supervisePiWorker(
       }
       if (output.type === "tool_process_finished") {
         const group = groups.get(output.requestId);
-        if (
-          group === undefined ||
-          group.processGroupId !== output.processGroupId ||
-          group.cleaned
-        ) {
+        if (group?.processGroupId !== output.processGroupId || group.cleaned) {
           throw new Error("Pi worker finished an unregistered shell process group.");
         }
         if (!(await terminateGroup(group.processGroupId))) {
@@ -376,8 +390,7 @@ export async function supervisePiWorker(
       if (output.type === "tool_process_reaped") {
         const group = groups.get(output.requestId);
         if (
-          group === undefined ||
-          group.processGroupId !== output.processGroupId ||
+          group?.processGroupId !== output.processGroupId ||
           !group.cleaned ||
           groupExists(group.processGroupId)
         ) {

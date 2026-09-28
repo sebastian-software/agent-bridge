@@ -1,23 +1,23 @@
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
-import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
+import { dirname, join } from "node:path";
 
 import type { ObservedIdentity, Usage, WorkspaceEffect } from "../contract.js";
 import type { AdapterEvent } from "./types.js";
+
 import {
+  MAX_PI_TEXT_FRAME_BYTES,
   MAX_PI_WORKER_EVENT_BYTES,
   MAX_PI_WORKER_MESSAGE_BYTES,
-  MAX_PI_TEXT_FRAME_BYTES,
-  PI_WORKER_PROTOCOL_VERSION,
   parsePiWorkerControl,
   parsePiWorkerStart,
-  readBoundedLines,
+  PI_WORKER_PROTOCOL_VERSION,
+  type PiToolRunnerStart,
   type PiWorkerControl,
   type PiWorkerOutput,
   type PiWorkerStart,
-  type PiToolRunnerStart,
+  readBoundedLines,
 } from "./pi-protocol.js";
 
 const PI_HARNESS_VERSION = "0.87.1";
@@ -28,15 +28,15 @@ const MAX_TOOL_TIMEOUT_MS = 2_147_483_647;
 
 type RunnerResult = {
   readonly type: "result";
-  readonly exitCode: number | null;
-  readonly signal: string | null;
+  readonly exitCode: null | number;
+  readonly signal: null | string;
   readonly error?: string;
 };
 
 type Deferred = {
   readonly promise: Promise<void>;
-  resolve(): void;
-  reject(error: Error): void;
+  resolve: () => void;
+  reject: (error: Error) => void;
 };
 
 type PendingAck = {
@@ -75,12 +75,18 @@ function failureCode(error: unknown): string {
   if (error instanceof Error && error.message.includes("Pi assistant output exceeded")) {
     return "pi_output_limit";
   }
-  if (error instanceof Error && "code" in error && typeof error.code === "string") {
-    if (error.code === "ERR_MODULE_NOT_FOUND" || error.code === "MODULE_NOT_FOUND") {
-      return "pi_sdk_unavailable";
-    }
+  if (
+    error instanceof Error &&
+    "code" in error &&
+    (error.code === "ERR_MODULE_NOT_FOUND" || error.code === "MODULE_NOT_FOUND")
+  ) {
+    return "pi_sdk_unavailable";
   }
   return "pi_worker_failed";
+}
+
+function setExitCode(code: number): void {
+  process.exitCode = code;
 }
 
 function observedIdentity(
@@ -151,7 +157,7 @@ function outputText(message: unknown): string {
     .join("");
 }
 
-function usageFromMessages(messages: readonly unknown[]): Usage | undefined {
+function usageFromMessages(messages: readonly unknown[]): undefined | Usage {
   const totals = {
     inputTokens: 0,
     outputTokens: 0,
@@ -227,7 +233,7 @@ function* textFrames(text: string): Generator<string> {
     codePoints += 1;
     // JSON escapes control characters up to six bytes each. This keeps the
     // serialized envelope below 48 KiB even for the worst valid string.
-    if (codePoints === 7_000) {
+    if (codePoints === 7000) {
       yield frame;
       frame = "";
       codePoints = 0;
@@ -275,7 +281,7 @@ function enqueueFinalContent(output: WorkerOutput, text: string): void {
   }
 }
 
-function toolEffect(toolName: string, args: unknown): WorkspaceEffect | undefined {
+function toolEffect(toolName: string, args: unknown): undefined | WorkspaceEffect {
   if (toolName !== "write" && toolName !== "edit") {
     return undefined;
   }
@@ -309,7 +315,7 @@ class WorkerOutput {
     this.#failureHandler?.(this.#failure);
   }
 
-  enqueue(message: PiWorkerOutput): Promise<void> {
+  async enqueue(message: PiWorkerOutput): Promise<void> {
     if (this.#failure !== undefined) {
       const rejected = Promise.reject(this.#failure);
       void rejected.catch(() => {});
@@ -356,24 +362,22 @@ function runnerResult(value: unknown): RunnerResult {
   const record = value as Record<string, unknown>;
   if (
     record.type !== "result" ||
-    !(
-      record.exitCode === null ||
-      (typeof record.exitCode === "number" && Number.isSafeInteger(record.exitCode))
-    ) ||
-    !(record.signal === null || typeof record.signal === "string") ||
+    (record.exitCode !== null &&
+      (typeof record.exitCode !== "number" || !Number.isSafeInteger(record.exitCode))) ||
+    (record.signal !== null && typeof record.signal !== "string") ||
     (record.error !== undefined && typeof record.error !== "string")
   ) {
     throw new Error("Pi tool runner emitted an invalid result.");
   }
   return {
     type: "result",
-    exitCode: record.exitCode as number | null,
-    signal: record.signal as string | null,
-    ...(record.error === undefined ? {} : { error: record.error as string }),
+    exitCode: record.exitCode,
+    signal: record.signal,
+    ...(record.error === undefined ? {} : { error: record.error }),
   };
 }
 
-function runnerResultLine(stream: NodeJS.ReadableStream): Promise<RunnerResult> {
+async function runnerResultLine(stream: NodeJS.ReadableStream): Promise<RunnerResult> {
   return (async () => {
     const lines = readBoundedLines(stream as AsyncIterable<Buffer>, 4096);
     const result = await lines.next();
@@ -389,9 +393,9 @@ function ackKey(type: PendingAckType, requestId: string): string {
 }
 
 type PendingAckType =
-  | "tool_process_registered"
   | "tool_process_cleaned"
-  | "tool_process_cleanup_done";
+  | "tool_process_cleanup_done"
+  | "tool_process_registered";
 
 function registerAck(
   pending: Map<string, PendingAck>,
@@ -415,7 +419,7 @@ async function runSupervisedBash(
   },
   output: WorkerOutput,
   pending: Map<string, PendingAck>,
-): Promise<{ readonly exitCode: number | null }> {
+): Promise<{ readonly exitCode: null | number }> {
   if (process.platform === "win32") {
     throw new Error("Pi supervised bash is unavailable on Windows in this release.");
   }
@@ -433,7 +437,7 @@ async function runSupervisedBash(
   const pi = await import("@earendil-works/pi-coding-agent");
   const shellConfig = pi.getShellConfig();
   const requestId = randomUUID();
-  const runnerPath = fileURLToPath(new URL("./pi-tool-runner.js", import.meta.url));
+  const runnerPath = join(import.meta.dirname, "pi-tool-runner.js");
   const runner = spawn(process.execPath, [runnerPath], {
     cwd,
     env: process.env,
@@ -502,9 +506,9 @@ async function runSupervisedBash(
   const closePromise = once(runner, "close").then(() => {});
   const resultPromise = runnerResultLine(resultStream as NodeJS.ReadableStream);
   const registered = registerAck(pending, "tool_process_registered", requestId, processGroupId);
-  runner.stdin.write(`${startLine}`);
+  runner.stdin.write(startLine);
 
-  let cause: "completed" | "cancelled" | "timed_out" = "completed";
+  let cause: "cancelled" | "completed" | "timed_out" = "completed";
   let aborted = false;
   let timedOut = false;
   let timeoutHandle: NodeJS.Timeout | undefined;
@@ -609,7 +613,11 @@ async function runSupervisedBash(
 }
 
 function terminateGroup(processGroupId: number): void {
-  if (process.platform === "win32") {
+  if (
+    process.platform === "win32" ||
+    !Number.isSafeInteger(processGroupId) ||
+    processGroupId <= 1
+  ) {
     return;
   }
   try {
@@ -619,10 +627,10 @@ function terminateGroup(processGroupId: number): void {
   }
 }
 
-function writeTerminal(
+async function writeTerminal(
   output: WorkerOutput,
   start: PiWorkerStart | undefined,
-  status: "succeeded" | "failed",
+  status: "failed" | "succeeded",
   failure?: { readonly code: string; readonly message: string },
   details?: {
     readonly identity?: ObservedIdentity;
@@ -658,7 +666,7 @@ async function runPiWorker(): Promise<void> {
   const input = readBoundedLines(process.stdin, MAX_PI_WORKER_MESSAGE_BYTES);
   const pending = new Map<string, PendingAck>();
   let start: PiWorkerStart | undefined;
-  let session: { abort(): Promise<void> } | undefined;
+  let session: { abort: () => Promise<void> } | undefined;
   let settled = false;
   let cancellationRequested = false;
   let controlClosed = false;
@@ -734,7 +742,7 @@ async function runPiWorker(): Promise<void> {
         }
         const key = ackKey(control.type, control.requestId);
         const ack = pending.get(key);
-        if (ack === undefined || ack.processGroupId !== control.processGroupId) {
+        if (ack?.processGroupId !== control.processGroupId) {
           throw new Error("Pi worker received an unexpected process lifecycle ACK.");
         }
         pending.delete(key);
@@ -762,7 +770,7 @@ async function runPiWorker(): Promise<void> {
     const pi = await import("@earendil-works/pi-coding-agent");
     if (pi.VERSION !== PI_HARNESS_VERSION) {
       throw new Error(
-        `Pi SDK version ${String(pi.VERSION)} does not match the pinned ${PI_HARNESS_VERSION} runtime.`,
+        `Pi SDK version ${pi.VERSION} does not match the pinned ${PI_HARNESS_VERSION} runtime.`,
       );
     }
     sdkVerified = true;
@@ -808,7 +816,7 @@ async function runPiWorker(): Promise<void> {
     });
     await resourceLoader.reload();
     const shellOperations = {
-      exec: (
+      exec: async (
         command: string,
         cwd: string,
         options: {
@@ -958,7 +966,6 @@ async function runPiWorker(): Promise<void> {
     });
   } catch (error) {
     if (!terminalWritten) {
-      terminalWritten = true;
       const message = error instanceof Error ? error.message : String(error);
       try {
         await output.drain();
@@ -979,12 +986,12 @@ async function runPiWorker(): Promise<void> {
             ...(typeof lastMessage === "object" &&
             lastMessage !== null &&
             "stopReason" in lastMessage
-              ? { stopReason: String((lastMessage as { stopReason: unknown }).stopReason) }
+              ? { stopReason: String(lastMessage.stopReason) }
               : {}),
           },
         );
       } catch {
-        process.exitCode = 70;
+        setExitCode(70);
       }
     }
     if (session !== undefined && !settled) {
@@ -996,6 +1003,6 @@ async function runPiWorker(): Promise<void> {
   }
 }
 
-if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  void runPiWorker();
+if (process.argv[1] !== undefined && process.argv[1] === import.meta.filename) {
+  await runPiWorker();
 }

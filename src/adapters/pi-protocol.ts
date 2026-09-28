@@ -33,42 +33,42 @@ export type PiWorkerStart = {
 };
 
 export type PiWorkerControl =
-  | PiWorkerStart
+  | { readonly type: "cancel" }
   | {
       readonly type:
-        | "tool_process_registered"
         | "tool_process_cleaned"
-        | "tool_process_cleanup_done";
+        | "tool_process_cleanup_done"
+        | "tool_process_registered";
       readonly requestId: string;
       readonly processGroupId: number;
     }
-  | { readonly type: "cancel" };
+  | PiWorkerStart;
 
 export type PiWorkerOutput =
-  | { readonly type: "event"; readonly event: AdapterEvent }
   | {
       readonly type: "content";
       readonly index: number;
       readonly text: string;
       readonly final: boolean;
     }
+  | { readonly type: "event"; readonly event: AdapterEvent }
   | { readonly type: "identity"; readonly identity: ObservedIdentity }
-  | {
-      readonly type: "tool_process_started" | "tool_process_finished" | "tool_process_reaped";
-      readonly requestId: string;
-      readonly processGroupId: number;
-      readonly exitCode?: number | null;
-      readonly signal?: string | null;
-      readonly cause?: "completed" | "cancelled" | "timed_out";
-    }
   | {
       readonly type: "terminal";
       readonly settled: true;
-      readonly status: "succeeded" | "failed";
+      readonly status: "failed" | "succeeded";
       readonly stopReason?: string;
       readonly failure?: { readonly code: string; readonly message: string };
       readonly observedIdentity: ObservedIdentity;
       readonly usage?: Usage;
+    }
+  | {
+      readonly type: "tool_process_finished" | "tool_process_reaped" | "tool_process_started";
+      readonly requestId: string;
+      readonly processGroupId: number;
+      readonly exitCode?: null | number;
+      readonly signal?: null | string;
+      readonly cause?: "cancelled" | "completed" | "timed_out";
     };
 
 export type PiToolRunnerStart = {
@@ -83,7 +83,7 @@ export type PiToolRunnerStart = {
 };
 
 export async function* readBoundedLines(
-  stream: AsyncIterable<Buffer | Uint8Array | string>,
+  stream: AsyncIterable<Buffer | string | Uint8Array>,
   maximumBytes: number,
 ): AsyncGenerator<string> {
   let buffered = Buffer.alloc(0);
@@ -92,7 +92,7 @@ export async function* readBoundedLines(
     buffered = Buffer.concat([buffered, bytes]);
     while (true) {
       const newline = buffered.indexOf(10);
-      if (newline < 0) {
+      if (newline === -1) {
         break;
       }
       if (newline > maximumBytes) {
@@ -173,7 +173,7 @@ function observedIdentity(value: unknown): value is ObservedIdentity {
 
 function usage(value: unknown): value is Usage {
   const record = object(value);
-  if (record === undefined || record.evidence !== "reported" || !string(record.source)) {
+  if (record?.evidence !== "reported" || !string(record.source)) {
     return false;
   }
   return [
@@ -209,7 +209,7 @@ function adapterEvent(value: unknown): value is AdapterEvent {
     (!Array.isArray(record.content) ||
       !record.content.every((part) => {
         const item = object(part);
-        return item !== undefined && item.type === "text" && string(item.text);
+        return item?.type === "text" && string(item.text);
       }))
   ) {
     return false;
@@ -325,21 +325,21 @@ export function parsePiWorkerOutput(value: unknown): PiWorkerOutput {
     ) &&
     nonEmptyString(record.requestId) &&
     safeInteger(record.processGroupId) &&
-    record.processGroupId > 0 &&
+    record.processGroupId > 1 &&
     (record.exitCode === undefined || record.exitCode === null || safeInteger(record.exitCode)) &&
     (record.signal === undefined || record.signal === null || string(record.signal)) &&
     (record.cause === undefined ||
       ["completed", "cancelled", "timed_out"].includes(String(record.cause)))
   ) {
     return {
-      type: record.type as "tool_process_started" | "tool_process_finished" | "tool_process_reaped",
+      type: record.type as "tool_process_finished" | "tool_process_reaped" | "tool_process_started",
       requestId: record.requestId,
       processGroupId: record.processGroupId,
-      ...(record.exitCode === undefined ? {} : { exitCode: record.exitCode as number | null }),
-      ...(record.signal === undefined ? {} : { signal: record.signal as string | null }),
+      ...(record.exitCode === undefined ? {} : { exitCode: record.exitCode }),
+      ...(record.signal === undefined ? {} : { signal: record.signal }),
       ...(record.cause === undefined
         ? {}
-        : { cause: record.cause as "completed" | "cancelled" | "timed_out" }),
+        : { cause: record.cause as "cancelled" | "completed" | "timed_out" }),
     };
   }
   if (
@@ -363,7 +363,7 @@ export function parsePiWorkerOutput(value: unknown): PiWorkerOutput {
     return {
       type: "terminal",
       settled: true,
-      status: record.status as "succeeded" | "failed",
+      status: record.status as "failed" | "succeeded",
       ...(record.stopReason === undefined ? {} : { stopReason: record.stopReason }),
       ...(failure === undefined
         ? {}
@@ -392,13 +392,13 @@ export function parsePiWorkerControl(value: unknown): PiWorkerControl {
     ) &&
     nonEmptyString(record.requestId) &&
     safeInteger(record.processGroupId) &&
-    record.processGroupId > 0
+    record.processGroupId > 1
   ) {
     return {
       type: record.type as
-        | "tool_process_registered"
         | "tool_process_cleaned"
-        | "tool_process_cleanup_done",
+        | "tool_process_cleanup_done"
+        | "tool_process_registered",
       requestId: record.requestId,
       processGroupId: record.processGroupId,
     };
@@ -432,7 +432,7 @@ export function parsePiToolRunnerStart(value: unknown): PiToolRunnerStart {
     shellArgs: record.shellArgs,
     commandTransport: record.commandTransport as "argv" | "stdin",
     command: record.command,
-    cwd: record.cwd as string,
+    cwd: record.cwd,
     env: env as Readonly<Record<string, string>>,
   };
 }

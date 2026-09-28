@@ -1,27 +1,29 @@
 import assert from "node:assert/strict";
+import { type ChildProcess, spawn } from "node:child_process";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { spawn, type ChildProcess } from "node:child_process";
 import { createServer, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import test from "node:test";
 
-import { PiAdapter } from "../src/adapters/pi.js";
+import type { AdapterEvent, AdapterRunContext, AdapterRunResult } from "../src/adapters/types.js";
+import type { ResolvedRoute, StartInvocationRequest } from "../src/contract.js";
+
 import {
   MAX_PI_WORKER_EVENT_BYTES,
+  parsePiWorkerControl,
   parsePiWorkerLine,
   readBoundedLines,
 } from "../src/adapters/pi-protocol.js";
 import { supervisePiWorker } from "../src/adapters/pi-supervisor.js";
 import { supportsPiNodeVersion } from "../src/adapters/pi-worker.js";
-import type { AdapterEvent, AdapterRunContext, AdapterRunResult } from "../src/adapters/types.js";
-import type { ResolvedRoute, StartInvocationRequest } from "../src/contract.js";
+import { PiAdapter } from "../src/adapters/pi.js";
 import { BridgeError } from "../src/errors.js";
 
 type FixtureRequest = {
-  readonly messages?: readonly { readonly role?: string; readonly content?: unknown }[];
+  readonly messages?: ReadonlyArray<{ readonly role?: string; readonly content?: unknown }>;
 };
 type FixtureReply = (response: ServerResponse, request: FixtureRequest) => void;
 
@@ -30,9 +32,18 @@ type Fixture = {
   readonly root: string;
   readonly requests: FixtureRequest[];
   readonly errors: Error[];
-  setReplies(replies: readonly FixtureReply[]): void;
-  close(): Promise<void>;
+  setReplies: (replies: readonly FixtureReply[]) => void;
+  close: () => Promise<void>;
 };
+
+async function childClosed(child: ChildProcess) {
+  return new Promise<{ code: null | number; signal: NodeJS.Signals | null }>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", (code, signal) => {
+      resolve({ code, signal });
+    });
+  });
+}
 
 async function startFixture(): Promise<Fixture> {
   const root = await mkdtemp(join(tmpdir(), "harness-relay-pi-test-"));
@@ -93,7 +104,13 @@ async function startFixture(): Promise<Fixture> {
     },
     async close() {
       await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error === undefined ? resolve() : reject(error)));
+        server.close((error) => {
+          if (error === undefined) {
+            resolve();
+          } else {
+            reject(error);
+          }
+        });
       });
       await rm(root, { recursive: true, force: true });
     },
@@ -122,11 +139,13 @@ function stream(
 }
 
 function textReply(text: string): FixtureReply {
-  return (response) => stream(response, { content: text }, "stop");
+  return (response) => {
+    stream(response, { content: text }, "stop");
+  };
 }
 
 function bashReply(command: string): FixtureReply {
-  return (response) =>
+  return (response) => {
     stream(
       response,
       {
@@ -141,6 +160,7 @@ function bashReply(command: string): FixtureReply {
       },
       "tool_calls",
     );
+  };
 }
 
 function runContext(
@@ -149,11 +169,11 @@ function runContext(
 ): {
   context: AdapterRunContext;
   events: AdapterEvent[];
-  partials: Partial<AdapterRunResult>[];
+  partials: Array<Partial<AdapterRunResult>>;
   controller: AbortController;
 } {
   const events: AdapterEvent[] = [];
-  const partials: Partial<AdapterRunResult>[] = [];
+  const partials: Array<Partial<AdapterRunResult>> = [];
   const controller = new AbortController();
   const request: StartInvocationRequest = {
     selector: {
@@ -204,7 +224,7 @@ function runContext(
 }
 
 async function waitForProcessExit(pid: number): Promise<void> {
-  const deadline = Date.now() + 5_000;
+  const deadline = Date.now() + 5000;
   while (Date.now() < deadline) {
     try {
       process.kill(pid, 0);
@@ -220,13 +240,13 @@ async function waitForProcessExit(pid: number): Promise<void> {
 }
 
 async function waitForFile(path: string, description: string): Promise<void> {
-  const deadline = Date.now() + 5_000;
+  const deadline = Date.now() + 5000;
   while (Date.now() < deadline) {
     try {
       await access(path);
       return;
     } catch (error) {
-      if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
+      if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") {
         throw error;
       }
     }
@@ -234,6 +254,21 @@ async function waitForFile(path: string, description: string): Promise<void> {
   }
   assert.fail(`Timed out waiting for ${description}.`);
 }
+
+test("Pi worker protocol rejects process group IDs that could signal unrelated processes", () => {
+  assert.throws(() =>
+    parsePiWorkerLine(
+      JSON.stringify({ type: "tool_process_started", requestId: "unsafe", processGroupId: 1 }),
+    ),
+  );
+  assert.throws(() =>
+    parsePiWorkerControl({
+      type: "tool_process_registered",
+      requestId: "unsafe",
+      processGroupId: 1,
+    }),
+  );
+});
 
 test("Pi worker drains fast shell output, cleans inherited-pipe descendants, and frames Unicode", async () => {
   const fixture = await startFixture();
@@ -256,7 +291,7 @@ test("Pi worker drains fast shell output, cleans inherited-pipe descendants, and
     "(sleep 60) &",
     "printf '%s\\n' \"$!\" > descendant.pid",
   ].join("\n");
-  const finalText = `${"雪界".repeat(8_000)}${'"\\'.repeat(1_000)}`;
+  const finalText = `${"雪界".repeat(8000)}${'"\\'.repeat(1000)}`;
   fixture.setReplies([
     bashReply(command),
     (response, request) => {
@@ -384,15 +419,10 @@ test("the gated Pi shell runner refuses execution before registration and dies w
     cwd: root,
     env,
   });
-  const closed = (child: ChildProcess) =>
-    new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
-      child.once("error", reject);
-      child.once("close", (code, signal) => resolve({ code, signal }));
-    });
   let before: ChildProcess | undefined;
-  let beforeClosed: ReturnType<typeof closed> | undefined;
+  let beforeClosed: ReturnType<typeof childClosed> | undefined;
   let after: ChildProcess | undefined;
-  let afterClosed: ReturnType<typeof closed> | undefined;
+  let afterClosed: ReturnType<typeof childClosed> | undefined;
   try {
     const beforeMarker = join(root, "before-ack.marker");
     before = spawn(process.execPath, [runnerPath], {
@@ -401,14 +431,14 @@ test("the gated Pi shell runner refuses execution before registration and dies w
       detached: true,
       stdio: ["pipe", "ignore", "ignore", "pipe"],
     });
-    beforeClosed = closed(before);
+    beforeClosed = childClosed(before);
     before.stdin?.write(
       `${JSON.stringify(runnerStart("before-ack", `printf executed > '${beforeMarker}'`))}\n`,
     );
     before.stdin?.end();
     const beforeExit = await Promise.race([
       beforeClosed,
-      delay(3_000).then(() => {
+      delay(3000).then(() => {
         throw new Error("The gated runner did not exit when registration control closed.");
       }),
     ]);
@@ -424,7 +454,7 @@ test("the gated Pi shell runner refuses execution before registration and dies w
       stdio: ["pipe", "ignore", "ignore", "pipe"],
     });
     assert.ok(after.pid);
-    afterClosed = closed(after);
+    afterClosed = childClosed(after);
     const resultStream = after.stdio[3];
     assert.ok(resultStream && "read" in resultStream);
     const resultLines = readBoundedLines(resultStream as AsyncIterable<Buffer>, 4096);
@@ -438,7 +468,7 @@ test("the gated Pi shell runner refuses execution before registration and dies w
     );
     const resultLine = await Promise.race([
       resultLines.next(),
-      delay(3_000).then(() => {
+      delay(3000).then(() => {
         throw new Error("The ACKed helper did not report the shell's exit.");
       }),
     ]);
@@ -465,8 +495,10 @@ test("the gated Pi shell runner refuses execution before registration and dies w
     }
     await Promise.all(
       [afterClosed, beforeClosed]
-        .filter((pending): pending is ReturnType<typeof closed> => pending !== undefined)
-        .map((pending) => Promise.race([pending, delay(2_000).then(() => undefined)])),
+        .filter((pending): pending is ReturnType<typeof childClosed> => pending !== undefined)
+        .map(async (pending) => {
+          await Promise.race([pending, delay(2000)]);
+        }),
     );
     await rm(root, { recursive: true, force: true });
   }
@@ -499,7 +531,7 @@ runner.stdin.write(JSON.stringify({
   shell: "/bin/bash",
   shellArgs: ["-c"],
   commandTransport: "argv",
-  command: "(sleep 60) &\\nprintf '%s\\\\n' \\\"$!\\\" > malformed-child.pid",
+  command: "(sleep 60) &\\nprintf '%s\\\\n' \\"$!\\" > malformed-child.pid",
   cwd: start.workingDirectory,
   env: { PATH: process.env.PATH ?? "/usr/bin:/bin" },
 }) + "\\n");
@@ -595,7 +627,7 @@ test("cancelling a live Pi Bash call rejects with identity partials and kills de
     controller.abort();
     const outcome = await Promise.race([
       completion,
-      delay(5_000).then(() => {
+      delay(5000).then(() => {
         throw new Error("Pi cancellation did not settle within five seconds.");
       }),
     ]);
@@ -656,11 +688,11 @@ test("a provider HTTP 429 fails once without retry and retains observed identity
 });
 
 test("partial output prefers a completed stream or the longer incomplete final prefix", async () => {
-  const scenarios: readonly {
+  const scenarios: ReadonlyArray<{
     readonly streamedText?: string;
     readonly finalPrefix: string;
     readonly expected: string;
-  }[] = [
+  }> = [
     {
       streamedText: "complete streamed answer survives an incomplete final result frame",
       finalPrefix: "incomplete prefix",
@@ -724,6 +756,7 @@ test("Pi SDK stays optional, version checks are explicit, and failed worker spaw
 
   const root = await mkdtemp(join(tmpdir(), "harness-relay-pi-optional-"));
   const loaderPath = join(root, "block-pi.mjs");
+  // cspell:ignore earendil
   await writeFile(
     loaderPath,
     `export async function resolve(specifier, context, nextResolve) {\n  if (specifier === "@earendil-works/pi-coding-agent") { const error = new Error("optional Pi dependency omitted"); error.code = "ERR_MODULE_NOT_FOUND"; throw error; }\n  return nextResolve(specifier, context);\n}\n`,
@@ -748,9 +781,11 @@ test("Pi SDK stays optional, version checks are explicit, and failed worker spaw
     stdio: ["pipe", "pipe", "pipe"],
   });
   assert.ok(worker.stdin && worker.stdout);
-  const workerClosed = new Promise<{ code: number | null }>((resolve, reject) => {
+  const workerClosed = new Promise<{ code: null | number }>((resolve, reject) => {
     worker.once("error", reject);
-    worker.once("close", (code) => resolve({ code }));
+    worker.once("close", (code) => {
+      resolve({ code });
+    });
   });
   worker.stdin.write(`${JSON.stringify(start)}\n`);
   worker.stdin.end();
@@ -780,7 +815,7 @@ test("Pi SDK stays optional, version checks are explicit, and failed worker spaw
     ["--no-warnings", "--loader", loaderPath, "--input-type=module", "--eval", smokeCode],
     { cwd: root, env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: root }, stdio: "ignore" },
   );
-  const smokeExit = await new Promise<number | null>((resolve, reject) => {
+  const smokeExit = await new Promise<null | number>((resolve, reject) => {
     smoke.once("error", reject);
     smoke.once("close", resolve);
   });

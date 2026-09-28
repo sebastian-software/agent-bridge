@@ -1,7 +1,8 @@
 import type { JsonValue, RouteDescriptor } from "../contract.js";
-import { BridgeError } from "../errors.js";
 import type { Adapter, AdapterRunContext, AdapterRunResult, PolicyResolution } from "./types.js";
-import { runPiWorker, type PiRuntimeConfiguration } from "./pi-supervisor.js";
+
+import { BridgeError } from "../errors.js";
+import { type PiRuntimeConfiguration, runPiWorker } from "./pi-supervisor.js";
 
 const MUTATING_TOOLS = new Set(["write", "edit", "bash"]);
 
