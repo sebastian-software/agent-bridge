@@ -18,7 +18,7 @@ import {
   readBoundedLines,
 } from "../src/adapters/pi-protocol.js";
 import { supervisePiWorker } from "../src/adapters/pi-supervisor.js";
-import { supportsPiNodeVersion } from "../src/adapters/pi-worker.js";
+import { supportsPiNodeVersion, WorkerOutput } from "../src/adapters/pi-worker.js";
 import { PiAdapter } from "../src/adapters/pi.js";
 import { BridgeError } from "../src/errors.js";
 
@@ -268,6 +268,63 @@ test("Pi worker protocol rejects process group IDs that could signal unrelated p
       processGroupId: 1,
     }),
   );
+});
+
+test("fire-and-forget worker output observes overflow and closed-pipe rejections", async () => {
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown): void => {
+    unhandled.push(reason);
+  };
+  process.on("unhandledRejection", onUnhandled);
+
+  let releaseDrain: (() => void) | undefined;
+  const blockedDrain = new Promise<void>((resolve) => {
+    releaseDrain = resolve;
+  });
+  const overflowFailures: Error[] = [];
+  const overflowOutput = new WorkerOutput({
+    write: () => false,
+    async waitForDrain() {
+      await blockedDrain;
+    },
+  });
+  overflowOutput.setFailureHandler((error) => overflowFailures.push(error));
+
+  const message = {
+    type: "event",
+    event: {
+      category: "output",
+      content: [{ type: "text", text: "x".repeat(60 * 1024) }],
+    },
+  } as const;
+  assert.ok(Buffer.byteLength(JSON.stringify(message), "utf8") < MAX_PI_WORKER_EVENT_BYTES);
+
+  try {
+    for (let index = 0; index < 600; index += 1) {
+      void overflowOutput.enqueue(message);
+    }
+    assert.match(overflowFailures[0]?.message ?? "", /bounded transport limit/);
+    releaseDrain?.();
+    await assert.rejects(overflowOutput.drain(), /bounded transport limit/);
+
+    const closedFailures: Error[] = [];
+    const closedOutput = new WorkerOutput({
+      write() {
+        throw new Error("stdout closed");
+      },
+      async waitForDrain() {},
+    });
+    closedOutput.setFailureHandler((error) => closedFailures.push(error));
+    void closedOutput.enqueue(message);
+    await assert.rejects(closedOutput.drain(), /stdout closed/);
+    assert.match(closedFailures[0]?.message ?? "", /stdout closed/);
+
+    await delay(0);
+    assert.deepEqual(unhandled, []);
+  } finally {
+    releaseDrain?.();
+    process.off("unhandledRejection", onUnhandled);
+  }
 });
 
 test("Pi worker drains fast shell output, cleans inherited-pipe descendants, and frames Unicode", async () => {

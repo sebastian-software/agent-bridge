@@ -294,11 +294,28 @@ function toolEffect(toolName: string, args: unknown): undefined | WorkspaceEffec
     : undefined;
 }
 
-class WorkerOutput {
+type WorkerOutputTransport = {
+  readonly write: (line: string) => boolean;
+  readonly waitForDrain: () => Promise<void>;
+};
+
+const PROCESS_OUTPUT_TRANSPORT: WorkerOutputTransport = {
+  write: (line) => process.stdout.write(line),
+  async waitForDrain() {
+    await once(process.stdout, "drain");
+  },
+};
+
+export class WorkerOutput {
   #queue: Promise<void> = Promise.resolve();
   #pendingBytes = 0;
   #failure: Error | undefined;
   #failureHandler: ((error: Error) => void) | undefined;
+  readonly #transport: WorkerOutputTransport;
+
+  constructor(transport: WorkerOutputTransport = PROCESS_OUTPUT_TRANSPORT) {
+    this.#transport = transport;
+  }
 
   setFailureHandler(handler: (error: Error) => void): void {
     this.#failureHandler = handler;
@@ -315,7 +332,8 @@ class WorkerOutput {
     this.#failureHandler?.(this.#failure);
   }
 
-  async enqueue(message: PiWorkerOutput): Promise<void> {
+  // eslint-disable-next-line @typescript-eslint/promise-function-async -- Return the observed write promise itself so fire-and-forget callers inherit its rejection handler.
+  enqueue(message: PiWorkerOutput): Promise<void> {
     if (this.#failure !== undefined) {
       const rejected = Promise.reject(this.#failure);
       void rejected.catch(() => {});
@@ -333,8 +351,11 @@ class WorkerOutput {
     this.#pendingBytes += bytes;
     const write = this.#queue
       .then(async () => {
-        if (!process.stdout.write(line)) {
-          await once(process.stdout, "drain");
+        if (this.#failure !== undefined) {
+          throw this.#failure;
+        }
+        if (!this.#transport.write(line)) {
+          await this.#transport.waitForDrain();
         }
       })
       .finally(() => {
@@ -505,6 +526,8 @@ async function runSupervisedBash(
   });
   const closePromise = once(runner, "close").then(() => {});
   const resultPromise = runnerResultLine(resultStream as NodeJS.ReadableStream);
+  void closePromise.catch(() => {});
+  void resultPromise.catch(() => {});
   const registered = registerAck(pending, "tool_process_registered", requestId, processGroupId);
   runner.stdin.write(startLine);
 
