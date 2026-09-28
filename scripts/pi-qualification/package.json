@@ -1,0 +1,19 @@
+{
+  "name": "harness-relay-pi-qualification",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit && node verify.ts"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.87.1"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.1",
+    "typescript": "5.9.3"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "packageManager": "pnpm@11.24.0"
+}

@@ -20,6 +20,13 @@ may support only one or neither capability.
 adapter's native steering or queued-input capability. Acceptance is recorded as
 an invocation event; it does not create a second invocation.
 
+Follow-up instructions are delivered at the next supported processing boundary,
+such as between tool calls. Sending a message does not automatically cancel a
+running command; cancellation remains a separate operation. Broker acceptance
+and observed native delivery are separate evidence, and neither implies that
+the model has acted on the instruction. This delivery policy was clarified on
+2026-09-28; the operations remain planned until their adapters are qualified.
+
 After an invocation reaches a terminal state, its outcome is immutable.
 `invocation.continue` creates a new invocation with a new identity, links it to
 the predecessor through `continuedFrom`, and reuses the native delegate session
