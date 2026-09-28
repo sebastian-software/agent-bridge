@@ -27,6 +27,16 @@ outcome. It does not become the caller's workflow orchestrator.
   processes, event streams, continuation handles, and their lifecycle.
 - **Harness:** An existing agent runtime and its CLI contract, such as Claude
   Code or Codex CLI.
+- **Model runtime:** A service that executes model inference, such as Ollama or
+  LM Studio.
+  A model runtime is distinct from the harness that executes tools and controls
+  an agent's work.
+- **Account:** An authenticated identity through which a harness obtains access
+  to models or capabilities. An account is distinct from a local label or
+  configuration profile used to select it.
+- **Harness connection:** A user-named access to a harness's native configuration
+  and authentication context, with an optional user-defined purpose. It does
+  not prescribe a model, effort level, or workflow role.
 - **Adapter:** A reviewed bridge implementation that translates one bridge
   operation to one qualified harness contract.
 - **Provider:** The model vendor whose model a selector names, such as
@@ -35,7 +45,9 @@ outcome. It does not become the caller's workflow orchestrator.
 - **Delegation selector:** The caller's ad-hoc description of the desired
   delegate: provider, model, effort, optional harness family, and optional
   required capabilities. It is not a pre-created named object.
-- **Delegate:** The harness route chosen for one invocation.
+- **Delegate:** The execution route chosen for one invocation, through a harness
+  or capability provider.
+- **Local delegate:** A tool-using delegate whose model inference runs locally.
 - **Resolved route:** The concrete adapter, executable, harness version,
   authenticated native context, and model selection chosen for one invocation.
 - **Invocation:** One asynchronous, bounded delegation from an orchestrator to
@@ -101,6 +113,9 @@ outcome. It does not become the caller's workflow orchestrator.
   model, and effort; a harness family is an optional disambiguator.
 - Route resolution never silently substitutes another model, effort, or
   harness. Ambiguous or unavailable selectors fail with candidate diagnostics.
+- The next increment expands reviewed built-in adapters while keeping their
+  internal boundaries extensible. A public third-party adapter/plugin contract
+  and plugin loading are outside this increment.
 - The CLI is self-describing. Detailed operation knowledge lives in the bridge,
   not in a host-specific skill or duplicated instruction file.
 - A local broker owns asynchronous invocations. CLI and optional MCP adapters
