@@ -48,6 +48,7 @@ export type DelegationSelector = {
   readonly model: string;
   readonly effort?: string;
   readonly via?: string;
+  readonly connectionId?: string;
   readonly requiredCapabilities: readonly string[];
   readonly minimumObservedEvidence?: EvidenceStatus;
 };
@@ -98,6 +99,9 @@ export type RouteDescriptor = {
   readonly qualification: readonly QualificationEvidence[];
   readonly diagnostics: readonly string[];
   readonly discoveredAt?: string;
+  readonly connectionId?: string;
+  readonly connectionRevision?: string;
+  readonly connectionPurpose?: string;
   readonly policySupport?: Readonly<Record<string, readonly string[]>>;
 };
 
@@ -114,6 +118,8 @@ export type ResolvedRoute = {
   readonly model: string;
   readonly effort?: string;
   readonly via: string;
+  readonly connectionId?: string;
+  readonly connectionRevision?: string;
   readonly capabilities: readonly string[];
   readonly qualification: readonly QualificationEvidence[];
 };
@@ -460,6 +466,7 @@ export function parseStartInvocationRequest(value: unknown): StartInvocationRequ
 
   const effort = optionalString(selectorSource.effort, "params.selector.effort");
   const via = optionalString(selectorSource.via, "params.selector.via");
+  const connectionId = optionalString(selectorSource.connectionId, "params.selector.connectionId");
   const minimumObservedEvidence =
     selectorSource.minimumObservedEvidence === undefined
       ? undefined
@@ -515,6 +522,7 @@ export function parseStartInvocationRequest(value: unknown): StartInvocationRequ
       model: stringValue(selectorSource.model, "params.selector.model", { nonEmpty: true }),
       ...(effort === undefined ? {} : { effort }),
       ...(via === undefined ? {} : { via }),
+      ...(connectionId === undefined ? {} : { connectionId }),
       requiredCapabilities:
         selectorSource.requiredCapabilities === undefined
           ? []
@@ -563,15 +571,19 @@ export function parseInvocationIdParams(value: unknown): { readonly invocationId
   };
 }
 
-export function parseRouteDiscoverParams(value: unknown): { readonly refresh: boolean } {
+export function parseRouteDiscoverParams(value: unknown): {
+  readonly refresh: boolean;
+  readonly connectionId?: string;
+} {
   const source = record(value, "params");
-  if (source.refresh === undefined) {
-    return { refresh: false };
-  }
-  if (typeof source.refresh !== "boolean") {
+  if (source.refresh !== undefined && typeof source.refresh !== "boolean") {
     invalid("params.refresh must be a boolean.");
   }
-  return { refresh: source.refresh };
+  const connectionId = optionalString(source.connectionId, "params.connectionId");
+  return {
+    refresh: source.refresh ?? false,
+    ...(connectionId === undefined ? {} : { connectionId }),
+  };
 }
 
 export function parseShutdownParams(value: unknown): { readonly force: boolean } {

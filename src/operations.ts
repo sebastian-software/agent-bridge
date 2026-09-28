@@ -36,6 +36,11 @@ export const SCHEMA_DEFINITIONS: readonly SchemaDefinition[] = [
     path: "schemas/invocation-outcome.schema.json",
   },
   { name: "operations", version: SCHEMA_VERSION, path: "schemas/operations.schema.json" },
+  {
+    name: "connection-store",
+    version: SCHEMA_VERSION,
+    path: "schemas/connection-store.schema.json",
+  },
 ] as const;
 
 export const OPERATION_DEFINITIONS: readonly OperationDefinition[] = [
@@ -72,26 +77,45 @@ export const OPERATION_DEFINITIONS: readonly OperationDefinition[] = [
   },
   {
     name: "route.discover",
-    summary: "List adapter-qualified routes and their readiness evidence.",
+    summary: "List adapter-qualified routes and readiness, optionally for one named connection.",
     availability: "implemented",
-    cli: ["routes --json"],
+    cli: ["routes [--connection <id>] --json"],
     input: {
       type: "object",
       additionalProperties: false,
-      properties: { refresh: { type: "boolean" } },
+      properties: {
+        refresh: { type: "boolean" },
+        connectionId: { type: "string", minLength: 1 },
+      },
     },
     output: { type: "object", required: ["routes"] },
   },
   {
     name: "invocation.start",
-    summary: "Resolve and asynchronously start one bounded invocation.",
+    summary:
+      "Resolve and asynchronously start one bounded invocation in an optional named connection.",
     availability: "implemented",
-    cli: ["start --provider <id> --model <id> --text <text> --json"],
+    cli: ["start --provider <id> --model <id> [--connection <id>] --text <text> --json"],
     input: {
       type: "object",
       required: ["selector", "input", "workingDirectory"],
       properties: {
-        selector: { type: "object" },
+        selector: {
+          type: "object",
+          required: ["provider", "model"],
+          properties: {
+            provider: { type: "string", minLength: 1 },
+            model: { type: "string", minLength: 1 },
+            effort: { type: "string", minLength: 1 },
+            via: { type: "string", minLength: 1 },
+            connectionId: { type: "string", minLength: 1 },
+            requiredCapabilities: { type: "array", items: { type: "string", minLength: 1 } },
+            minimumObservedEvidence: {
+              enum: ["unverified", "inferred", "reported", "verified"],
+            },
+          },
+          additionalProperties: false,
+        },
         input: { type: "array", minItems: 1 },
         workingDirectory: { type: "string" },
         interactionStrategy: { enum: ["orchestrator", "deny", "unattended"] },

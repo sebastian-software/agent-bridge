@@ -184,9 +184,13 @@ function routeWithModel(
   catalog: undefined | UserModelDefinition,
   adapterId: string,
 ): RouteDescriptor {
+  const connectionSuffix =
+    route.connectionId === undefined || route.connectionRevision === undefined
+      ? ""
+      : `:connection:${route.connectionId}@${route.connectionRevision}`;
   return {
     ...route,
-    routeId: `${route.adapter}:${model}`,
+    routeId: `${route.adapter}:${model}${connectionSuffix}`,
     model,
     canonicalModel,
     ...(catalog?.nativeModel === undefined ? {} : { nativeModel: catalog.nativeModel }),
@@ -209,34 +213,47 @@ export function applyUserModelCatalog(
   const result = [...routes];
   for (const [adapterId, adapterCatalog] of Object.entries(catalog.adapters ?? {})) {
     const adapterRoutes = routes.filter((route) => route.adapter === adapterId);
-    for (const [alias, target] of Object.entries(adapterCatalog.aliases ?? {})) {
-      const targetRoute = adapterRoutes.find(
-        (route) => route.model === target || route.canonicalModel === target,
-      );
-      if (
-        targetRoute !== undefined &&
-        !result.some((route) => route.adapter === adapterId && route.model === alias)
-      ) {
-        result.push(
-          routeWithModel(
-            targetRoute,
-            alias,
-            targetRoute.canonicalModel ?? targetRoute.model,
-            { nativeModel: targetRoute.nativeModel ?? targetRoute.model },
-            adapterId,
-          ),
+    const groups = new Map<string | undefined, RouteDescriptor[]>();
+    for (const route of adapterRoutes) {
+      const group = groups.get(route.connectionId) ?? [];
+      group.push(route);
+      groups.set(route.connectionId, group);
+    }
+
+    for (const [connectionId, group] of groups) {
+      const hasModel = (modelId: string): boolean =>
+        result.some(
+          (route) =>
+            route.adapter === adapterId &&
+            route.connectionId === connectionId &&
+            route.model === modelId,
         );
+      for (const [alias, target] of Object.entries(adapterCatalog.aliases ?? {})) {
+        const targetRoute = group.find(
+          (route) => route.model === target || route.canonicalModel === target,
+        );
+        if (targetRoute !== undefined && !hasModel(alias)) {
+          result.push(
+            routeWithModel(
+              targetRoute,
+              alias,
+              targetRoute.canonicalModel ?? targetRoute.model,
+              { nativeModel: targetRoute.nativeModel ?? targetRoute.model },
+              adapterId,
+            ),
+          );
+        }
       }
-    }
-    const template = adapterRoutes[0];
-    if (template === undefined) {
-      continue;
-    }
-    for (const [modelId, definition] of Object.entries(adapterCatalog.models ?? {})) {
-      if (!result.some((route) => route.adapter === adapterId && route.model === modelId)) {
-        result.push(
-          routeWithModel(template, modelId, definition.nativeModel, definition, adapterId),
-        );
+      const template = group[0];
+      if (template === undefined) {
+        continue;
+      }
+      for (const [modelId, definition] of Object.entries(adapterCatalog.models ?? {})) {
+        if (!hasModel(modelId)) {
+          result.push(
+            routeWithModel(template, modelId, definition.nativeModel, definition, adapterId),
+          );
+        }
       }
     }
   }

@@ -22,12 +22,15 @@ args = ["mcp", "serve"]
 ## Recommended tool flow
 
 1. Call `harness_relay_system_describe` to inspect the contract and routes.
-2. Call `harness_relay_invocation_start` with an absolute working directory and
-   the smallest required policy.
-3. Follow progress with `harness_relay_invocation_events` using the returned
+2. Call `harness_relay_route_discover` to inspect qualified routes. Pass
+   `connectionId` to inspect one named native context.
+3. Call `harness_relay_invocation_start` with an absolute working directory,
+   the smallest required policy, and optional `selector.connectionId`. Omitting
+   the selector preserves the harness's normal native login.
+4. Follow progress with `harness_relay_invocation_events` using the returned
    cursors. Answer pending permission requests with
    `harness_relay_invocation_respond`.
-4. Call `harness_relay_invocation_result` after the terminal event.
+5. Call `harness_relay_invocation_result` after the terminal event.
 
 Only operations marked `implemented` in `system.describe` are advertised as
 MCP tools. Tool schemas are self-contained so hosts do not need to resolve

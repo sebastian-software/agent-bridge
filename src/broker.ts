@@ -4,6 +4,7 @@ import { isAbsolute, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 import type { AdapterEvent, AdapterRunResult } from "./adapters/types.js";
+import type { AdapterConnectionContext } from "./connections.js";
 import type { BrokerPaths } from "./paths.js";
 
 import { AdapterRegistry } from "./adapters/registry.js";
@@ -191,6 +192,7 @@ export class Broker {
   readonly #registry: AdapterRegistry;
   readonly #records = new Map<string, InvocationRecord>();
   readonly #controllers = new Map<string, AbortController>();
+  readonly #connectionContexts = new Map<string, AdapterConnectionContext>();
   readonly #runs = new Map<string, Promise<void>>();
   readonly #workspaceLocks = new Map<string, string>();
   readonly #beforeSnapshots = new Map<string, WorkspaceSnapshot>();
@@ -462,7 +464,8 @@ export class Broker {
       return this.#startResult(existing, true);
     }
 
-    const { route, descriptor, effectiveNativePolicy } = await this.#registry.resolve(request);
+    const { route, descriptor, effectiveNativePolicy, connectionContext } =
+      await this.#registry.resolve(request);
     const invocationId = `inv_${randomUUID()}`;
     const createdAt = new Date().toISOString();
     let workspaceKey: string;
@@ -519,6 +522,9 @@ export class Broker {
         invocationId,
         await captureWorkspaceSnapshot(request.workingDirectory, this.#effectLimits),
       );
+      if (connectionContext !== undefined) {
+        this.#connectionContexts.set(invocationId, connectionContext);
+      }
       this.#launch(invocationId);
     }
     return result;
@@ -708,6 +714,7 @@ export class Broker {
       })
       .finally(() => {
         this.#runs.delete(invocationId);
+        this.#connectionContexts.delete(invocationId);
       });
     this.#runs.set(invocationId, run);
   }
@@ -775,18 +782,33 @@ export class Broker {
     let partialResult: Partial<AdapterRunResult> = {};
     try {
       const adapter = this.#registry.adapter(current.resolvedRoute.adapter);
-      const result = await adapter.run({
+      const runContext = {
         invocationId,
         request: current.request,
         route: current.resolvedRoute,
         signal: controller.signal,
-        emit: async (event) => this.#appendAdapterEvent(invocationId, event),
-        reportPartial(partial) {
+        emit: async (event: AdapterEvent) => this.#appendAdapterEvent(invocationId, event),
+        reportPartial(partial: Partial<AdapterRunResult>) {
           partialResult = { ...partialResult, ...partial };
         },
-        awaitInput: async (requestId, signal) => this.#awaitInput(invocationId, requestId, signal),
+        awaitInput: async (requestId: string, signal?: AbortSignal) =>
+          this.#awaitInput(invocationId, requestId, signal),
         terminationGraceMs: this.#terminationGraceMs,
-      });
+      };
+      const connectionContext = this.#connectionContexts.get(invocationId);
+      let result: AdapterRunResult;
+      if (connectionContext === undefined) {
+        result = await adapter.run(runContext);
+      } else {
+        if (adapter.runConnection === undefined) {
+          throw new BridgeError({
+            code: "route_unavailable",
+            message: "The selected connection lost its qualified adapter binding.",
+            retryable: false,
+          });
+        }
+        result = await adapter.runConnection({ ...runContext, connection: connectionContext });
+      }
       const latest = this.#requireRecord(invocationId);
       if (latest.state === "cancelling" || controller.signal.aborted) {
         const interrupted = this.#shutdownRequested;

@@ -1,3 +1,4 @@
+import type { AdapterConnectionContext } from "../connections.js";
 import type {
   ContentPart,
   EventCategory,
@@ -37,6 +38,10 @@ export type AdapterRunContext = {
   readonly terminationGraceMs?: number;
 };
 
+export type AdapterConnectionRunContext = {
+  readonly connection: AdapterConnectionContext;
+} & AdapterRunContext;
+
 export type AdapterRunResult = {
   readonly content: readonly ContentPart[];
   readonly artifacts: readonly ContentPart[];
@@ -55,6 +60,11 @@ export type Adapter = {
   readonly id: string;
   readonly discover: () => Promise<readonly RouteDescriptor[]>;
   readonly run: (context: AdapterRunContext) => Promise<AdapterRunResult>;
+  /** Present only when discovery and execution both apply the named native context. */
+  readonly discoverConnection?: (
+    connection: AdapterConnectionContext,
+  ) => Promise<readonly RouteDescriptor[]>;
+  readonly runConnection?: (context: AdapterConnectionRunContext) => Promise<AdapterRunResult>;
   readonly resolvePolicy?: (
     request: StartInvocationRequest,
     route: RouteDescriptor,
