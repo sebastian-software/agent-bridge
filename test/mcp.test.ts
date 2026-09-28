@@ -70,10 +70,9 @@ test("MCP initialize and tools/list expose the bridge contract", async () => {
   };
   assert.ok(tools.tools.some((tool) => tool.name === "harness_relay_invocation_start"));
   assert.ok(tools.tools.some((tool) => tool.name === "harness_relay_invocation_events"));
-  assert.equal(
-    tools.tools.some((tool) => tool.name === "harness_relay_invocation_send"),
-    false,
-  );
+  assert.ok(tools.tools.some((tool) => tool.name === "harness_relay_invocation_answer"));
+  assert.ok(tools.tools.some((tool) => tool.name === "harness_relay_invocation_send"));
+  assert.ok(tools.tools.some((tool) => tool.name === "harness_relay_invocation_continue"));
   const startTool = tools.tools.find((tool) => tool.name === "harness_relay_invocation_start");
   assert.ok(startTool?.inputSchema?.properties);
   assert.ok(startTool?.outputSchema);

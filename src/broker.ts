@@ -5,7 +5,6 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import type {
   Adapter,
-  AdapterContinuationHandle,
   AdapterEvent,
   AdapterInputResult,
   AdapterRunContext,
@@ -18,11 +17,11 @@ import type { BrokerPaths } from "./paths.js";
 import { AdapterRegistry } from "./adapters/registry.js";
 import { type BrokerConfig, brokerConfigFromValues, type BrokerConfigValues } from "./config.js";
 import {
+  type AnswerInputRequest,
+  type ContentPart,
+  type ContinueInvocationRequest,
   type EffectObservation,
   type EventsResult,
-  type AnswerInputRequest,
-  type ContinueInvocationRequest,
-  type ContentPart,
   type InputResponse,
   type InvocationEvent,
   type InvocationListResult,
@@ -32,9 +31,9 @@ import {
   type InvocationTombstone,
   type JsonValue,
   type ObservedIdentity,
-  parseEventsParams,
   parseAnswerParams,
   parseContinueInvocationParams,
+  parseEventsParams,
   parseInvocationIdParams,
   parseInvocationListParams,
   parseRespondParams,
@@ -45,10 +44,10 @@ import {
   parseWaitParams,
   type PolicyEvidence,
   SCHEMA_VERSION,
-  type StartInvocationRequest,
-  type StartInvocationResult,
   type SendInvocationRequest,
   type SendInvocationResult,
+  type StartInvocationRequest,
+  type StartInvocationResult,
   TERMINAL_STATES,
   type TerminalStatus,
   type Usage,
@@ -91,6 +90,12 @@ function isAbortError(error: unknown): boolean {
     error instanceof Error &&
     (error.name === "AbortError" || ("code" in error && error.code === "ABORT_ERR"))
   );
+}
+
+function invocationCancelledError(): Error {
+  const error = new Error("The invocation was cancelled.");
+  error.name = "AbortError";
+  return error;
 }
 
 function eventCursor(sequence: number): string {
@@ -627,7 +632,7 @@ export class Broker {
         throw new BridgeError(
           {
             code: "continuation_route_changed",
-            message: `The requested route, interaction strategy, or policy for invocation ${request.invocationId} is no longer supported; continuation cannot be safely retargeted.`,
+            message: `The requested route, interaction strategy, or policy for invocation ${request.invocationId} is no longer supported; continuation cannot safely use another route.`,
             retryable: false,
             details: { invocationId: request.invocationId, cause: error.code },
           },
@@ -644,12 +649,11 @@ export class Broker {
       (freshResolution.route.connectionId === undefined
         ? freshResolution.connectionContext !== undefined
         : freshResolution.connectionContext?.id !== freshResolution.route.connectionId ||
-          freshResolution.connectionContext.revision !==
-            freshResolution.route.connectionRevision)
+          freshResolution.connectionContext.revision !== freshResolution.route.connectionRevision)
     ) {
       throw new BridgeError({
         code: "continuation_route_changed",
-        message: `The resolved route or effective policy for invocation ${request.invocationId} changed; continuation cannot be safely retargeted.`,
+        message: `The resolved route or effective policy for invocation ${request.invocationId} changed; continuation cannot safely use another route.`,
         retryable: false,
         details: { invocationId: request.invocationId, routeId: predecessor.resolvedRoute.routeId },
       });
@@ -1516,7 +1520,7 @@ export class Broker {
       return answer;
     }
     if (signal?.aborted === true) {
-      throw new DOMException("The invocation was cancelled.", "AbortError");
+      throw invocationCancelledError();
     }
     return new Promise((resolve, reject) => {
       const waiters = this.#questionWaiters.get(invocationId) ?? new Map<string, QuestionWaiter>();
@@ -1526,11 +1530,21 @@ export class Broker {
         callback();
       };
       const onAbort = (): void => {
-        finish(() => reject(new DOMException("The invocation was cancelled.", "AbortError")));
+        finish(() => {
+          reject(invocationCancelledError());
+        });
       };
       waiters.set(requestId, {
-        resolve: (response) => finish(() => resolve(response)),
-        reject: (error) => finish(() => reject(error)),
+        resolve(response) {
+          finish(() => {
+            resolve(response);
+          });
+        },
+        reject(error) {
+          finish(() => {
+            reject(error instanceof Error ? error : new Error(messageFrom(error)));
+          });
+        },
       });
       this.#questionWaiters.set(invocationId, waiters);
       signal?.addEventListener("abort", onAbort, { once: true });
@@ -1640,9 +1654,9 @@ export class Broker {
           (input) => input.inputId === context.inputId,
         );
         if (
+          accepted?.delivery !== "pending" ||
           current === undefined ||
-          accepted === undefined ||
-          accepted.delivery !== "pending" ||
+          this.#completing.has(context.invocationId) ||
           TERMINAL_STATES.has(current.state)
         ) {
           return { value: undefined, changed: false };
@@ -1676,9 +1690,9 @@ export class Broker {
           (input) => input.inputId === context.inputId,
         );
         if (
+          accepted?.delivery !== "pending" ||
           current === undefined ||
-          accepted === undefined ||
-          accepted.delivery !== "pending" ||
+          this.#completing.has(context.invocationId) ||
           TERMINAL_STATES.has(current.state)
         ) {
           return { value: undefined, changed: false };

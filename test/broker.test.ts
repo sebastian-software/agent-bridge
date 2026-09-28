@@ -55,6 +55,19 @@ function request(
   };
 }
 
+async function sendInvocationInput(
+  broker: Broker,
+  invocationId: string,
+  text: string,
+  idempotencyKey: string,
+): Promise<unknown> {
+  return broker.execute("invocation.send", {
+    invocationId,
+    input: [{ type: "text", text }],
+    idempotencyKey,
+  });
+}
+
 function stateOf(value: unknown): string {
   if (
     typeof value !== "object" ||
@@ -274,7 +287,7 @@ class ControlledDialogueAdapter implements Adapter {
     ];
   }
 
-  run(context: AdapterRunContext): Promise<AdapterRunResult> {
+  async run(context: AdapterRunContext): Promise<AdapterRunResult> {
     return new Promise((resolve, reject) => {
       let settled = false;
       const onAbort = (): void => {
@@ -666,15 +679,9 @@ test("active input delivery is FIFO for each invocation despite a delayed native
         },
       }),
     );
-    const send = (text: string, idempotencyKey: string): Promise<unknown> =>
-      broker.execute("invocation.send", {
-        invocationId: started.invocationId,
-        input: [{ type: "text", text }],
-        idempotencyKey,
-      });
-    await send("first instruction", "ordered-send-1");
+    await sendInvocationInput(broker, started.invocationId, "first instruction", "ordered-send-1");
     await adapter.firstDeliveryStarted.promise;
-    await send("later correction", "ordered-send-2");
+    await sendInvocationInput(broker, started.invocationId, "later correction", "ordered-send-2");
     assert.deepEqual(adapter.deliveryOrder, ["first instruction"]);
 
     adapter.releaseFirstDelivery.resolve();
@@ -714,15 +721,9 @@ test("cancellation expires queued inputs and suppresses a late delivery acknowle
         },
       }),
     );
-    const send = (text: string, idempotencyKey: string): Promise<unknown> =>
-      broker.execute("invocation.send", {
-        invocationId: started.invocationId,
-        input: [{ type: "text", text }],
-        idempotencyKey,
-      });
-    await send("first instruction", "cancel-send-1");
+    await sendInvocationInput(broker, started.invocationId, "first instruction", "cancel-send-1");
     await adapter.firstDeliveryStarted.promise;
-    await send("queued follow-up", "cancel-send-2");
+    await sendInvocationInput(broker, started.invocationId, "queued follow-up", "cancel-send-2");
     await broker.cancel(started.invocationId);
     await waitForTerminal(broker, started.invocationId);
 
@@ -759,15 +760,19 @@ test("a finishing invocation never dispatches the next input while completion is
         },
       }),
     );
-    const send = (text: string, idempotencyKey: string): Promise<unknown> =>
-      broker.execute("invocation.send", {
-        invocationId: started.invocationId,
-        input: [{ type: "text", text }],
-        idempotencyKey,
-      });
-    await send("first instruction", "completion-send-1");
+    await sendInvocationInput(
+      broker,
+      started.invocationId,
+      "first instruction",
+      "completion-send-1",
+    );
     await adapter.firstDeliveryStarted.promise;
-    await send("queued follow-up", "completion-send-2");
+    await sendInvocationInput(
+      broker,
+      started.invocationId,
+      "queued follow-up",
+      "completion-send-2",
+    );
 
     adapter.completeRun.resolve();
     await waitForTerminal(broker, started.invocationId);
@@ -851,7 +856,7 @@ test("older invocation metadata without dialogue fields remains loadable", async
   const root = await mkdtemp(join(tmpdir(), "harness-relay-store-legacy-dialogue-"));
   const broker = new Broker(paths(root));
   await broker.initialize();
-  let invocationId = "";
+  let invocationId!: string;
   try {
     const started = await broker.start(request(root, "fake-echo"));
     invocationId = started.invocationId;

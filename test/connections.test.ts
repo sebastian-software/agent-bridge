@@ -135,7 +135,10 @@ class ConnectionFixtureAdapter implements Adapter {
       await this.discoveryGate.promise;
     }
     return [
-      { ...descriptor(this.id, this.#continuationCapable), diagnostics: [connection.nativeContextRef] },
+      {
+        ...descriptor(this.id, this.#continuationCapable),
+        diagnostics: [connection.nativeContextRef],
+      },
     ];
   }
 
@@ -417,7 +420,10 @@ test("continuation reuses only the original connection revision and rejects repl
     assert.equal(continuedRoute.connectionRevision, original.revision);
     assert.deepEqual(adapter.seenContinuationHandles, [undefined, "fixture-native-session"]);
     assert.deepEqual(
-      adapter.seenConnections.map(({ nativeContextRef, revision }) => ({ nativeContextRef, revision })),
+      adapter.seenConnections.map(({ nativeContextRef, revision }) => ({
+        nativeContextRef,
+        revision,
+      })),
       [
         { nativeContextRef: original.nativeContextRef, revision: original.revision },
         { nativeContextRef: original.nativeContextRef, revision: original.revision },

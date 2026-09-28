@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 
 import type { ContentPart, ObservedIdentity, RouteDescriptor } from "../contract.js";
-import { BridgeError } from "../errors.js";
 import type {
   Adapter,
   AdapterContinuationHandle,
@@ -10,6 +9,8 @@ import type {
   AdapterRunResult,
   AdapterSendInputContext,
 } from "./types.js";
+
+import { BridgeError } from "../errors.js";
 
 const QUALIFIED_AT = "2026-08-27T00:00:00.000Z";
 

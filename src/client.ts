@@ -3,18 +3,18 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 
 import type {
-  EventsResult,
   AnswerInputRequest,
+  ContinueInvocationRequest,
+  EventsResult,
   InvocationEvent,
   InvocationListResult,
   InvocationOutcome,
   InvocationState,
   RouteDescriptor,
-  StartInvocationRequest,
-  StartInvocationResult,
-  ContinueInvocationRequest,
   SendInvocationRequest,
   SendInvocationResult,
+  StartInvocationRequest,
+  StartInvocationResult,
 } from "./contract.js";
 
 import { BridgeError } from "./errors.js";

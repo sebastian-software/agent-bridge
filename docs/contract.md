@@ -80,13 +80,17 @@ An `input_required` event includes a stable request ID, `kind` (`permission` or
 `question`), and prompt. Permission requests may also include a tool name. The
 caller answers the matching kind only; unknown, already-answered, or expired
 request IDs are rejected rather than guessed.
+The caller must poll or follow the event stream to observe updates; the relay
+does not guarantee waking or notifying an arbitrary host agent.
 
 `invocation.send` is a separate operation for active-session steering. The
 broker records `input_accepted` and returns immediately with delivery `pending`.
 It sends accepted inputs in FIFO order per invocation. `input_delivered` is
 recorded only after the adapter acknowledges acceptance at a native session
 boundary. The evidence says the input reached that boundary; it does not prove
-that the model consumed or acted on it. Failed delivery and input left pending
+that the model consumed or acted on it. Sending input does not cancel or
+interrupt a running native tool call; it waits for a boundary supported by the
+route. Use `invocation.cancel` to request cancellation. Failed delivery and input left pending
 at cancellation, terminal completion, or broker restart are recorded as
 `input_delivery_failed` or `input_expired`. Repeating an identical send with
 the same per-invocation idempotency key returns its existing input ID; reusing

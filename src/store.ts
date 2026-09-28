@@ -13,6 +13,8 @@ import {
 } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
+import type { AdapterContinuationHandle } from "./adapters/types.js";
+
 import {
   type Assurance,
   type EventCategory,
@@ -38,20 +40,19 @@ import {
   type Usage,
   type WorkspaceEffect,
 } from "./contract.js";
-import type { AdapterContinuationHandle } from "./adapters/types.js";
 import { BridgeError } from "./errors.js";
 
 export type StoredAcceptedInput = {
   readonly inputId: string;
   readonly idempotencyKey: string;
   readonly digest: string;
-  readonly delivery: "pending" | "delivered" | "failed" | "expired";
+  readonly delivery: "delivered" | "expired" | "failed" | "pending";
 };
 
-export type StoredInvocationRecord = InvocationRecord & {
+export type StoredInvocationRecord = {
   readonly continuationHandle?: AdapterContinuationHandle;
   readonly acceptedInputs?: readonly StoredAcceptedInput[];
-};
+} & InvocationRecord;
 
 type PersistedState = {
   readonly storageVersion: 1;

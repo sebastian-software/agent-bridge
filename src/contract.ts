@@ -242,7 +242,7 @@ export type SendInvocationResult = {
   readonly inputId: string;
   readonly accepted: true;
   readonly deduplicated: boolean;
-  readonly delivery: "pending" | "delivered" | "failed" | "expired";
+  readonly delivery: "delivered" | "expired" | "failed" | "pending";
 };
 
 export type InvocationOutcome = {
@@ -673,14 +673,7 @@ export function parseSendInvocationParams(value: unknown): SendInvocationRequest
 }
 
 export function parseContinueInvocationParams(value: unknown): ContinueInvocationRequest {
-  const source = record(value, "params");
-  return {
-    invocationId: stringValue(source.invocationId, "params.invocationId", { nonEmpty: true }),
-    input: requiredContentParts(source.input, "params.input"),
-    idempotencyKey: stringValue(source.idempotencyKey, "params.idempotencyKey", {
-      nonEmpty: true,
-    }),
-  };
+  return parseSendInvocationParams(value);
 }
 
 export function parseWaitParams(value: unknown): {

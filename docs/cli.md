@@ -19,8 +19,8 @@ command that needs a broker starts the user-owned daemon automatically.
 | `result <id>`                            | Read the immutable terminal outcome                                                        |
 | `cancel <id>`                            | Request cancellation                                                                       |
 | `answer <id>`                            | Answer a pending free-form delegate question                                               |
-| `send <id>`                              | Send additional input to a qualified active session                                       |
-| `continue <id>`                          | Start a linked invocation from a retained native session                                  |
+| `send <id>`                              | Send additional input to a qualified active session                                        |
+| `continue <id>`                          | Start a linked invocation from a retained native session                                   |
 | `broker status` / `stop` / `restart`     | Inspect or control the broker                                                              |
 | `broker logs`                            | Read or follow the broker log                                                              |
 | `request <operation>`                    | Send any operation with JSON params                                                        |
