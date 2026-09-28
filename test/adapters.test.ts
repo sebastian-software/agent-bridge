@@ -631,9 +631,11 @@ test("Codex named contexts use native login, reject profiles, and redact overlap
     await rm(join(gammaWorkspace, ".codex"), { recursive: true, force: true });
 
     const realWorkspace = join(root, "workspace-real");
+    const realWorkspaceChild = join(realWorkspace, "child");
     const symlinkWorkspace = join(root, "workspace-alias");
     await mkdir(join(realWorkspace, ".codex"), { recursive: true });
-    await symlink(realWorkspace, symlinkWorkspace, "dir");
+    await mkdir(realWorkspaceChild, { recursive: true });
+    await symlink(realWorkspaceChild, symlinkWorkspace, "dir");
     await writeFile(
       join(realWorkspace, ".codex", "config.toml"),
       '[model_providers.openai]\nbase_url = "https://fixture.invalid/v1"\n',
