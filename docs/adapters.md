@@ -76,6 +76,42 @@ readiness, diagnostics, and a qualification record. Missing executables are
 unavailable; out-of-range versions are unqualified. Neither is silently
 treated as a usable route.
 
+## Named native contexts
+
+The built-in Claude Code and Codex adapters support explicitly selected native
+configuration directories at pinned CLI versions. An unselected request keeps
+the normal native login behavior. A named route's `ready` state means its
+native authentication probe succeeded under the selected context; it does not
+identify the account that a later invocation used. Runtime identity remains
+unverified unless the harness reports it.
+
+Named Claude Code contexts use `CLAUDE_CONFIG_DIR` for the probe and invocation
+and pass `--setting-sources user` to both. Project and local settings therefore
+do not participate. A selected user `settings.json` with `apiKeyHelper` or a
+nonempty `env` block is unavailable until it is removed; inherited shell auth,
+provider, and session selectors are also filtered from named child processes.
+This behavior is qualified for Claude Code 2.1.282.
+
+Named Codex contexts use `CODEX_HOME`, filter inherited auth/profile selectors,
+and force `model_provider="openai"` for the invocation. Before discovery and
+again before each named run, Relay parses the installed Codex configuration
+sources with TOML: the system config, the selected home config, the working
+directory `config.toml`, and `.codex/config.toml` files on both lexical and
+canonical working-directory ancestor paths. A profile selector, a non-native
+`model_provider`, any `model_providers` table, invalid TOML, or a config that
+cannot be inspected makes the named route unavailable. The CLI loads project
+configuration above `CODEX_HOME`, so the invocation check is required even
+when discovery had no working directory. This behavior is qualified for Codex
+CLI 0.155.1, using the [pinned loader](https://github.com/openai/codex/blob/be2951ea34f0d295ed0becf97079f92fa5f6950e/codex-rs/config/src/loader/mod.rs)
+and its [pinned authentication storage](https://github.com/openai/codex/blob/be2951ea34f0d295ed0becf97079f92fa5f6950e/codex-rs/login/src/auth/storage.rs).
+
+Fixture tests exercise separate named Codex homes concurrently, scrubbed
+inherited credentials, configuration precedence, and private-path redaction.
+They do not use live credentials or prove that two real accounts are distinct.
+No real second-account invocation or identity observation has been qualified;
+that remains an opt-in runtime qualification task. Machine-managed policy and
+real-account behavior are outside the fixture evidence.
+
 ## Normalization rules
 
 Map native messages to the smallest useful bridge category:

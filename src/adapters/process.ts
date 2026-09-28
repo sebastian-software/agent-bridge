@@ -11,9 +11,20 @@ import type {
   Usage,
   WorkspaceEffect,
 } from "../contract.js";
-import type { Adapter, AdapterEvent, AdapterRunContext, AdapterRunResult } from "./types.js";
+import type {
+  Adapter,
+  AdapterConnectionRunContext,
+  AdapterEvent,
+  AdapterRunContext,
+  AdapterRunResult,
+} from "./types.js";
 
 import { BridgeError } from "../errors.js";
+import {
+  inspectNativeContextDirectory,
+  redactNativeContextData,
+  redactNativeContextText,
+} from "./environment.js";
 
 const MAX_NATIVE_EVENT_BYTES = 64 * 1024;
 const TERMINATION_GRACE_MS = 2000;
@@ -121,6 +132,33 @@ function diagnosticArgs(args: readonly string[]): readonly string[] {
   return result;
 }
 
+function redactError(error: unknown, references: readonly string[]): Error {
+  if (error instanceof BridgeError) {
+    const cause = error.cause;
+    return new BridgeError(
+      {
+        code: error.code,
+        message: redactNativeContextText(error.message, references),
+        retryable: error.retryable,
+        ...(error.details === undefined
+          ? {}
+          : { details: redactNativeContextData(error.details, references) }),
+      },
+      cause === undefined ? undefined : { cause: redactError(cause, references) },
+    );
+  }
+  if (error instanceof Error) {
+    const cause = error.cause;
+    const redacted = new Error(
+      redactNativeContextText(error.message, references),
+      cause === undefined ? undefined : { cause: redactError(cause, references) },
+    );
+    redacted.name = error.name;
+    return redacted;
+  }
+  return new Error(redactNativeContextText(String(error), references));
+}
+
 export abstract class ProcessAdapter implements Adapter {
   abstract readonly id: string;
 
@@ -136,6 +174,54 @@ export abstract class ProcessAdapter implements Adapter {
       pendingEffects?: Map<string, WorkspaceEffect>;
     },
   ): AdapterEvent | undefined;
+
+  protected async validateConnectionInvocation(
+    _context: AdapterConnectionRunContext,
+  ): Promise<void> {
+    // Named adapters override this hook when an invocation has context-specific configuration.
+  }
+
+  async runConnection(context: AdapterConnectionRunContext): Promise<AdapterRunResult> {
+    const nativeContext = await inspectNativeContextDirectory(context.connection.nativeContextRef);
+    if (nativeContext === undefined) {
+      throw new BridgeError({
+        code: "route_unavailable",
+        message: `Named connection ${context.connection.id} no longer refers to a readable native context directory.`,
+        retryable: false,
+        details: { connectionId: context.connection.id },
+      });
+    }
+    const references = [
+      ...nativeContext.privatePaths,
+      ...(context.connection.executable === undefined ? [] : [context.connection.executable]),
+    ];
+    const boundContext = {
+      ...context,
+      route: {
+        ...context.route,
+        ...(context.connection.executable === undefined
+          ? {}
+          : { executable: context.connection.executable }),
+      },
+      connection: {
+        ...context.connection,
+        nativeContextRef: nativeContext.path,
+      },
+      emit: async (event: AdapterEvent) => context.emit(redactNativeContextData(event, references)),
+      ...(context.reportPartial === undefined
+        ? {}
+        : {
+            reportPartial: (result: Partial<AdapterRunResult>) =>
+              context.reportPartial?.(redactNativeContextData(result, references)),
+          }),
+    };
+    try {
+      await this.validateConnectionInvocation(boundContext);
+      return redactNativeContextData(await this.run(boundContext), references);
+    } catch (error) {
+      throw redactError(error, references);
+    }
+  }
 
   async run(context: AdapterRunContext): Promise<AdapterRunResult> {
     const command = this.command(context);

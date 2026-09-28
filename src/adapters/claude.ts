@@ -1,3 +1,7 @@
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+
+import type { AdapterConnectionContext } from "../connections.js";
 import type {
   JsonValue,
   ObservedIdentity,
@@ -7,10 +11,20 @@ import type {
   Usage,
   WorkspaceEffect,
 } from "../contract.js";
-import type { AdapterEvent, AdapterRunContext, PolicyResolution } from "./types.js";
+import type {
+  AdapterConnectionRunContext,
+  AdapterEvent,
+  AdapterRunContext,
+  PolicyResolution,
+} from "./types.js";
 
 import { BridgeError } from "../errors.js";
-import { discoverManifestRoutes, type DiscoveryProbe } from "./discovery.js";
+import {
+  discoverManifestRoutes,
+  type DiscoveryProbe,
+  unavailableManifestRoutes,
+} from "./discovery.js";
+import { inspectNativeContextDirectory } from "./environment.js";
 import { type CommandSpec, ProcessAdapter, promptFor } from "./process.js";
 
 export const CLAUDE_SESSION_ENVIRONMENT_DENY_LIST = [
@@ -24,6 +38,66 @@ export const CLAUDE_SESSION_ENVIRONMENT_DENY_LIST = [
   "CLAUDE_CODE_MESSAGING_SOCKET",
   "CLAUDE_CODE_MESSAGING_TOKEN",
 ] as const;
+
+const CLAUDE_NAMED_CONTEXT_VERSION = "2.1.282";
+const CLAUDE_NAMED_AUTH_ENVIRONMENT_DENY_LIST = [
+  ...CLAUDE_SESSION_ENVIRONMENT_DENY_LIST,
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_AUTH_TOKEN",
+  "CLAUDE_CODE_OAUTH_TOKEN",
+  "ANTHROPIC_BASE_URL",
+  "ANTHROPIC_CUSTOM_HEADERS",
+  "CLAUDE_CODE_USE_BEDROCK",
+  "CLAUDE_CODE_USE_VERTEX",
+  "CLAUDE_CODE_USE_FOUNDRY",
+  "AWS_PROFILE",
+  "AWS_DEFAULT_PROFILE",
+  "AWS_ACCESS_KEY_ID",
+  "AWS_SECRET_ACCESS_KEY",
+  "AWS_SESSION_TOKEN",
+  "AWS_BEARER_TOKEN_BEDROCK",
+  "ANTHROPIC_VERTEX_PROJECT_ID",
+  "CLOUD_ML_REGION",
+  "GOOGLE_APPLICATION_CREDENTIALS",
+] as const;
+
+function settingsRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+async function unsupportedClaudeNamedSettings(path: string): Promise<string | undefined> {
+  let source: string;
+  try {
+    source = await readFile(join(path, "settings.json"), "utf8");
+  } catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
+      return undefined;
+    }
+    return "The selected Claude settings cannot be inspected safely. Check their permissions and retry.";
+  }
+  let settings: unknown;
+  try {
+    settings = JSON.parse(source) as unknown;
+  } catch {
+    return "The selected Claude settings are not valid JSON. Fix settings.json before using this named connection.";
+  }
+  const parsed = settingsRecord(settings);
+  if (parsed === undefined) {
+    return "The selected Claude settings must be a JSON object to qualify this named connection.";
+  }
+  if (Object.hasOwn(parsed, "apiKeyHelper")) {
+    return "Named Claude connections do not support apiKeyHelper authentication. Use native login in the selected configuration directory.";
+  }
+  if (Object.hasOwn(parsed, "env")) {
+    const environment = settingsRecord(parsed.env);
+    if (environment === undefined || Object.keys(environment).length > 0) {
+      return "Named Claude connections cannot qualify environment overrides in settings.json. Remove the env block and use native login in the selected configuration directory.";
+    }
+  }
+  return undefined;
+}
 
 const MANIFEST = {
   id: "claude",
@@ -321,6 +395,48 @@ export class ClaudeAdapter extends ProcessAdapter {
     });
   }
 
+  async discoverConnection(
+    connection: AdapterConnectionContext,
+  ): Promise<readonly RouteDescriptor[]> {
+    const nativeContext = await inspectNativeContextDirectory(connection.nativeContextRef);
+    if (nativeContext === undefined) {
+      return unavailableManifestRoutes(
+        MANIFEST,
+        "Named Claude connections require an existing readable native configuration directory. Create or select that directory, authenticate Claude Code there, and retry discovery.",
+      );
+    }
+    const unsupportedSettings = await unsupportedClaudeNamedSettings(nativeContext.path);
+    if (unsupportedSettings !== undefined) {
+      return unavailableManifestRoutes(MANIFEST, unsupportedSettings);
+    }
+    return discoverManifestRoutes(MANIFEST, {
+      ...(this.#executable === undefined ? {} : { executable: this.#executable }),
+      ...(this.#probe === undefined ? {} : { probe: this.#probe }),
+      environment: {
+        overrides: { CLAUDE_CONFIG_DIR: nativeContext.path },
+        denyList: CLAUDE_NAMED_AUTH_ENVIRONMENT_DENY_LIST,
+      },
+      authenticationArgs: ["--setting-sources", "user", ...MANIFEST.authArgs],
+      requiredVersion: CLAUDE_NAMED_CONTEXT_VERSION,
+    });
+  }
+
+  protected override async validateConnectionInvocation(
+    context: AdapterConnectionRunContext,
+  ): Promise<void> {
+    const unsupportedSettings = await unsupportedClaudeNamedSettings(
+      context.connection.nativeContextRef,
+    );
+    if (unsupportedSettings !== undefined) {
+      throw new BridgeError({
+        code: "route_unavailable",
+        message: unsupportedSettings,
+        retryable: false,
+        details: { connectionId: context.connection.id },
+      });
+    }
+  }
+
   resolvePolicy(request: StartInvocationRequest, _route: RouteDescriptor): PolicyResolution {
     return resolvePolicy(request);
   }
@@ -336,10 +452,20 @@ export class ClaudeAdapter extends ProcessAdapter {
     }
     return {
       executable,
-      args: commandArgs(context),
+      args: [
+        ...(context.connection === undefined ? [] : ["--setting-sources", "user"]),
+        ...commandArgs(context),
+      ],
       stdin: initialInput(context),
       ...(context.request.interactionStrategy === "orchestrator" ? { keepStdinOpen: true } : {}),
-      envDenyList: CLAUDE_SESSION_ENVIRONMENT_DENY_LIST,
+      ...(context.connection === undefined
+        ? {
+            envDenyList: CLAUDE_SESSION_ENVIRONMENT_DENY_LIST,
+          }
+        : {
+            env: { CLAUDE_CONFIG_DIR: context.connection.nativeContextRef },
+            envDenyList: CLAUDE_NAMED_AUTH_ENVIRONMENT_DENY_LIST,
+          }),
     };
   }
 

@@ -25,6 +25,7 @@ import {
 } from "../model-catalog.js";
 import { ClaudeAdapter } from "./claude.js";
 import { CodexAdapter } from "./codex.js";
+import { inspectNativeContextDirectory, redactNativeContextData } from "./environment.js";
 import { FakeProcessAdapter } from "./fake-process.js";
 import { FakeAdapter } from "./fake.js";
 
@@ -43,34 +44,25 @@ const EVIDENCE_RANK: Readonly<Record<EvidenceStatus, number>> = {
 
 const DISCOVERY_TTL_MS = 60_000;
 
-function redactContextReference(value: unknown, reference: string): unknown {
-  if (typeof value === "string") {
-    return value.replaceAll(reference, "[redacted]");
-  }
-  if (Array.isArray(value)) {
-    return value.map((entry: unknown) => redactContextReference(entry, reference));
-  }
-  if (typeof value === "object" && value !== null) {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>).map(([key, entry]) => [
-        key,
-        redactContextReference(entry, reference),
-      ]),
-    );
-  }
-  return value;
-}
-
 type DiscoveryOptions = {
   readonly refresh?: boolean;
   readonly connectionId?: string;
 };
 
+type DiscoverySnapshot = {
+  readonly routes: readonly RouteDescriptor[];
+  readonly executionExecutables: ReadonlyMap<string, string>;
+};
+
 type DiscoveryCache = {
   readonly expiresAt: number;
   readonly connectionsKey: string;
-  readonly routes: readonly RouteDescriptor[];
+  readonly snapshot: DiscoverySnapshot;
 };
+
+function connectionRevisionKey(id: string, revision: string): string {
+  return `${id}@${revision}`;
+}
 
 export class AdapterRegistry {
   readonly #adapters: ReadonlyMap<string, Adapter>;
@@ -106,7 +98,7 @@ export class AdapterRegistry {
 
   async discover(options: DiscoveryOptions = {}): Promise<readonly RouteDescriptor[]> {
     const connections = await loadUserConnections(this.#connectionsPath);
-    return this.#discoverSnapshot(connections, options);
+    return (await this.#discoverSnapshot(connections, options)).routes;
   }
 
   async resolve(
@@ -122,7 +114,7 @@ export class AdapterRegistry {
     const connectionId = request.selector.connectionId;
     const selectedConnection =
       connectionId === undefined ? undefined : this.#findConnection(connectionId, connections);
-    const routes = await this.#discoverSnapshot(
+    const snapshot = await this.#discoverSnapshot(
       connections,
       connectionId === undefined
         ? options.refresh === true
@@ -130,6 +122,7 @@ export class AdapterRegistry {
           : {}
         : { connectionId },
     );
+    const routes = snapshot.routes;
     const evaluated = routes.map((route) => {
       const adapter = this.#adapters.get(route.adapter);
       const policy: PolicyResolution = adapter?.resolvePolicy?.(request, route) ?? {
@@ -200,6 +193,7 @@ export class AdapterRegistry {
         retryable: false,
       });
     }
+    const executionExecutable = snapshot.executionExecutables.get(candidate.route.routeId);
     return {
       descriptor: candidate.route,
       route: {
@@ -232,14 +226,19 @@ export class AdapterRegistry {
       effectiveNativePolicy: candidate.policy.effectiveNativePolicy,
       ...(selectedConnection === undefined
         ? {}
-        : { connectionContext: adapterConnectionContext(selectedConnection) }),
+        : {
+            connectionContext: {
+              ...adapterConnectionContext(selectedConnection),
+              ...(executionExecutable === undefined ? {} : { executable: executionExecutable }),
+            },
+          }),
     };
   }
 
   async #discoverSnapshot(
     connections: readonly HarnessConnection[],
     options: DiscoveryOptions,
-  ): Promise<readonly RouteDescriptor[]> {
+  ): Promise<DiscoverySnapshot> {
     const connectionKey = JSON.stringify(connections);
     if (options.connectionId !== undefined) {
       const connection = this.#findConnection(options.connectionId, connections);
@@ -252,7 +251,7 @@ export class AdapterRegistry {
       this.#discoveryCache.expiresAt > Date.now() &&
       this.#discoveryCache.connectionsKey === connectionKey
     ) {
-      return this.#discoveryCache.routes;
+      return this.#discoveryCache.snapshot;
     }
 
     const defaultGroups = await Promise.all(
@@ -275,18 +274,19 @@ export class AdapterRegistry {
     ]
       .map((route) => ({ ...route, discoveredAt }))
       .sort((left, right) => left.routeId.localeCompare(right.routeId));
+    const snapshot = await this.#finalizeDiscoverySnapshot(routes, connections);
     this.#discoveryCache = {
       expiresAt: Date.now() + DISCOVERY_TTL_MS,
       connectionsKey: connectionKey,
-      routes,
+      snapshot,
     };
-    return routes;
+    return snapshot;
   }
 
   async #discoverOneConnection(
     connection: HarnessConnection,
     connections: readonly HarnessConnection[],
-  ): Promise<readonly RouteDescriptor[]> {
+  ): Promise<DiscoverySnapshot> {
     let routes: readonly RouteDescriptor[];
     try {
       routes = await this.#connectionRoutes(connection, true);
@@ -298,9 +298,38 @@ export class AdapterRegistry {
     }
     const catalog = await loadUserModelCatalog(this.#catalogPath);
     const discoveredAt = new Date().toISOString();
-    return applyUserModelCatalog(routes, catalog)
+    const discovered = applyUserModelCatalog(routes, catalog)
       .map((route) => ({ ...route, discoveredAt }))
       .sort((left, right) => left.routeId.localeCompare(right.routeId));
+    return this.#finalizeDiscoverySnapshot(discovered, connections);
+  }
+
+  async #finalizeDiscoverySnapshot(
+    routes: readonly RouteDescriptor[],
+    connections: readonly HarnessConnection[],
+  ): Promise<DiscoverySnapshot> {
+    const privateReferences = new Map<string, readonly string[]>();
+    await Promise.all(
+      connections.map(async (connection) => {
+        const nativeContext = await inspectNativeContextDirectory(connection.nativeContextRef);
+        privateReferences.set(
+          connectionRevisionKey(connection.id, connection.revision),
+          nativeContext?.privatePaths ?? [connection.nativeContextRef],
+        );
+      }),
+    );
+    const contextReferences = [...new Set([...privateReferences.values()].flat())];
+    const executionExecutables = new Map<string, string>();
+    const sanitizedRoutes = routes.map((route) => {
+      if (route.connectionId === undefined || route.connectionRevision === undefined) {
+        return route;
+      }
+      if (route.executable !== undefined) {
+        executionExecutables.set(route.routeId, route.executable);
+      }
+      return redactNativeContextData(route, contextReferences);
+    });
+    return { routes: sanitizedRoutes, executionExecutables };
   }
 
   async #connectionRoutes(
@@ -319,13 +348,9 @@ export class AdapterRegistry {
       const routes = await adapter.discoverConnection(context);
       const summary = summarizeConnection(connection);
       return routes.map((route) => {
-        const sanitizedRoute = redactContextReference(
-          route,
-          context.nativeContextRef,
-        ) as RouteDescriptor;
         return {
-          ...sanitizedRoute,
-          routeId: `${sanitizedRoute.routeId}:connection:${connection.id}@${connection.revision}`,
+          ...route,
+          routeId: `${route.routeId}:connection:${connection.id}@${connection.revision}`,
           connectionId: connection.id,
           connectionRevision: connection.revision,
           ...(summary.purpose === undefined ? {} : { connectionPurpose: summary.purpose }),

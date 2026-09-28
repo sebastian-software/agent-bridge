@@ -7,6 +7,10 @@ settings:
 importers:
 
   .:
+    dependencies:
+      smol-toml:
+        specifier: 1.8.0
+        version: 1.8.0
     devDependencies:
       '@modelcontextprotocol/sdk':
         specifier: ^1.30.0

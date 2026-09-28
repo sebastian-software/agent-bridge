@@ -1,12 +1,12 @@
 # Broader harness support, assisted setup, and multiple accounts
 
-Date: 2026-09-28
+Date: 2026-09-28; implementation status updated 2026-09-29
 
-Status: Product scope settled; technical design and integration qualification
-remain. Accepted directions are recorded in
+Status: Product scope settled; the connection contract (#145) is merged and
+bounded native-context fixtures are implemented. Live dual-account
+qualification and assisted setup remain. Accepted directions are recorded in
 [ADR-0024](../adr/0024-user-scoped-multiple-accounts-without-fallback.md) and
 [ADR-0025](../adr/0025-direct-local-model-access.md).
-This note does not describe implemented features.
 
 ## Delivery tracking
 
@@ -154,6 +154,28 @@ Codex and Claude adapters already pass model and optional effort parameters.
 Runtime qualification still needs to confirm account separation, supported
 model/effort combinations, and unchanged saved defaults, particularly for Grok.
 Unchanged defaults do not imply that native execution writes no session state.
+
+## Native-context fixture qualification
+
+The bounded native-context implementation selects Claude Code 2.1.282 through
+`CLAUDE_CONFIG_DIR` and Codex CLI 0.155.1 through `CODEX_HOME`. Claude named
+probes and runs load only the user settings source; unsupported selected-user
+`apiKeyHelper` and nonempty `env` settings fail closed. Codex named routes use
+the native OpenAI provider and reject parsed profile or provider overrides in
+the selected home, the system config, and the invocation's working-directory
+config layers. Codex's config order is documented in the
+[loader at the exact tested source commit](https://github.com/openai/codex/blob/be2951ea34f0d295ed0becf97079f92fa5f6950e/codex-rs/config/src/loader/mod.rs);
+the same commit's [authentication storage](https://github.com/openai/codex/blob/be2951ea34f0d295ed0becf97079f92fa5f6950e/codex-rs/login/src/auth/storage.rs)
+and [authentication manager](https://github.com/openai/codex/blob/be2951ea34f0d295ed0becf97079f92fa5f6950e/codex-rs/login/src/auth/manager.rs)
+are the references for native credential selection.
+
+The regression suite runs two fake Codex contexts concurrently in separate
+workspaces and checks project-config bypasses, inherited-key removal, and path
+redaction. It does not execute a live authenticated model or verify that two
+real account identities differ. Those claims remain unqualified until an
+opt-in runtime run records the installed versions and harness-reported
+identity evidence. Named labels and directories are not account identity
+evidence.
 
 ## Technical follow-up
 

@@ -277,7 +277,7 @@ test("connection routing keeps the default context and exposes no native referen
     assert.equal(named.connectionPurpose, connection.purpose);
     assert.notEqual(named.routeId, descriptor(adapter.id).routeId);
     assert.ok(!JSON.stringify(named).includes(connection.nativeContextRef));
-    assert.deepEqual(named.diagnostics, ["[redacted]"]);
+    assert.deepEqual(named.diagnostics, ["[redacted native context]"]);
 
     const scopedRoutes = await registry.discover({ connectionId: connection.id });
     assert.ok(scopedRoutes.length > 0);

@@ -34,6 +34,8 @@ export type AdapterConnectionContext = {
   readonly harness: string;
   readonly nativeContextRef: string;
   readonly revision: string;
+  /** Private executable captured from the same discovery snapshot as the route. */
+  readonly executable?: string;
   readonly purpose?: string;
 };
 
