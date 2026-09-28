@@ -25,6 +25,10 @@ alone is not delivery evidence, and the acknowledgement does not prove that the
 model consumed the input. The broker delivers accepted inputs in FIFO order per
 invocation. If the native adapter has no session-level acknowledgement or
 cannot preserve that order, omit the capability and handler.
+The handler must honor its `AbortSignal` and settle its work when aborted.
+`Broker.close()` waits for in-flight delivery tasks, so an uncooperative handler
+can prevent shutdown; adapter qualification must exercise this cancellation
+boundary.
 
 Terminal continuation is separate. A successful `run()` may return an opaque
 `continuationHandle` owned and interpreted by that adapter. The bridge retains

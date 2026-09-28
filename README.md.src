@@ -41,7 +41,12 @@ harness-relay run --provider anthropic --model opus --interaction deny \
 Use `--cwd` to select an absolute working directory. `deny` rejects native
 permission requests, while `unattended` opts into the harness's qualified
 non-interactive mode. `orchestrator` turns supported native requests into
-`input_required` events for `invocation.respond`; the Codex route currently
+permission `input_required` events for `invocation.respond`; free-form delegate
+questions use `invocation.answer`. Active input and linked continuation are
+separate operations (`invocation.send` and `invocation.continue`) and are only
+available when a route has qualified native behavior. The fake routes exercise
+these contracts; current native routes do not advertise steering or continuation.
+The Codex route currently
 supports `deny` and `unattended`, while the Claude route supports all three.
 
 The deterministic fake routes are useful for local tests:
