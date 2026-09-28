@@ -29,8 +29,15 @@ args = ["mcp", "serve"]
    the selector preserves the harness's normal native login.
 4. Follow progress with `harness_relay_invocation_events` using the returned
    cursors. Answer pending permission requests with
-   `harness_relay_invocation_respond`.
+   `harness_relay_invocation_respond`; answer general delegate questions with
+   `harness_relay_invocation_answer`.
 5. Call `harness_relay_invocation_result` after the terminal event.
+
+`harness_relay_invocation_send` queues additional input for an active native
+session when its route advertises steering. `harness_relay_invocation_continue`
+starts a new invocation linked to a terminal predecessor when a retained native
+session handle is available. Each operation reports its own capability errors;
+the broker does not silently restart or retarget a delegate.
 
 Only operations marked `implemented` in `system.describe` are advertised as
 MCP tools. Tool schemas are self-contained so hosts do not need to resolve

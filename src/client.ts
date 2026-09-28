@@ -3,12 +3,16 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 
 import type {
+  AnswerInputRequest,
+  ContinueInvocationRequest,
   EventsResult,
   InvocationEvent,
   InvocationListResult,
   InvocationOutcome,
   InvocationState,
   RouteDescriptor,
+  SendInvocationRequest,
+  SendInvocationResult,
   StartInvocationRequest,
   StartInvocationResult,
 } from "./contract.js";
@@ -38,6 +42,7 @@ export type InspectionResult = {
   readonly updatedAt: string;
   readonly startedAt?: string;
   readonly callerCorrelationId?: string;
+  readonly continuedFrom?: string;
   readonly requested: StartInvocationRequest["selector"];
   readonly resolved: Readonly<Record<string, unknown>>;
   readonly policy: Readonly<Record<string, unknown>>;
@@ -113,6 +118,9 @@ type OperationResultMap = {
   readonly "invocation.cancel": CancelResult;
   readonly "invocation.list": InvocationListResult;
   readonly "invocation.respond": Readonly<Record<string, unknown>>;
+  readonly "invocation.answer": Readonly<Record<string, unknown>>;
+  readonly "invocation.send": SendInvocationResult;
+  readonly "invocation.continue": StartInvocationResult;
   readonly "system.shutdown": Readonly<Record<string, unknown>>;
 };
 
@@ -163,6 +171,18 @@ export class HarnessRelayClient {
 
   async start(request: StartInvocationRequest): Promise<StartInvocationResult> {
     return this.#request("invocation.start", request);
+  }
+
+  async answer(request: AnswerInputRequest): Promise<Readonly<Record<string, unknown>>> {
+    return this.#request("invocation.answer", request);
+  }
+
+  async send(request: SendInvocationRequest): Promise<SendInvocationResult> {
+    return this.#request("invocation.send", request);
+  }
+
+  async continue(request: ContinueInvocationRequest): Promise<StartInvocationResult> {
+    return this.#request("invocation.continue", request);
   }
 
   async inspect(invocationId: string): Promise<InspectionResult> {

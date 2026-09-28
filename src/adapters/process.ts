@@ -333,6 +333,13 @@ export abstract class ProcessAdapter implements Adapter {
               ...(state.usage === undefined ? {} : { usage: state.usage }),
             });
             if (event.inputRequest !== undefined) {
+              if (event.inputRequest.kind !== "permission") {
+                throw new BridgeError({
+                  code: "unsupported_capability",
+                  message: "This process adapter does not implement general caller questions.",
+                  retryable: false,
+                });
+              }
               await context.emit({
                 ...event,
                 category: "input_required",

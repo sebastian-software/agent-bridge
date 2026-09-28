@@ -22,7 +22,10 @@ route descriptors. The JSON files in
 | `invocation.wait`            | Wait for terminal state with a maximum 30-second poll        | `invocation.result`                      |
 | `invocation.result`          | Read the immutable terminal outcome                          | —                                        |
 | `invocation.cancel`          | Request cancellation of active work                          | `invocation.events`                      |
-| `invocation.respond`         | Answer a pending permission request                          | `invocation.events`                      |
+| `invocation.respond`         | Allow or deny a pending permission request                   | `invocation.events`                      |
+| `invocation.answer`          | Answer a pending free-form delegate question                 | `invocation.events`                      |
+| `invocation.send`            | Queue additional input for an active native session          | `invocation.events`                      |
+| `invocation.continue`        | Start a linked invocation from a retained native session     | `invocation.events`, `invocation.cancel` |
 
 An invocation request contains a model-first `selector`, one or more typed
 `input` content parts, an absolute `workingDirectory`, an interaction strategy,
@@ -45,8 +48,12 @@ queued → running → waiting_for_input → running
 ```
 
 `waiting_for_input` is reachable only through adapters exposing a response
-channel: the fake interactive fixture and Claude's orchestrator route in this
-release. Deny and unattended routes do not enter that state.
+channel: the fake permission and question fixtures and Claude's orchestrator
+permission route in this release. Permission requests use `invocation.respond`
+with only `allow` or `deny`. General delegate questions use `invocation.answer`
+with caller-provided content parts. They are separate request kinds and cannot
+be answered through one another's operation. Deny and unattended routes do not
+enter the permission response state.
 
 Terminal states are `succeeded`, `failed`, `cancelled`, `timed_out`, and
 `interrupted`. A broker restart produces `interrupted`; a timeout produces
@@ -60,7 +67,8 @@ retention evicts them.
 Every event has the schema version, bridge-owned invocation ID, contiguous
 sequence, ISO timestamp, provenance, and an opaque cursor of the form
 `v1:<sequence>`. Categories are `lifecycle`, `activity`, `output`, `diagnostic`,
-`effect`, `usage`, `input_required`, and `input_accepted`.
+`effect`, `usage`, `input_required`, `input_answered`, `input_accepted`,
+`input_delivered`, `input_delivery_failed`, and `input_expired`.
 
 `invocation.events` returns events strictly after `after`. `waitMs` is bounded
 to 30 seconds. Empty pages are normal when the invocation is still active; the
@@ -68,9 +76,40 @@ caller repeats the request using `nextCursor`. The CLI `--follow` and typed
 client `follow()` implement this loop. Events are append-only and their native
 payload is bounded by default.
 
-An `input_required` event includes a stable request ID and a response shape.
-The caller answers with `invocation.respond`; unknown, already-answered, or
-expired request IDs are rejected rather than guessed.
+An `input_required` event includes a stable request ID, `kind` (`permission` or
+`question`), and prompt. Permission requests may also include a tool name. The
+caller answers the matching kind only; unknown, already-answered, or expired
+request IDs are rejected rather than guessed.
+The caller must poll or follow the event stream to observe updates; the relay
+does not guarantee waking or notifying an arbitrary host agent.
+
+`invocation.send` is a separate operation for active-session steering. The
+broker records `input_accepted` and returns immediately with delivery `pending`.
+It sends accepted inputs in FIFO order per invocation. `input_delivered` is
+recorded only after the adapter acknowledges acceptance at a native session
+boundary. The evidence says the input reached that boundary; it does not prove
+that the model consumed or acted on it. Sending input does not cancel or
+interrupt a running native tool call; it waits for a boundary supported by the
+route. Use `invocation.cancel` to request cancellation. Failed delivery and input left pending
+at cancellation, terminal completion, or broker restart are recorded as
+`input_delivery_failed` or `input_expired`. Repeating an identical send with
+the same per-invocation idempotency key returns its existing input ID; reusing
+that key for different content is a conflict. Native send is available only
+when both the route capability and adapter handler are implemented. The fake
+fixture exercises this contract; current native adapters do not advertise
+active-session input support.
+
+`invocation.continue` is a separate operation that creates a new invocation
+linked by `continuedFrom`; it never changes the predecessor's terminal outcome.
+The broker clones the predecessor's selector, strategy, requested policy, and
+workspace, replacing only the input and idempotency key. The adapter-owned
+continuation handle is not caller supplied or exposed through IPC. Before
+continuing, the broker freshly resolves the original request and rejects a
+changed or ambiguous route, requested effort/strategy, account revision, or
+effective policy. Missing or expired native handles and routes without the
+continuation capability fail explicitly; the broker does not restart without
+the retained session or fall back to a different route. The fake fixture
+exercises linked continuation; current native adapters do not advertise it.
 
 ## Outcomes
 

@@ -13,6 +13,8 @@ import {
 } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
+import type { AdapterContinuationHandle } from "./adapters/types.js";
+
 import {
   type Assurance,
   type EventCategory,
@@ -40,14 +42,26 @@ import {
 } from "./contract.js";
 import { BridgeError } from "./errors.js";
 
+export type StoredAcceptedInput = {
+  readonly inputId: string;
+  readonly idempotencyKey: string;
+  readonly digest: string;
+  readonly delivery: "delivered" | "expired" | "failed" | "pending";
+};
+
+export type StoredInvocationRecord = {
+  readonly continuationHandle?: AdapterContinuationHandle;
+  readonly acceptedInputs?: readonly StoredAcceptedInput[];
+} & InvocationRecord;
+
 type PersistedState = {
   readonly storageVersion: 1;
-  readonly invocations: readonly InvocationRecord[];
+  readonly invocations: readonly StoredInvocationRecord[];
   readonly tombstones: readonly InvocationTombstone[];
 };
 
 export type StoreSnapshot = {
-  readonly invocations: readonly InvocationRecord[];
+  readonly invocations: readonly StoredInvocationRecord[];
   readonly tombstones: readonly InvocationTombstone[];
 };
 
@@ -293,6 +307,10 @@ function parseEvent(
       "diagnostic",
       "effect",
       "input_accepted",
+      "input_answered",
+      "input_delivered",
+      "input_delivery_failed",
+      "input_expired",
       "input_required",
       "lifecycle",
       "output",
@@ -380,7 +398,51 @@ function parseOutcome(
   };
 }
 
-function parseInvocation(value: unknown, index: number): InvocationRecord {
+function parseContinuationHandle(
+  value: unknown,
+  field: string,
+): AdapterContinuationHandle | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const source = objectValue(value, field);
+  const expiresAt = optionalString(source.expiresAt, `${field}.expiresAt`);
+  if (expiresAt !== undefined && !Number.isFinite(Date.parse(expiresAt))) {
+    corrupt(`${field}.expiresAt must be an ISO-8601 timestamp.`);
+  }
+  return {
+    reference: requiredString(source.reference, `${field}.reference`),
+    ...(expiresAt === undefined ? {} : { expiresAt }),
+  };
+}
+
+function parseAcceptedInputs(
+  value: unknown,
+  field: string,
+): readonly StoredAcceptedInput[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    corrupt(`${field} must be an array.`);
+  }
+  return value.map((entry, index) => {
+    const input = objectValue(entry, `${field}[${index}]`);
+    return {
+      inputId: requiredString(input.inputId, `${field}[${index}].inputId`),
+      idempotencyKey: requiredString(input.idempotencyKey, `${field}[${index}].idempotencyKey`),
+      digest: requiredString(input.digest, `${field}[${index}].digest`),
+      delivery: literal(input.delivery, `${field}[${index}].delivery`, [
+        "pending",
+        "delivered",
+        "failed",
+        "expired",
+      ] as const),
+    };
+  });
+}
+
+function parseInvocation(value: unknown, index: number): StoredInvocationRecord {
   const field = `invocations[${index}]`;
   const source = objectValue(value, field);
   if (source.schemaVersion !== SCHEMA_VERSION) {
@@ -439,6 +501,12 @@ function parseInvocation(value: unknown, index: number): InvocationRecord {
     `${field}.callerCorrelationId`,
   );
   const idempotencyKey = optionalString(source.idempotencyKey, `${field}.idempotencyKey`);
+  const continuedFrom = optionalString(source.continuedFrom, `${field}.continuedFrom`);
+  const continuationHandle = parseContinuationHandle(
+    source.continuationHandle,
+    `${field}.continuationHandle`,
+  );
+  const acceptedInputs = parseAcceptedInputs(source.acceptedInputs, `${field}.acceptedInputs`);
   const startedAt = optionalString(source.startedAt, `${field}.startedAt`);
   return {
     schemaVersion: SCHEMA_VERSION,
@@ -446,6 +514,9 @@ function parseInvocation(value: unknown, index: number): InvocationRecord {
     ...(callerCorrelationId === undefined ? {} : { callerCorrelationId }),
     ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
     requestDigest: requiredString(source.requestDigest, `${field}.requestDigest`),
+    ...(continuedFrom === undefined ? {} : { continuedFrom }),
+    ...(continuationHandle === undefined ? {} : { continuationHandle }),
+    ...(acceptedInputs === undefined ? {} : { acceptedInputs }),
     request,
     resolvedRoute,
     policy,
@@ -560,7 +631,7 @@ export class InvocationStore {
   }
 
   async save(
-    invocations: readonly InvocationRecord[],
+    invocations: readonly StoredInvocationRecord[],
     tombstones: readonly InvocationTombstone[] = [],
   ): Promise<void> {
     const work = async (): Promise<void> => {
@@ -607,7 +678,7 @@ export class InvocationStore {
   }
 
   async #loadDirectory(): Promise<StoreSnapshot> {
-    const invocations: InvocationRecord[] = [];
+    const invocations: StoredInvocationRecord[] = [];
     let entries: Dirent[];
     try {
       entries = await readdir(this.#invocationsDirectory, { withFileTypes: true });
@@ -704,7 +775,7 @@ export class InvocationStore {
     return join(this.#invocationsDirectory, encodeURIComponent(invocationId));
   }
 
-  async #writeRecords(invocations: readonly InvocationRecord[]): Promise<void> {
+  async #writeRecords(invocations: readonly StoredInvocationRecord[]): Promise<void> {
     for (const record of invocations) {
       const directory = this.#invocationDirectory(record.invocationId);
       await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -844,13 +915,19 @@ export class InvocationStore {
   }
 }
 
-function metadataChanged(previous: InvocationRecord, current: InvocationRecord): boolean {
+function metadataChanged(
+  previous: StoredInvocationRecord,
+  current: StoredInvocationRecord,
+): boolean {
   return (
     previous.schemaVersion !== current.schemaVersion ||
     previous.invocationId !== current.invocationId ||
     previous.callerCorrelationId !== current.callerCorrelationId ||
     previous.idempotencyKey !== current.idempotencyKey ||
     previous.requestDigest !== current.requestDigest ||
+    previous.continuedFrom !== current.continuedFrom ||
+    previous.continuationHandle !== current.continuationHandle ||
+    previous.acceptedInputs !== current.acceptedInputs ||
     previous.request !== current.request ||
     previous.resolvedRoute !== current.resolvedRoute ||
     previous.policy !== current.policy ||

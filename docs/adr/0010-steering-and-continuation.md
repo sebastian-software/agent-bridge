@@ -25,7 +25,10 @@ such as between tool calls. Sending a message does not automatically cancel a
 running command; cancellation remains a separate operation. Broker acceptance
 and observed native delivery are separate evidence, and neither implies that
 the model has acted on the instruction. This delivery policy was clarified on
-2026-09-28; the operations remain planned until their adapters are qualified.
+2026-09-28. The broker operations were implemented on 2026-09-29 with
+deterministic fake-harness coverage. Native adapters remain unqualified for
+steering and continuation until their native behavior is tested and advertised
+individually.
 
 After an invocation reaches a terminal state, its outcome is immutable.
 `invocation.continue` creates a new invocation with a new identity, links it to

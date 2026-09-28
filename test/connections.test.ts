@@ -58,7 +58,7 @@ function request(root: string, connectionId?: string): StartInvocationRequest {
   };
 }
 
-function descriptor(adapter: string): RouteDescriptor {
+function descriptor(adapter: string, continuation = false): RouteDescriptor {
   return {
     routeId: `${adapter}:fixture-model`,
     provider: "connection-fixture",
@@ -68,7 +68,11 @@ function descriptor(adapter: string): RouteDescriptor {
     adapter,
     harnessVersion: "1.0.0",
     authenticationMode: "fixture",
-    capabilities: ["core.input.text", "core.output.text"],
+    capabilities: [
+      "core.input.text",
+      "core.output.text",
+      ...(continuation ? ["continuation"] : []),
+    ],
     interactionStrategies: ["deny"],
     assurance: "native",
     runtimeIdentityEvidence: "unverified",
@@ -103,15 +107,19 @@ function fixtureResult(): AdapterRunResult {
 class ConnectionFixtureAdapter implements Adapter {
   readonly id = "connection-fixture";
   readonly discoveredReferences: string[] = [];
+  readonly seenConnections: AdapterConnectionContext[] = [];
+  readonly seenContinuationHandles: Array<string | undefined> = [];
   seenConnection: AdapterConnectionContext | undefined;
   readonly discoveryStarted = deferred();
   readonly discoveryGate = deferred();
   readonly runStarted = deferred();
   readonly runGate = deferred();
   readonly #waitForDiscovery: boolean;
+  readonly #continuationCapable: boolean;
 
-  constructor(waitForDiscovery = false) {
+  constructor(waitForDiscovery = false, continuationCapable = false) {
     this.#waitForDiscovery = waitForDiscovery;
+    this.#continuationCapable = continuationCapable;
   }
 
   async discover(): Promise<readonly RouteDescriptor[]> {
@@ -126,7 +134,12 @@ class ConnectionFixtureAdapter implements Adapter {
     if (this.#waitForDiscovery) {
       await this.discoveryGate.promise;
     }
-    return [{ ...descriptor(this.id), diagnostics: [connection.nativeContextRef] }];
+    return [
+      {
+        ...descriptor(this.id, this.#continuationCapable),
+        diagnostics: [connection.nativeContextRef],
+      },
+    ];
   }
 
   async run(_context: AdapterRunContext): Promise<AdapterRunResult> {
@@ -135,9 +148,16 @@ class ConnectionFixtureAdapter implements Adapter {
 
   async runConnection(context: AdapterConnectionRunContext): Promise<AdapterRunResult> {
     this.seenConnection = context.connection;
+    this.seenConnections.push(context.connection);
+    this.seenContinuationHandles.push(context.continuationHandle?.reference);
     this.runStarted.resolve();
     await this.runGate.promise;
-    return fixtureResult();
+    return {
+      ...fixtureResult(),
+      ...(this.#continuationCapable
+        ? { continuationHandle: { reference: "fixture-native-session" } }
+        : {}),
+    };
   }
 
   releaseDiscovery(): void {
@@ -363,6 +383,83 @@ test("an invocation keeps its resolved connection snapshot after registration ch
   } finally {
     adapter.releaseDiscovery();
     adapter.releaseRun();
+    await broker.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("continuation reuses only the original connection revision and rejects replacement or removal", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-relay-connections-continuation-"));
+  const connectionsPath = join(root, "connections.json");
+  const original = await makeConnection(connectionsPath);
+  const adapter = new ConnectionFixtureAdapter(false, true);
+  adapter.releaseRun();
+  const broker = new Broker(brokerPaths(root), {
+    registry: new AdapterRegistry([adapter], {
+      catalogPath: join(root, "models.json"),
+      connectionsPath,
+    }),
+  });
+  await broker.initialize();
+  try {
+    const started = await broker.start(request(root, original.id));
+    const predecessor = await waitForTerminal(broker, started.invocationId);
+    const predecessorRoute = predecessor.resolved as Record<string, unknown>;
+    assert.equal(predecessorRoute.connectionId, original.id);
+    assert.equal(predecessorRoute.connectionRevision, original.revision);
+
+    const continuation = await broker.execute("invocation.continue", {
+      invocationId: started.invocationId,
+      input: [{ type: "text", text: "continue in the same native context" }],
+      idempotencyKey: "connection-continuation-1",
+    });
+    const continuedId = (continuation as { invocationId: string }).invocationId;
+    const continued = await waitForTerminal(broker, continuedId);
+    const continuedRoute = continued.resolved as Record<string, unknown>;
+    assert.equal(continuedRoute.connectionId, original.id);
+    assert.equal(continuedRoute.connectionRevision, original.revision);
+    assert.deepEqual(adapter.seenContinuationHandles, [undefined, "fixture-native-session"]);
+    assert.deepEqual(
+      adapter.seenConnections.map(({ nativeContextRef, revision }) => ({
+        nativeContextRef,
+        revision,
+      })),
+      [
+        { nativeContextRef: original.nativeContextRef, revision: original.revision },
+        { nativeContextRef: original.nativeContextRef, revision: original.revision },
+      ],
+    );
+    assert.ok(!JSON.stringify([predecessor, continued]).includes(original.nativeContextRef));
+
+    const replacement = updateHarnessConnection(original, {
+      id: original.id,
+      harness: original.harness,
+      nativeContextRef: "/private/native/context-replacement",
+      purpose: "implementation",
+    });
+    await writeUserConnections([replacement], connectionsPath);
+    await assert.rejects(
+      broker.execute("invocation.continue", {
+        invocationId: started.invocationId,
+        input: [{ type: "text", text: "must not use a replacement login" }],
+        idempotencyKey: "connection-continuation-replaced",
+      }),
+      (error: unknown) =>
+        error instanceof BridgeError && error.code === "continuation_route_changed",
+    );
+    await writeUserConnections([], connectionsPath);
+    await assert.rejects(
+      broker.execute("invocation.continue", {
+        invocationId: started.invocationId,
+        input: [{ type: "text", text: "must not use a removed login" }],
+        idempotencyKey: "connection-continuation-removed",
+      }),
+      (error: unknown) =>
+        error instanceof BridgeError && error.code === "continuation_route_changed",
+    );
+    assert.equal(adapter.seenConnections.length, 2);
+    assert.ok(!JSON.stringify(adapter.seenConnections).includes(replacement.nativeContextRef));
+  } finally {
     await broker.close();
     await rm(root, { recursive: true, force: true });
   }

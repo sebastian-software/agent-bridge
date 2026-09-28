@@ -3,7 +3,9 @@ import test from "node:test";
 
 import {
   IPC_PROTOCOL_VERSION,
+  parseAnswerParams,
   parseOperationRequest,
+  parseSendInvocationParams,
   parseStartInvocationRequest,
 } from "../src/contract.js";
 import { BridgeError } from "../src/errors.js";
@@ -83,5 +85,46 @@ test("IPC requests require the negotiated protocol version", () => {
         params: {},
       }),
     (error: unknown) => error instanceof BridgeError && error.code === "protocol_version_mismatch",
+  );
+});
+
+test("dialogue requests require non-empty content and idempotency keys", () => {
+  assert.deepEqual(
+    parseSendInvocationParams({
+      invocationId: "inv_1",
+      input: [{ type: "text", text: "clarify the result" }],
+      idempotencyKey: "send_1",
+    }),
+    {
+      invocationId: "inv_1",
+      input: [{ type: "text", text: "clarify the result" }],
+      idempotencyKey: "send_1",
+    },
+  );
+  assert.deepEqual(
+    parseAnswerParams({
+      invocationId: "inv_1",
+      requestId: "question_1",
+      answer: [{ type: "text", text: "inspect the tests" }],
+    }).answer,
+    [{ type: "text", text: "inspect the tests" }],
+  );
+  assert.throws(
+    () =>
+      parseSendInvocationParams({
+        invocationId: "inv_1",
+        input: [],
+        idempotencyKey: "send_1",
+      }),
+    (error: unknown) => error instanceof BridgeError && error.code === "invalid_request",
+  );
+  assert.throws(
+    () =>
+      parseSendInvocationParams({
+        invocationId: "inv_1",
+        input: [{ type: "text", text: "content" }],
+        idempotencyKey: "",
+      }),
+    (error: unknown) => error instanceof BridgeError && error.code === "invalid_request",
   );
 });

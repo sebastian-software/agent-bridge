@@ -18,6 +18,9 @@ command that needs a broker starts the user-owned daemon automatically.
 | `wait <id>`                              | Poll once for up to 30 seconds, or use `--until-terminal`                                  |
 | `result <id>`                            | Read the immutable terminal outcome                                                        |
 | `cancel <id>`                            | Request cancellation                                                                       |
+| `answer <id>`                            | Answer a pending free-form delegate question                                               |
+| `send <id>`                              | Send additional input to a qualified active session                                        |
+| `continue <id>`                          | Start a linked invocation from a retained native session                                   |
 | `broker status` / `stop` / `restart`     | Inspect or control the broker                                                              |
 | `broker logs`                            | Read or follow the broker log                                                              |
 | `request <operation>`                    | Send any operation with JSON params                                                        |
@@ -46,6 +49,14 @@ Other start options are `--effort`, `--via`, `--connection`, repeatable `--capab
 JSON mode, followed by the complete outcome. It exits zero only for
 `succeeded`; SIGINT requests cancellation before returning. The equivalent
 programmatic convenience is `createClient().run(request)`.
+
+`answer <id> --request-id <request> --text <answer>` responds to a general
+delegate question. Permission requests remain allow/deny-only through
+`invocation.respond` (or `request invocation.respond`). `send <id>` queues
+active-session input and requires `--idempotency-key`; its response distinguishes
+broker acceptance from native-session delivery. `continue <id>` also requires
+an idempotency key and starts a new invocation linked to the terminal one. Use
+`--input-json` or `--prompt-file` when the content is not plain text.
 
 ## Reading progress
 

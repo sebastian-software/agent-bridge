@@ -216,7 +216,7 @@ export const OPERATION_DEFINITIONS: readonly OperationDefinition[] = [
   },
   {
     name: "invocation.respond",
-    summary: "Answer a pending Claude permission request in orchestrator mode.",
+    summary: "Allow or deny a pending permission request in orchestrator mode.",
     availability: "implemented",
     cli: ["request invocation.respond --params <json> --json"],
     input: {
@@ -227,20 +227,55 @@ export const OPERATION_DEFINITIONS: readonly OperationDefinition[] = [
     output: { type: "object", required: ["invocationId", "requestId", "accepted"] },
   },
   {
+    name: "invocation.answer",
+    summary: "Answer a pending free-form delegate question.",
+    availability: "implemented",
+    cli: ["answer <invocation-id> --request-id <id> --text <text> [--json]"],
+    input: {
+      type: "object",
+      required: ["invocationId", "requestId", "answer"],
+      properties: {
+        invocationId: { type: "string", minLength: 1 },
+        requestId: { type: "string", minLength: 1 },
+        answer: { type: "array", minItems: 1 },
+      },
+    },
+    output: { type: "object", required: ["invocationId", "requestId", "accepted"] },
+  },
+  {
     name: "invocation.send",
     summary: "Steer an active invocation through a qualified native capability.",
-    availability: "planned",
-    cli: [],
-    input: { type: "object" },
-    output: { type: "object" },
+    availability: "implemented",
+    cli: ["send <invocation-id> --idempotency-key <key> --text <text> [--json]"],
+    input: {
+      type: "object",
+      required: ["invocationId", "input", "idempotencyKey"],
+      properties: {
+        invocationId: { type: "string", minLength: 1 },
+        input: { type: "array", minItems: 1 },
+        idempotencyKey: { type: "string", minLength: 1 },
+      },
+    },
+    output: {
+      type: "object",
+      required: ["invocationId", "inputId", "accepted", "deduplicated", "delivery"],
+    },
   },
   {
     name: "invocation.continue",
     summary: "Create a linked invocation using a qualified native continuation.",
-    availability: "planned",
-    cli: [],
-    input: { type: "object" },
-    output: { type: "object" },
+    availability: "implemented",
+    cli: ["continue <invocation-id> --idempotency-key <key> --text <text> [--json]"],
+    input: {
+      type: "object",
+      required: ["invocationId", "input", "idempotencyKey"],
+      properties: {
+        invocationId: { type: "string", minLength: 1 },
+        input: { type: "array", minItems: 1 },
+        idempotencyKey: { type: "string", minLength: 1 },
+      },
+    },
+    output: { type: "object", required: ["invocationId", "state", "deduplicated", "next"] },
   },
   {
     name: "invocation.delete",
