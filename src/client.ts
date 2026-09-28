@@ -153,9 +153,12 @@ export class HarnessRelayClient {
   }
 
   async routes(
-    options: { readonly refresh?: boolean } = {},
+    options: { readonly refresh?: boolean; readonly connectionId?: string } = {},
   ): Promise<{ readonly routes: readonly RouteDescriptor[] }> {
-    return this.#request("route.discover", { refresh: options.refresh ?? false });
+    return this.#request("route.discover", {
+      refresh: options.refresh ?? false,
+      ...(options.connectionId === undefined ? {} : { connectionId: options.connectionId }),
+    });
   }
 
   async start(request: StartInvocationRequest): Promise<StartInvocationResult> {

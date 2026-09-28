@@ -134,6 +134,11 @@ function parseResolvedRoute(value: unknown, field: string): ResolvedRoute {
   const canonicalModel = optionalString(source.canonicalModel, `${field}.canonicalModel`);
   const nativeModel = optionalString(source.nativeModel, `${field}.nativeModel`);
   const effort = optionalString(source.effort, `${field}.effort`);
+  const connectionId = optionalString(source.connectionId, `${field}.connectionId`);
+  const connectionRevision = optionalString(
+    source.connectionRevision,
+    `${field}.connectionRevision`,
+  );
   return {
     routeId: requiredString(source.routeId, `${field}.routeId`),
     ...(executable === undefined ? {} : { executable }),
@@ -146,6 +151,8 @@ function parseResolvedRoute(value: unknown, field: string): ResolvedRoute {
     model: requiredString(source.model, `${field}.model`),
     ...(effort === undefined ? {} : { effort }),
     via: requiredString(source.via, `${field}.via`),
+    ...(connectionId === undefined ? {} : { connectionId }),
+    ...(connectionRevision === undefined ? {} : { connectionRevision }),
     capabilities: stringList(source.capabilities, `${field}.capabilities`),
     qualification: parseQualification(source.qualification, `${field}.qualification`),
   };

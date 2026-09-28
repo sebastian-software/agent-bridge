@@ -27,8 +27,13 @@ route descriptors. The JSON files in
 An invocation request contains a model-first `selector`, one or more typed
 `input` content parts, an absolute `workingDirectory`, an interaction strategy,
 and a requested policy. `selector.via` disambiguates harness family without
-turning a provider into a harness. Route resolution never silently substitutes
-the requested model, effort, or harness.
+turning a provider into a harness. Optional `selector.connectionId` selects one
+user-global native context. Omitting it keeps the harness's normal login even
+when named connections are registered. Discovery accepts the same
+`connectionId`; its named route IDs and `connectionRevision` identify the
+registration snapshot used for resolution. The native context reference stays
+inside the broker and qualified adapter. Route resolution never silently
+substitutes the requested model, effort, harness, or connection.
 
 ## State machine
 
@@ -94,6 +99,14 @@ route ID, timestamps, working directory, state, and correlation metadata.
 `includeTombstones` returns IDs evicted by retention without exposing their
 payloads. Completed records are retained by age and total byte budget at
 invocation granularity.
+
+Named native connections are stored user-globally in
+`connections.json` beside the Relay user configuration file (under
+`XDG_CONFIG_HOME`, or `~/.config` by default). The file stores adapter
+references and optional purpose text, never copied credentials. Registration
+updates are validated before an atomic file replacement. A running invocation
+keeps the connection revision it resolved, so a later update or removal cannot
+retarget it.
 
 The default state layout is a private directory containing a manifest,
 per-invocation metadata, append-only events, outcomes, and tombstones. Native

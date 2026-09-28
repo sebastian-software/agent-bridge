@@ -122,3 +122,126 @@ test("user aliases preserve a native harness alias separately from its canonical
   assert.equal(quick?.canonicalModel, "claude-opus-4-8");
   assert.equal(quick?.nativeModel, "opus");
 });
+
+test("model aliases preserve readiness and identity evidence per connection", async () => {
+  const [template] = await new FakeAdapter().discover();
+  assert.ok(template);
+  const routes: RouteDescriptor[] = [
+    {
+      ...template,
+      routeId: "fake:source",
+      model: "source",
+      runtimeIdentityEvidence: "reported",
+      readiness: "ready",
+      authenticationMode: "default-login",
+      qualification: [
+        {
+          qualificationId: "default-context",
+          testedAt: "2026-09-28T00:00:00.000Z",
+          claim: "Default fixture.",
+        },
+      ],
+    },
+    {
+      ...template,
+      routeId: "fake:source:connection:alpha@revision-alpha",
+      model: "source",
+      connectionId: "alpha",
+      connectionRevision: "revision-alpha",
+      runtimeIdentityEvidence: "unverified",
+      readiness: "unavailable",
+      authenticationMode: "alpha-context",
+      qualification: [
+        {
+          qualificationId: "alpha-context",
+          testedAt: "2026-09-28T00:00:00.000Z",
+          claim: "Alpha fixture.",
+        },
+      ],
+    },
+    {
+      ...template,
+      routeId: "fake:source:connection:beta@revision-beta",
+      model: "source",
+      connectionId: "beta",
+      connectionRevision: "revision-beta",
+      runtimeIdentityEvidence: "verified",
+      readiness: "ready",
+      authenticationMode: "beta-context",
+      qualification: [
+        {
+          qualificationId: "beta-context",
+          testedAt: "2026-09-28T00:00:00.000Z",
+          claim: "Beta fixture.",
+        },
+      ],
+    },
+  ];
+
+  const aliases = applyUserModelCatalog(routes, {
+    adapters: { fake: { aliases: { quick: "source" } } },
+  }).filter((route) => route.model === "quick");
+
+  assert.equal(aliases.length, 3);
+  const byConnection = new Map(aliases.map((route) => [route.connectionId, route]));
+  const defaultAlias = byConnection.get(undefined);
+  const alphaAlias = byConnection.get("alpha");
+  const betaAlias = byConnection.get("beta");
+  assert.equal(defaultAlias?.routeId, "fake:quick");
+  assert.equal(alphaAlias?.routeId, "fake:quick:connection:alpha@revision-alpha");
+  assert.equal(betaAlias?.routeId, "fake:quick:connection:beta@revision-beta");
+  assert.deepEqual(
+    [defaultAlias, alphaAlias, betaAlias].map((route) => ({
+      readiness: route?.readiness,
+      identity: route?.runtimeIdentityEvidence,
+      authenticationMode: route?.authenticationMode,
+      qualificationId: route?.qualification[0]?.qualificationId,
+    })),
+    [
+      {
+        readiness: "ready",
+        identity: "reported",
+        authenticationMode: "default-login",
+        qualificationId: "default-context",
+      },
+      {
+        readiness: "unavailable",
+        identity: "unverified",
+        authenticationMode: "alpha-context",
+        qualificationId: "alpha-context",
+      },
+      {
+        readiness: "ready",
+        identity: "verified",
+        authenticationMode: "beta-context",
+        qualificationId: "beta-context",
+      },
+    ],
+  );
+});
+
+test("resolver refresh bypasses its default-route discovery cache", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-relay-route-refresh-"));
+  const adapter = new CountingAdapter();
+  try {
+    const registry = new AdapterRegistry([adapter], {
+      catalogPath: join(root, "models.json"),
+      connectionsPath: join(root, "connections.json"),
+    });
+    const request = {
+      selector: { provider: "counting", model: "test", via: "counting", requiredCapabilities: [] },
+      input: [{ type: "text" as const, text: "refresh route" }],
+      workingDirectory: root,
+      interactionStrategy: "deny" as const,
+      requestedPolicy: { minimumAssurance: "none" as const },
+    };
+
+    await registry.resolve(request);
+    await registry.resolve(request);
+    assert.equal(adapter.calls, 1);
+    await registry.resolve(request, { refresh: true });
+    assert.equal(adapter.calls, 2);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

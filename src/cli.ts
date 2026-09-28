@@ -18,7 +18,7 @@ const HELP = `harness-relay — local harness delegation gateway
 
 Usage:
   harness-relay describe [--json]
-  harness-relay routes [--refresh] [--json]
+  harness-relay routes [--connection <id>] [--refresh] [--json]
   harness-relay start --provider <id> --model <id> --text <text> [options]
   harness-relay run --provider <id> --model <id> [options] [prompt]
   harness-relay list [--active] [--correlation <id>] [--json]
@@ -39,6 +39,7 @@ Usage:
 Start options:
   --effort <level>              Requested effort level
   --via <harness>               Required harness family
+  --connection <id>             Named native connection; omit to use the default login
   --capability <id>             Required capability; repeatable
   --cwd <absolute-path>         Working directory; defaults to the current directory
   --timeout-ms <milliseconds>   Positive invocation timeout
@@ -386,6 +387,7 @@ async function startParams(parsed: ParsedArguments): Promise<Readonly<Record<str
   const model = requiredOption(parsed, "model");
   const effort = option(parsed, "effort");
   const via = option(parsed, "via");
+  const connectionId = option(parsed, "connection");
   const evidence = option(parsed, "evidence");
   const timeoutMs = positiveInteger(option(parsed, "timeout-ms"), "timeout-ms");
   const idempotencyKey = option(parsed, "idempotency-key");
@@ -401,6 +403,7 @@ async function startParams(parsed: ParsedArguments): Promise<Readonly<Record<str
       model,
       ...(effort === undefined ? {} : { effort }),
       ...(via === undefined ? {} : { via }),
+      ...(connectionId === undefined ? {} : { connectionId }),
       requiredCapabilities: parsed.options.get("capability") ?? [],
       ...(evidence === undefined ? {} : { minimumObservedEvidence: evidence }),
     },
@@ -430,7 +433,7 @@ function routeTable(value: unknown): string {
     return JSON.stringify(value, null, 2);
   }
   const lines = [
-    "ROUTE                              READINESS    VERSION       AUTH       STRATEGIES",
+    "ROUTE                              CONNECTION       READINESS    VERSION       AUTH       STRATEGIES",
   ];
   for (const route of value.routes) {
     if (typeof route !== "object" || route === null) continue;
@@ -439,7 +442,7 @@ function routeTable(value: unknown): string {
       ? item.interactionStrategies.join(",")
       : "";
     lines.push(
-      `${String(item.routeId ?? "").padEnd(34)} ${String(item.readiness ?? "").padEnd(11)} ${String(item.harnessVersion ?? "").padEnd(13)} ${String(item.authenticationMode ?? "").padEnd(10)} ${strategies}`,
+      `${String(item.routeId ?? "").padEnd(34)} ${String(item.connectionId ?? "default").padEnd(16)} ${String(item.readiness ?? "").padEnd(11)} ${String(item.harnessVersion ?? "").padEnd(13)} ${String(item.authenticationMode ?? "").padEnd(10)} ${strategies}`,
     );
   }
   return lines.join("\n");
@@ -710,8 +713,10 @@ async function runCommand(argv: readonly string[]): Promise<void> {
     return;
   }
   if (command === "routes") {
+    const connectionId = option(parsed, "connection");
     const routes = await requestBroker("route.discover", {
       refresh: parsed.options.has("refresh"),
+      ...(connectionId === undefined ? {} : { connectionId }),
     });
     if (json) {
       output(routes, true);
