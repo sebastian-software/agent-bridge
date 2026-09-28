@@ -1,6 +1,6 @@
 # Pi local-agent qualification
 
-Date: 2026-09-28. Decision: [ADR-0025](../adr/0025-direct-local-model-access.md).
+Date: 2026-09-29. Decision: [ADR-0025](../adr/0025-direct-local-model-access.md).
 
 Pi is the selected full agent runtime for the planned local-model routes.
 This initial spike validates the installed SDK and its built-in tools against
@@ -49,6 +49,44 @@ These observations support proceeding with the Pi adapter. They do not establish
 model competence, performance, OS sandbox enforcement, crash recovery, arbitrary
 process-tree cleanup, cross-account isolation, or support on other platforms.
 
+## Private worker implementation
+
+Relay now has an internal Pi adapter and supervised worker foundation, but the
+adapter is deliberately absent from the default registry and discovers no
+routes. This is not a production-ready Ollama or LM Studio route.
+
+The worker uses the pinned full SDK's agent session and built-in coding tools.
+Relay replaces only Pi's BashOperations execution seam so its headless worker
+can register a process group with the host before a command executes. The
+worker-host protocol is bounded; the worker drains command output while the
+host drains protocol output, tracks each registered group, cleans it on normal
+completion, cancellation, or malformed worker output, and retains the best
+observed partial text. The runner also receives Pi's command timeout, which
+still needs a dedicated qualification case. Pi retries are disabled. A
+fixture-backed HTTP 429 produces one model
+request and a failed outcome. Large tool output follows Pi's truncation
+behavior and preserves its tail. These tests use a scripted endpoint and do
+not qualify any real model or provider.
+
+The worker explicitly passes empty system-prompt overrides to Pi's resource
+loader, which prevents project and global `SYSTEM.md` and `APPEND_SYSTEM.md`
+files from being discovered; Pi still supplies its built-in coding-agent
+prompt. Extensions, skills, prompt templates, themes, and project context files
+are disabled. Requested policies the worker cannot enforce are rejected. This
+process supervision is not an OS sandbox and does not support `workspace-write`
+or `network=deny` enforcement.
+
+`@earendil-works/pi-coding-agent` 0.87.1 is an optional package dependency;
+normal installs still install optional dependencies. Pi execution requires
+Node >=22.19.0, checked only when the private worker starts. Core imports, the
+CLI, and Claude/Codex discovery are smoke-tested from a packed installation
+with optional dependencies omitted. Without Pi installed, Pi execution reports
+that it is unavailable instead of preventing the rest of Relay from starting.
+
+The private worker is one-shot and uses an in-memory Pi session. It does not
+advertise steering, continuation, or questions, and it does not resume a
+session across worker processes.
+
 ## Integration consequences
 
 - Evaluate assistant stop reasons and errors before producing Relay's terminal
@@ -72,11 +110,13 @@ process-tree cleanup, cross-account isolation, or support on other platforms.
 1. Exercise actual local inference independently through Ollama and LM Studio:
    discovery, explicit model selection, streamed tool calls, model limitations,
    server failure, and cancellation. The fixture cannot establish compatibility.
-2. Qualify the production worker protocol, shutdown on parent exit, timeouts,
-   partial outcomes, policy mapping, and resource/credential isolation.
-3. Add and test Relay's adapter, discovery, and normalized communication surface.
-   Persistent resume is separate from the in-memory continuation tested here.
-4. Decide production dependency packaging and the supported Node minimum.
+2. Qualify local endpoint/model configuration and expose a ready route only
+   after the live Ollama and LM Studio paths pass their qualification suites.
+3. Qualify production policy enforcement, resource and credential isolation,
+   parent-loss behavior, and supported platforms; process supervision alone is
+   not an OS sandbox.
+4. Add qualified dialogue and persistent continuation behavior. In-memory
+   sessions end with the worker and cannot be resumed.
 
 On the observed machine, Ollama responds at `127.0.0.1:11434`, but `/api/tags`
 contains no models. Nothing listens at the conventional LM Studio port

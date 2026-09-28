@@ -9,7 +9,11 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 
 import { PiAdapter } from "../src/adapters/pi.js";
-import { MAX_PI_WORKER_EVENT_BYTES, parsePiWorkerLine, readBoundedLines } from "../src/adapters/pi-protocol.js";
+import {
+  MAX_PI_WORKER_EVENT_BYTES,
+  parsePiWorkerLine,
+  readBoundedLines,
+} from "../src/adapters/pi-protocol.js";
 import { supervisePiWorker } from "../src/adapters/pi-supervisor.js";
 import { supportsPiNodeVersion } from "../src/adapters/pi-worker.js";
 import type { AdapterEvent, AdapterRunContext, AdapterRunResult } from "../src/adapters/types.js";
@@ -96,7 +100,11 @@ async function startFixture(): Promise<Fixture> {
   };
 }
 
-function stream(response: ServerResponse, delta: Record<string, unknown>, finishReason: string): void {
+function stream(
+  response: ServerResponse,
+  delta: Record<string, unknown>,
+  finishReason: string,
+): void {
   response.writeHead(200, { "content-type": "text/event-stream" });
   for (const chunk of [
     { choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null }] },
@@ -138,9 +146,15 @@ function bashReply(command: string): FixtureReply {
 function runContext(
   workingDirectory: string,
   options?: { readonly input?: string; readonly interactionStrategy?: "deny" | "unattended" },
-): { context: AdapterRunContext; events: AdapterEvent[]; partials: Partial<AdapterRunResult>[] } {
+): {
+  context: AdapterRunContext;
+  events: AdapterEvent[];
+  partials: Partial<AdapterRunResult>[];
+  controller: AbortController;
+} {
   const events: AdapterEvent[] = [];
   const partials: Partial<AdapterRunResult>[] = [];
+  const controller = new AbortController();
   const request: StartInvocationRequest = {
     selector: {
       provider: "fixture",
@@ -175,7 +189,7 @@ function runContext(
       invocationId: "test-pi-worker",
       request,
       route,
-      signal: new AbortController().signal,
+      signal: controller.signal,
       async emit(event) {
         events.push(event);
       },
@@ -185,6 +199,7 @@ function runContext(
       terminationGraceMs: 1000,
     },
     partials,
+    controller,
   };
 }
 
@@ -204,8 +219,35 @@ async function waitForProcessExit(pid: number): Promise<void> {
   assert.fail(`Pi shell descendant ${pid} remained alive after worker completion.`);
 }
 
+async function waitForFile(path: string, description: string): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    try {
+      await access(path);
+      return;
+    } catch (error) {
+      if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
+        throw error;
+      }
+    }
+    await delay(20);
+  }
+  assert.fail(`Timed out waiting for ${description}.`);
+}
+
 test("Pi worker drains fast shell output, cleans inherited-pipe descendants, and frames Unicode", async () => {
   const fixture = await startFixture();
+  const promptMarkers = [
+    "HOSTILE_GLOBAL_SYSTEM_MARKER",
+    "HOSTILE_GLOBAL_APPEND_MARKER",
+    "HOSTILE_PROJECT_SYSTEM_MARKER",
+    "HOSTILE_PROJECT_APPEND_MARKER",
+  ] as const;
+  await mkdir(join(fixture.root, "work", ".pi"), { recursive: true });
+  await writeFile(join(fixture.root, "agent", "SYSTEM.md"), promptMarkers[0]);
+  await writeFile(join(fixture.root, "agent", "APPEND_SYSTEM.md"), promptMarkers[1]);
+  await writeFile(join(fixture.root, "work", ".pi", "SYSTEM.md"), promptMarkers[2]);
+  await writeFile(join(fixture.root, "work", ".pi", "APPEND_SYSTEM.md"), promptMarkers[3]);
   const stdout = `stdout-begin-${"o".repeat(17_000)}-stdout-end`;
   const stderr = `stderr-begin-${"e".repeat(17_000)}-stderr-end`;
   const command = [
@@ -220,8 +262,10 @@ test("Pi worker drains fast shell output, cleans inherited-pipe descendants, and
     (response, request) => {
       const toolMessages = (request.messages ?? []).filter((message) => message.role === "tool");
       assert.ok(
-        toolMessages.some((message) =>
-          String(message.content).includes("stdout-end") && String(message.content).includes("stderr-end"),
+        toolMessages.some(
+          (message) =>
+            String(message.content).includes("stdout-end") &&
+            String(message.content).includes("stderr-end"),
         ),
         "Pi's subsequent model request must contain both fully drained shell streams",
       );
@@ -242,6 +286,14 @@ test("Pi worker drains fast shell output, cleans inherited-pipe descendants, and
     await waitForProcessExit(descendantPid);
     assert.deepEqual(fixture.errors, []);
     assert.equal(fixture.requests.length, 2, "Pi must not retry the model request");
+    const observedRequests = JSON.stringify(fixture.requests);
+    for (const marker of promptMarkers) {
+      assert.equal(
+        observedRequests.includes(marker),
+        false,
+        `${marker} must not enter model context`,
+      );
+    }
     assert.deepEqual(result.content, [{ type: "text", text: finalText }]);
     assert.equal(
       events
@@ -254,7 +306,8 @@ test("Pi worker drains fast shell output, cleans inherited-pipe descendants, and
     );
     for (const event of events) {
       assert.ok(
-        Buffer.byteLength(JSON.stringify({ type: "event", event }), "utf8") < MAX_PI_WORKER_EVENT_BYTES,
+        Buffer.byteLength(JSON.stringify({ type: "event", event }), "utf8") <
+          MAX_PI_WORKER_EVENT_BYTES,
         "every streamed event must fit the bounded worker JSONL frame",
       );
     }
@@ -394,11 +447,8 @@ test("the gated Pi shell runner refuses execution before registration and dies w
     await access(marker);
     const descendantPid = Number(await readFile(pidFile, "utf8"));
     assert.ok(Number.isSafeInteger(descendantPid) && descendantPid > 0);
-    try {
-      process.kill(-after.pid, "SIGKILL");
-    } catch {
-      // The group may exit between reading its result and delivering cleanup.
-    }
+    // Simulate worker-parent loss after the helper ACK: its own EOF watcher
+    // must kill the detached group, including the background descendant.
     after.stdin?.end();
     await afterClosed;
     await waitForProcessExit(descendantPid);
@@ -477,11 +527,25 @@ await new Promise(() => {});
       supervisePiWorker(context, configuration, fakeWorkerPath),
       (error: unknown) => error instanceof BridgeError && error.code === "harness_failed",
     );
-    descendantPid = Number(await readFile(join(fixture.root, "work", "malformed-child.pid"), "utf8"));
+    descendantPid = Number(
+      await readFile(join(fixture.root, "work", "malformed-child.pid"), "utf8"),
+    );
     assert.ok(Number.isSafeInteger(descendantPid) && descendantPid > 0);
     await waitForProcessExit(descendantPid);
-    assert.ok(events.some((event) => event.content?.some((part) => part.type === "text" && part.text === "partial-before-protocol-error")));
-    assert.ok(partials.some((partial) => partial.content?.some((part) => part.type === "text" && part.text.includes("partial-before-protocol-error"))));
+    assert.ok(
+      events.some((event) =>
+        event.content?.some(
+          (part) => part.type === "text" && part.text === "partial-before-protocol-error",
+        ),
+      ),
+    );
+    assert.ok(
+      partials.some((partial) =>
+        partial.content?.some(
+          (part) => part.type === "text" && part.text.includes("partial-before-protocol-error"),
+        ),
+      ),
+    );
   } finally {
     if (descendantPid !== undefined) {
       try {
@@ -491,7 +555,9 @@ await new Promise(() => {});
       }
     }
     try {
-      helperGroupId = Number(await readFile(join(fixture.root, "work", "malformed-helper.pid"), "utf8"));
+      helperGroupId = Number(
+        await readFile(join(fixture.root, "work", "malformed-helper.pid"), "utf8"),
+      );
       if (Number.isSafeInteger(helperGroupId) && helperGroupId > 1) {
         process.kill(-helperGroupId, "SIGKILL");
       }
@@ -501,13 +567,160 @@ await new Promise(() => {});
     await fixture.close();
   }
 });
+test("cancelling a live Pi Bash call rejects with identity partials and kills descendants", async () => {
+  const fixture = await startFixture();
+  const workingDirectory = join(fixture.root, "work");
+  const pidFile = join(workingDirectory, "cancel-child.pid");
+  fixture.setReplies([
+    bashReply(
+      `(sleep 60) &\nprintf '%s\\n' "$!" > cancel-child.pid\nprintf before-cancel\nsleep 60`,
+    ),
+  ]);
+  const { context, events, partials, controller } = runContext(workingDirectory);
+  const adapter = new PiAdapter({
+    model: { provider: "fixture", id: "fixture-model", thinkingLevel: "off" },
+    modelFiles: fixture.modelFiles,
+    tools: ["read", "write", "edit", "bash"],
+  });
+  let descendantPid: number | undefined;
+  const completion = adapter.run(context).then(
+    (value) => ({ ok: true as const, value }),
+    (error: unknown) => ({ ok: false as const, error }),
+  );
+  try {
+    await waitForFile(pidFile, "a running descendant of Pi's Bash call");
+    descendantPid = Number(await readFile(pidFile, "utf8"));
+    assert.ok(Number.isSafeInteger(descendantPid) && descendantPid > 0);
+    assert.ok(events.some((event) => event.data?.phase === "tool_started"));
+    controller.abort();
+    const outcome = await Promise.race([
+      completion,
+      delay(5_000).then(() => {
+        throw new Error("Pi cancellation did not settle within five seconds.");
+      }),
+    ]);
+    assert.equal(outcome.ok, false);
+    if (!outcome.ok) {
+      assert.equal(outcome.error instanceof Error ? outcome.error.name : undefined, "AbortError");
+    }
+    assert.equal(fixture.requests.length, 1);
+    assert.ok(
+      partials.some(
+        (partial) =>
+          partial.observedIdentity?.harnessVersion.evidence === "verified" &&
+          partial.observedIdentity.nativeSessionId.evidence === "reported",
+      ),
+      "identity observed before cancellation must remain in the partial outcome",
+    );
+    await waitForProcessExit(descendantPid);
+  } finally {
+    controller.abort();
+    if (descendantPid !== undefined) {
+      try {
+        process.kill(descendantPid, "SIGKILL");
+      } catch {
+        // The supervisor normally kills this child before the run settles.
+      }
+    }
+    await fixture.close();
+  }
+});
+
+test("a provider HTTP 429 fails once without retry and retains observed identity", async () => {
+  const fixture = await startFixture();
+  fixture.setReplies([
+    (response) =>
+      response
+        .writeHead(429, { "content-type": "application/json" })
+        .end(JSON.stringify({ error: { message: "fixture rate limit" } })),
+  ]);
+  const { context, partials } = runContext(join(fixture.root, "work"));
+  const adapter = new PiAdapter({
+    model: { provider: "fixture", id: "fixture-model", thinkingLevel: "off" },
+    modelFiles: fixture.modelFiles,
+    tools: ["read"],
+  });
+  try {
+    await assert.rejects(
+      adapter.run(context),
+      (error: unknown) => error instanceof BridgeError && error.code === "harness_failed",
+    );
+    assert.equal(fixture.requests.length, 1, "Pi must not retry a 429 request");
+    assert.deepEqual(fixture.errors, []);
+    assert.ok(
+      partials.some((partial) => partial.observedIdentity?.harnessVersion.evidence === "verified"),
+    );
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("partial output prefers a completed stream or the longer incomplete final prefix", async () => {
+  const scenarios: readonly {
+    readonly streamedText?: string;
+    readonly finalPrefix: string;
+    readonly expected: string;
+  }[] = [
+    {
+      streamedText: "complete streamed answer survives an incomplete final result frame",
+      finalPrefix: "incomplete prefix",
+      expected: "complete streamed answer survives an incomplete final result frame",
+    },
+    {
+      finalPrefix: "content-only partial prefix",
+      expected: "content-only partial prefix",
+    },
+  ];
+  for (const scenario of scenarios) {
+    const root = await mkdtemp(join(tmpdir(), "harness-relay-pi-partial-"));
+    const workingDirectory = join(root, "work");
+    await mkdir(workingDirectory, { recursive: true });
+    const fakeWorkerPath = join(root, "partial-worker.mjs");
+    const outputLines = [
+      ...(scenario.streamedText === undefined
+        ? []
+        : [
+            `process.stdout.write(JSON.stringify({ type: "event", event: { category: "output", content: [{ type: "text", text: ${JSON.stringify(scenario.streamedText)} }] } }) + "\\n");`,
+          ]),
+      `process.stdout.write(JSON.stringify({ type: "content", index: 0, text: ${JSON.stringify(scenario.finalPrefix)}, final: false }) + "\\n");`,
+      "process.stdin.destroy(); process.stdout.end();",
+    ];
+    await writeFile(
+      fakeWorkerPath,
+      `import { createInterface } from "node:readline";\nconst input = createInterface({ input: process.stdin })[Symbol.asyncIterator]();\nawait input.next();\n${outputLines.join("\n")}\n`,
+    );
+    const { context, partials } = runContext(workingDirectory);
+    const configuration = {
+      model: { provider: "fixture", id: "fixture-model", thinkingLevel: "off" as const },
+      modelFiles: {
+        authPath: join(root, "agent", "auth.json"),
+        modelsPath: join(root, "agent", "models.json"),
+        modelsStorePath: join(root, "agent", "models-store.json"),
+      },
+      tools: ["read"] as const,
+    };
+    try {
+      await assert.rejects(
+        supervisePiWorker(context, configuration, fakeWorkerPath),
+        (error: unknown) => error instanceof BridgeError && error.code === "harness_failed",
+      );
+      const latest = partials.at(-1);
+      assert.deepEqual(latest?.content, [{ type: "text", text: scenario.expected }]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+});
 
 test("Pi SDK stays optional, version checks are explicit, and failed worker spawn is handled", async () => {
   assert.equal(supportsPiNodeVersion("22.18.9"), false);
   assert.equal(supportsPiNodeVersion("22.19.0"), true);
   assert.equal(supportsPiNodeVersion("23.0.0"), true);
   assert.equal(supportsPiNodeVersion("21.99.99"), false);
-  assert.ok(supportsPiNodeVersion(process.versions.node), "the fixture needs the qualified Pi Node runtime");
+  assert.ok(
+    supportsPiNodeVersion(process.versions.node),
+    "the fixture needs the qualified Pi Node runtime",
+  );
 
   const root = await mkdtemp(join(tmpdir(), "harness-relay-pi-optional-"));
   const loaderPath = join(root, "block-pi.mjs");
@@ -571,7 +784,11 @@ test("Pi SDK stays optional, version checks are explicit, and failed worker spaw
     smoke.once("error", reject);
     smoke.once("close", resolve);
   });
-  assert.equal(smokeExit, 0, "core CLI and existing adapters must import without the optional Pi package");
+  assert.equal(
+    smokeExit,
+    0,
+    "core CLI and existing adapters must import without the optional Pi package",
+  );
 
   const missingDirectory = join(root, "does-not-exist");
   const { context } = runContext(missingDirectory);
@@ -601,6 +818,10 @@ test("Pi SDK stays optional, version checks are explicit, and failed worker spaw
     }),
     (error: unknown) => error instanceof BridgeError && error.code === "unsupported_capability",
   );
-  assert.deepEqual(await adapter.discover(), [], "the unqualified internal runtime stays undiscovered");
+  assert.deepEqual(
+    await adapter.discover(),
+    [],
+    "the unqualified internal runtime stays undiscovered",
+  );
   await rm(root, { recursive: true, force: true });
 });

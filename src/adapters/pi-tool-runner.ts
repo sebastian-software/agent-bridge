@@ -75,24 +75,29 @@ async function runPiToolRunner(): Promise<void> {
         killOwnGroup();
       }
     });
-    void input.next().then(() => {
-      parentLost = true;
-      if (shellStarted) {
-        killOwnGroup();
-      }
-    }).catch(() => {
-      parentLost = true;
-      if (shellStarted) {
-        killOwnGroup();
-      }
-    });
+    void input
+      .next()
+      .then(() => {
+        parentLost = true;
+        if (shellStarted) {
+          killOwnGroup();
+        }
+      })
+      .catch(() => {
+        parentLost = true;
+        if (shellStarted) {
+          killOwnGroup();
+        }
+      });
     await access(start.cwd, constants.F_OK);
     if (parentLost) {
       process.exitCode = 70;
       return;
     }
     const args =
-      start.commandTransport === "stdin" ? [...start.shellArgs] : [...start.shellArgs, start.command];
+      start.commandTransport === "stdin"
+        ? [...start.shellArgs]
+        : [...start.shellArgs, start.command];
     const shell = spawn(start.shell, args, {
       cwd: start.cwd,
       env: { ...start.env },

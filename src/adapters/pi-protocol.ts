@@ -35,7 +35,10 @@ export type PiWorkerStart = {
 export type PiWorkerControl =
   | PiWorkerStart
   | {
-      readonly type: "tool_process_registered" | "tool_process_cleaned" | "tool_process_cleanup_done";
+      readonly type:
+        | "tool_process_registered"
+        | "tool_process_cleaned"
+        | "tool_process_cleanup_done";
       readonly requestId: string;
       readonly processGroupId: number;
     }
@@ -43,7 +46,12 @@ export type PiWorkerControl =
 
 export type PiWorkerOutput =
   | { readonly type: "event"; readonly event: AdapterEvent }
-  | { readonly type: "content"; readonly index: number; readonly text: string; readonly final: boolean }
+  | {
+      readonly type: "content";
+      readonly index: number;
+      readonly text: string;
+      readonly final: boolean;
+    }
   | { readonly type: "identity"; readonly identity: ObservedIdentity }
   | {
       readonly type: "tool_process_started" | "tool_process_finished" | "tool_process_reaped";
@@ -168,8 +176,17 @@ function usage(value: unknown): value is Usage {
   if (record === undefined || record.evidence !== "reported" || !string(record.source)) {
     return false;
   }
-  return ["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "turns", "costUsd"].every(
-    (key) => record[key] === undefined || (typeof record[key] === "number" && Number.isFinite(record[key])),
+  return [
+    "inputTokens",
+    "outputTokens",
+    "cacheReadTokens",
+    "cacheWriteTokens",
+    "turns",
+    "costUsd",
+  ].every(
+    (key) =>
+      record[key] === undefined ||
+      (typeof record[key] === "number" && Number.isFinite(record[key])),
   );
 }
 
@@ -199,7 +216,11 @@ function adapterEvent(value: unknown): value is AdapterEvent {
   }
   if (record.failure !== undefined) {
     const failure = object(record.failure);
-    if (failure === undefined || !nonEmptyString(failure.code) || !nonEmptyString(failure.message)) {
+    if (
+      failure === undefined ||
+      !nonEmptyString(failure.code) ||
+      !nonEmptyString(failure.message)
+    ) {
       return false;
     }
   }
@@ -211,9 +232,7 @@ function adapterEvent(value: unknown): value is AdapterEvent {
         return (
           effect !== undefined &&
           nonEmptyString(effect.path) &&
-          ["created", "deleted", "modified", "renamed", "unknown"].includes(
-            String(effect.kind),
-          ) &&
+          ["created", "deleted", "modified", "renamed", "unknown"].includes(String(effect.kind)) &&
           ["git-status", "harness-reported"].includes(String(effect.evidence)) &&
           (effect.previousPath === undefined || string(effect.previousPath)) &&
           (effect.outsideWorkspace === undefined || effect.outsideWorkspace === true)
@@ -293,9 +312,9 @@ export function parsePiWorkerOutput(value: unknown): PiWorkerOutput {
     safeInteger(record.index) &&
     record.index >= 0 &&
     string(record.text) &&
-    record.final === true
+    typeof record.final === "boolean"
   ) {
-    return { type: "content", index: record.index, text: record.text, final: true };
+    return { type: "content", index: record.index, text: record.text, final: record.final };
   }
   if (record.type === "identity" && observedIdentity(record.identity)) {
     return { type: "identity", identity: record.identity };
@@ -307,9 +326,7 @@ export function parsePiWorkerOutput(value: unknown): PiWorkerOutput {
     nonEmptyString(record.requestId) &&
     safeInteger(record.processGroupId) &&
     record.processGroupId > 0 &&
-    (record.exitCode === undefined ||
-      record.exitCode === null ||
-      safeInteger(record.exitCode)) &&
+    (record.exitCode === undefined || record.exitCode === null || safeInteger(record.exitCode)) &&
     (record.signal === undefined || record.signal === null || string(record.signal)) &&
     (record.cause === undefined ||
       ["completed", "cancelled", "timed_out"].includes(String(record.cause)))

@@ -5,12 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 
-import type {
-  ContentPart,
-  ObservedIdentity,
-  Usage,
-  WorkspaceEffect,
-} from "../contract.js";
+import type { ContentPart, ObservedIdentity, Usage, WorkspaceEffect } from "../contract.js";
 import { BridgeError } from "../errors.js";
 import { promptFor } from "./process.js";
 import {
@@ -62,8 +57,12 @@ function groupExists(processGroupId: number): boolean {
   try {
     process.kill(-processGroupId, 0);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ESRCH") {
+      return false;
+    }
+    // EPERM and unknown failures do not prove that the process group is gone.
+    return true;
   }
 }
 
@@ -226,18 +225,26 @@ export async function supervisePiWorker(
   const closePromise = new Promise<void>((resolve) => {
     child.once("close", () => resolve());
   });
-  if (child.pid === undefined || child.stdin === null || child.stdout === null || child.stderr === null) {
+  if (
+    child.pid === undefined ||
+    child.stdin === null ||
+    child.stdout === null ||
+    child.stderr === null
+  ) {
     killWorker(child);
     await closePromise;
     await rm(isolationRoot, { recursive: true, force: true });
-    throw new BridgeError({
-      code: "harness_failed",
-      message:
-        spawnError === undefined
-          ? "Could not start the supervised Pi worker process."
-          : `Could not start the supervised Pi worker process: ${spawnError.message}`,
-      retryable: false,
-    }, spawnError === undefined ? undefined : { cause: spawnError });
+    throw new BridgeError(
+      {
+        code: "harness_failed",
+        message:
+          spawnError === undefined
+            ? "Could not start the supervised Pi worker process."
+            : `Could not start the supervised Pi worker process: ${spawnError.message}`,
+        retryable: false,
+      },
+      spawnError === undefined ? undefined : { cause: spawnError },
+    );
   }
   const workerGroupId = child.pid;
   const stderr: Buffer[] = [];
@@ -256,6 +263,7 @@ export async function supervisePiWorker(
   const groups = new Map<string, RegisteredGroup>();
   const streamedText: string[] = [];
   const finalTextFrames: string[] = [];
+  let finalContentComplete = false;
   const effects: WorkspaceEffect[] = [];
   let observed = initialIdentity(configuration);
   let nextContentIndex = 0;
@@ -274,8 +282,18 @@ export async function supervisePiWorker(
     }, terminationGraceMs);
   };
 
+  const partialText = (): string => {
+    if (finalContentComplete) {
+      return finalTextFrames.join("");
+    }
+    const streamed = streamedText.join("");
+    const finalPrefix = finalTextFrames.join("");
+    return Buffer.byteLength(finalPrefix, "utf8") > Buffer.byteLength(streamed, "utf8")
+      ? finalPrefix
+      : streamed;
+  };
   const reportPartial = (identity = observed, usage?: Usage): void => {
-    const text = finalTextFrames.length > 0 ? finalTextFrames.join("") : streamedText.join("");
+    const text = partialText();
     context.reportPartial?.({
       content: textParts(text),
       artifacts: [],
@@ -291,7 +309,9 @@ export async function supervisePiWorker(
     );
     return results.every(Boolean);
   };
-  const outputLines = readBoundedLines(child.stdout, MAX_PI_WORKER_EVENT_BYTES)[Symbol.asyncIterator]();
+  const outputLines = readBoundedLines(child.stdout, MAX_PI_WORKER_EVENT_BYTES)[
+    Symbol.asyncIterator
+  ]();
   let nextOutputLine = outputLines.next();
 
   try {
@@ -335,7 +355,11 @@ export async function supervisePiWorker(
       }
       if (output.type === "tool_process_finished") {
         const group = groups.get(output.requestId);
-        if (group === undefined || group.processGroupId !== output.processGroupId || group.cleaned) {
+        if (
+          group === undefined ||
+          group.processGroupId !== output.processGroupId ||
+          group.cleaned
+        ) {
           throw new Error("Pi worker finished an unregistered shell process group.");
         }
         if (!(await terminateGroup(group.processGroupId))) {
@@ -368,11 +392,15 @@ export async function supervisePiWorker(
         continue;
       }
       if (output.type === "content") {
+        if (finalContentComplete) {
+          throw new Error("Pi worker emitted final content after completing its result frames.");
+        }
         if (output.index !== nextContentIndex) {
           throw new Error("Pi worker emitted out-of-order result content frames.");
         }
         finalTextFrames.push(output.text);
         nextContentIndex += 1;
+        finalContentComplete = output.final;
         reportPartial();
         continue;
       }
@@ -397,6 +425,9 @@ export async function supervisePiWorker(
         if (groups.size > 0) {
           throw new Error("Pi worker settled while supervised shell groups were still active.");
         }
+        if (output.status === "succeeded" && finalTextFrames.length > 0 && !finalContentComplete) {
+          throw new Error("Pi worker succeeded before completing its final content frames.");
+        }
         terminal = output;
         observed = terminal.observedIdentity;
         reportPartial(observed, terminal.usage);
@@ -419,7 +450,9 @@ export async function supervisePiWorker(
       throw spawnError;
     }
     if (child.exitCode !== 0 || child.signalCode !== null) {
-      throw new Error(`Pi worker exited unexpectedly (code ${String(child.exitCode)}, signal ${String(child.signalCode)}).`);
+      throw new Error(
+        `Pi worker exited unexpectedly (code ${String(child.exitCode)}, signal ${String(child.signalCode)}).`,
+      );
     }
     if (groups.size !== 0) {
       throw new Error("Pi worker exited with supervised shell processes still registered.");
@@ -432,7 +465,7 @@ export async function supervisePiWorker(
         details: { nativeCode: terminal.failure?.code ?? "pi_worker_failed" },
       });
     }
-    const content = finalTextFrames.length > 0 ? finalTextFrames.join("") : streamedText.join("");
+    const content = partialText();
     const result: AdapterRunResult = {
       content: textParts(content),
       artifacts: [],
@@ -454,9 +487,11 @@ export async function supervisePiWorker(
       clearTimeout(cancelTimer);
     }
     if (!groupsClean) {
-      const cleanupFailure = new Error("Relay could not confirm cleanup of every Pi shell process group.");
+      const cleanupFailure = new Error(
+        "Relay could not confirm cleanup of every Pi shell process group.",
+      );
       context.reportPartial?.({
-        content: textParts(finalTextFrames.join("") || streamedText.join("")),
+        content: textParts(partialText()),
         artifacts: [],
         effects: [...effects],
         observedIdentity: terminal?.observedIdentity ?? observed,
@@ -476,7 +511,7 @@ export async function supervisePiWorker(
       throw abortError();
     }
     context.reportPartial?.({
-      content: textParts(finalTextFrames.join("") || streamedText.join("")),
+      content: textParts(partialText()),
       artifacts: [],
       effects: [...effects],
       observedIdentity: terminal?.observedIdentity ?? observed,

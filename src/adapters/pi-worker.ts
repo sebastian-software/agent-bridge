@@ -110,10 +110,22 @@ function identityFromMessage(identity: ObservedIdentity, message: unknown): Obse
   return {
     ...identity,
     ...(typeof source.provider === "string"
-      ? { provider: { value: source.provider, evidence: "reported", source: "pi-assistant-message" } }
+      ? {
+          provider: {
+            value: source.provider,
+            evidence: "reported",
+            source: "pi-assistant-message",
+          },
+        }
       : {}),
     ...(typeof source.responseModel === "string"
-      ? { model: { value: source.responseModel, evidence: "reported", source: "pi-assistant-message" } }
+      ? {
+          model: {
+            value: source.responseModel,
+            evidence: "reported",
+            source: "pi-assistant-message",
+          },
+        }
       : typeof source.model === "string"
         ? { model: { value: source.model, evidence: "reported", source: "pi-assistant-message" } }
         : {}),
@@ -154,7 +166,11 @@ function usageFromMessages(messages: readonly unknown[]): Usage | undefined {
       continue;
     }
     const message = value as Record<string, unknown>;
-    if (message.role !== "assistant" || typeof message.usage !== "object" || message.usage === null) {
+    if (
+      message.role !== "assistant" ||
+      typeof message.usage !== "object" ||
+      message.usage === null
+    ) {
       continue;
     }
     const usage = message.usage as Record<string, unknown>;
@@ -241,12 +257,21 @@ function enqueueFinalContent(output: WorkerOutput, text: string): void {
   if (Buffer.byteLength(JSON.stringify(text), "utf8") - 2 > MAX_ASSISTANT_OUTPUT_BYTES) {
     throw new Error("Pi assistant output exceeded the 16 MiB result limit.");
   }
+  const frames = textFrames(text)[Symbol.iterator]();
+  let current = frames.next();
   let index = 0;
-  for (const frame of textFrames(text)) {
-    const message: PiWorkerOutput = { type: "content", index, text: frame, final: true };
+  while (!current.done) {
+    const next = frames.next();
+    const message: PiWorkerOutput = {
+      type: "content",
+      index,
+      text: current.value,
+      final: next.done === true,
+    };
     assertTextFrameSize(message);
     void output.enqueue(message);
     index += 1;
+    current = next;
   }
 }
 
@@ -331,7 +356,10 @@ function runnerResult(value: unknown): RunnerResult {
   const record = value as Record<string, unknown>;
   if (
     record.type !== "result" ||
-    !(record.exitCode === null || (typeof record.exitCode === "number" && Number.isSafeInteger(record.exitCode))) ||
+    !(
+      record.exitCode === null ||
+      (typeof record.exitCode === "number" && Number.isSafeInteger(record.exitCode))
+    ) ||
     !(record.signal === null || typeof record.signal === "string") ||
     (record.error !== undefined && typeof record.error !== "string")
   ) {
@@ -413,7 +441,12 @@ async function runSupervisedBash(
     stdio: ["pipe", "pipe", "pipe", "pipe"],
     windowsHide: true,
   });
-  if (runner.pid === undefined || runner.stdin === null || runner.stdout === null || runner.stderr === null) {
+  if (
+    runner.pid === undefined ||
+    runner.stdin === null ||
+    runner.stdout === null ||
+    runner.stderr === null
+  ) {
     throw new Error("Could not start Pi's supervised shell runner.");
   }
   const processGroupId = runner.pid;
@@ -431,7 +464,9 @@ async function runSupervisedBash(
     command,
     cwd,
     env: Object.fromEntries(
-      Object.entries(options.env ?? {}).filter((entry): entry is [string, string] => entry[1] !== undefined),
+      Object.entries(options.env ?? {}).filter(
+        (entry): entry is [string, string] => entry[1] !== undefined,
+      ),
     ),
   };
   const startLine = `${JSON.stringify(start)}\n`;
@@ -507,7 +542,10 @@ async function runSupervisedBash(
         signal: runner.signalCode,
         ...(closeError === undefined ? {} : { error: closeError.message }),
       };
-      if (error instanceof Error && error.message !== "Pi tool runner exited without a shell result.") {
+      if (
+        error instanceof Error &&
+        error.message !== "Pi tool runner exited without a shell result."
+      ) {
         result = { ...result, error: closeError?.message ?? error.message };
       }
     }
@@ -525,12 +563,19 @@ async function runSupervisedBash(
     if (closeError !== undefined && result.error === undefined) {
       result = { ...result, exitCode: null, error: closeError.message };
     }
-    const cleanupDone = registerAck(pending, "tool_process_cleanup_done", requestId, processGroupId);
+    const cleanupDone = registerAck(
+      pending,
+      "tool_process_cleanup_done",
+      requestId,
+      processGroupId,
+    );
     await output.enqueue({ type: "tool_process_reaped", requestId, processGroupId });
     await cleanupDone.promise;
 
     if (outputLimitExceeded) {
-      options.onData(Buffer.from("\n[Relay stopped collecting this command after 16 MiB of combined output.]"));
+      options.onData(
+        Buffer.from("\n[Relay stopped collecting this command after 16 MiB of combined output.]"),
+      );
       return { exitCode: 1 };
     }
     if (aborted || options.signal?.aborted) {
@@ -579,7 +624,11 @@ function writeTerminal(
   start: PiWorkerStart | undefined,
   status: "succeeded" | "failed",
   failure?: { readonly code: string; readonly message: string },
-  details?: { readonly identity?: ObservedIdentity; readonly usage?: Usage; readonly stopReason?: string },
+  details?: {
+    readonly identity?: ObservedIdentity;
+    readonly usage?: Usage;
+    readonly stopReason?: string;
+  },
 ): Promise<void> {
   const identity =
     details?.identity ??
@@ -703,7 +752,9 @@ async function runPiWorker(): Promise<void> {
     });
 
     if (process.platform === "win32") {
-      throw new Error("Pi worker is unavailable on Windows because supervised process groups are required.");
+      throw new Error(
+        "Pi worker is unavailable on Windows because supervised process groups are required.",
+      );
     }
     if (!supportsPiNodeVersion(process.versions.node)) {
       throw new Error("Pi worker requires Node.js 22.19.0 or later.");
@@ -736,7 +787,9 @@ async function runPiWorker(): Promise<void> {
     });
     const model = modelRuntime.getModel(workerStart.model.provider, workerStart.model.id);
     if (model === undefined) {
-      throw new Error(`Pi has no configured model ${workerStart.model.provider}/${workerStart.model.id}.`);
+      throw new Error(
+        `Pi has no configured model ${workerStart.model.provider}/${workerStart.model.id}.`,
+      );
     }
     const resourceLoader = new pi.DefaultResourceLoader({
       cwd: workerStart.workingDirectory,
@@ -747,6 +800,11 @@ async function runPiWorker(): Promise<void> {
       noPromptTemplates: true,
       noThemes: true,
       noContextFiles: true,
+      // Empty explicit inputs prevent Pi's default loader from discovering
+      // project/global SYSTEM.md and APPEND_SYSTEM.md overrides. Pi still
+      // contributes its normal built-in coding-agent system prompt.
+      systemPrompt: "",
+      appendSystemPrompt: [],
     });
     await resourceLoader.reload();
     const shellOperations = {
@@ -823,7 +881,8 @@ async function runPiWorker(): Promise<void> {
       if (event.type === "tool_execution_end") {
         const previous = toolArguments.get(event.toolCallId);
         toolArguments.delete(event.toolCallId);
-        const effect = previous === undefined ? undefined : toolEffect(previous.name, previous.args);
+        const effect =
+          previous === undefined ? undefined : toolEffect(previous.name, previous.args);
         enqueueEvent({
           category: event.isError ? "diagnostic" : "activity",
           ...(effect === undefined || event.isError ? {} : { effects: [effect] }),
@@ -905,17 +964,25 @@ async function runPiWorker(): Promise<void> {
         await output.drain();
         const lastMessage = assistantMessages.at(-1);
         const usage = usageFromMessages(assistantMessages);
-        await writeTerminal(output, start, "failed", { code: failureCode(error), message }, {
-          ...(identity !== undefined
-            ? { identity }
-            : sdkVerified && start !== undefined
-              ? { identity: observedIdentity(start, undefined, true) }
+        await writeTerminal(
+          output,
+          start,
+          "failed",
+          { code: failureCode(error), message },
+          {
+            ...(identity !== undefined
+              ? { identity }
+              : sdkVerified && start !== undefined
+                ? { identity: observedIdentity(start, undefined, true) }
+                : {}),
+            ...(usage === undefined ? {} : { usage }),
+            ...(typeof lastMessage === "object" &&
+            lastMessage !== null &&
+            "stopReason" in lastMessage
+              ? { stopReason: String((lastMessage as { stopReason: unknown }).stopReason) }
               : {}),
-          ...(usage === undefined ? {} : { usage }),
-          ...(typeof lastMessage === "object" && lastMessage !== null && "stopReason" in lastMessage
-            ? { stopReason: String((lastMessage as { stopReason: unknown }).stopReason) }
-            : {}),
-        });
+          },
+        );
       } catch {
         process.exitCode = 70;
       }
