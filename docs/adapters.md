@@ -10,6 +10,30 @@ Use `Adapter` directly when the harness is an in-process library or needs a
 protocol that cannot be represented as one supervised process. Implement
 `discover()`, `run()`, and, when policy mapping is possible, `resolvePolicy()`.
 
+## Dialogue capabilities
+
+`invocation.respond` is reserved for permission requests and accepts only
+`allow` or `deny`. An adapter that asks a general question emits an
+`input_required` request with `kind: "question"` and waits through
+`AdapterRunContext.awaitAnswer`; that caller answer is a distinct operation.
+Do not encode a question as a permission request.
+
+Active-session steering is opt-in through both the route's `steering`
+capability and `Adapter.sendInput`. The handler promise resolves only after the
+native session API acknowledges a supported boundary. A write to process stdin
+alone is not delivery evidence, and the acknowledgement does not prove that the
+model consumed the input. The broker delivers accepted inputs in FIFO order per
+invocation. If the native adapter has no session-level acknowledgement or
+cannot preserve that order, omit the capability and handler.
+
+Terminal continuation is separate. A successful `run()` may return an opaque
+`continuationHandle` owned and interpreted by that adapter. The bridge retains
+it internally and passes it back only to the adapter for a linked invocation;
+never include it in events, routes, diagnostics, or caller input. Advertise
+`continuation` only when the adapter can resume that exact native session.
+Continuation must not fall back to a new context-free request. Broker fixtures
+exercise the SPI, but native support requires its own qualification evidence.
+
 Extend `ProcessAdapter` for a command-line harness that emits JSONL. Provide a
 manifest-backed `discover()`, a safe argument-array `command()`, and a
 `normalizeNative()` function. The base class owns stdin, stderr bounds,

@@ -3,7 +3,15 @@ import { realpath, stat } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
-import type { AdapterEvent, AdapterRunResult } from "./adapters/types.js";
+import type {
+  Adapter,
+  AdapterContinuationHandle,
+  AdapterEvent,
+  AdapterInputResult,
+  AdapterRunContext,
+  AdapterRunResult,
+  AdapterSendInputContext,
+} from "./adapters/types.js";
 import type { AdapterConnectionContext } from "./connections.js";
 import type { BrokerPaths } from "./paths.js";
 
@@ -12,6 +20,9 @@ import { type BrokerConfig, brokerConfigFromValues, type BrokerConfigValues } fr
 import {
   type EffectObservation,
   type EventsResult,
+  type AnswerInputRequest,
+  type ContinueInvocationRequest,
+  type ContentPart,
   type InputResponse,
   type InvocationEvent,
   type InvocationListResult,
@@ -22,10 +33,13 @@ import {
   type JsonValue,
   type ObservedIdentity,
   parseEventsParams,
+  parseAnswerParams,
+  parseContinueInvocationParams,
   parseInvocationIdParams,
   parseInvocationListParams,
   parseRespondParams,
   parseRouteDiscoverParams,
+  parseSendInvocationParams,
   parseShutdownParams,
   parseStartInvocationRequest,
   parseWaitParams,
@@ -33,6 +47,8 @@ import {
   SCHEMA_VERSION,
   type StartInvocationRequest,
   type StartInvocationResult,
+  type SendInvocationRequest,
+  type SendInvocationResult,
   TERMINAL_STATES,
   type TerminalStatus,
   type Usage,
@@ -47,13 +63,18 @@ import { BridgeError } from "./errors.js";
 import { writeBrokerLog } from "./log.js";
 import { describeContract } from "./operations.js";
 import { ensurePrivateDirectory } from "./paths.js";
-import { InvocationStore } from "./store.js";
+import { InvocationStore, type StoredAcceptedInput, type StoredInvocationRecord } from "./store.js";
 import { canonicalJson, messageFrom, sha256 } from "./util.js";
 import { PACKAGE_VERSION } from "./version.js";
 
 type MutableResult<T> = {
   readonly value: T;
   readonly changed: boolean;
+};
+
+type QuestionWaiter = {
+  readonly resolve: (answer: readonly ContentPart[]) => void;
+  readonly reject: (error: unknown) => void;
 };
 
 function unverifiedIdentity(): ObservedIdentity {
@@ -190,10 +211,14 @@ export class Broker {
   readonly #paths: BrokerPaths;
   readonly #store: InvocationStore;
   readonly #registry: AdapterRegistry;
-  readonly #records = new Map<string, InvocationRecord>();
+  readonly #records = new Map<string, StoredInvocationRecord>();
   readonly #controllers = new Map<string, AbortController>();
   readonly #connectionContexts = new Map<string, AdapterConnectionContext>();
   readonly #runs = new Map<string, Promise<void>>();
+  readonly #completing = new Set<string>();
+  readonly #adapterReady = new Set<string>();
+  readonly #inputDeliveryRuns = new Map<string, Promise<void>>();
+  readonly #inputDeliveryControllers = new Map<string, AbortController>();
   readonly #workspaceLocks = new Map<string, string>();
   readonly #beforeSnapshots = new Map<string, WorkspaceSnapshot>();
   readonly #inputWaiters = new Map<
@@ -201,6 +226,8 @@ export class Broker {
     Map<string, (response: Pick<InputResponse, "decision">) => void>
   >();
   readonly #inputResponses = new Map<string, Pick<InputResponse, "decision">>();
+  readonly #questionWaiters = new Map<string, Map<string, QuestionWaiter>>();
+  readonly #questionResponses = new Map<string, readonly ContentPart[]>();
   readonly #tombstones = new Map<string, InvocationTombstone>();
   readonly #diagnosticMode: boolean;
   readonly #config: BrokerConfig;
@@ -274,8 +301,9 @@ export class Broker {
       const completedAt = new Date().toISOString();
       for (const invocationId of activeIds) {
         const current = this.#requireRecord(invocationId);
+        const expired = this.#expirePendingInputs(current, "broker_restart", completedAt);
         const withEvent = this.#appendBridgeEvent(
-          current,
+          expired,
           "lifecycle",
           {
             state: "interrupted",
@@ -309,10 +337,15 @@ export class Broker {
     for (const controller of this.#controllers.values()) {
       controller.abort();
     }
-    await Promise.allSettled(this.#runs.values());
+    await Promise.allSettled([...this.#runs.values(), ...this.#inputDeliveryRuns.values()]);
     await this.#mutationTail;
     this.#inputWaiters.clear();
     this.#inputResponses.clear();
+    this.#questionWaiters.clear();
+    this.#questionResponses.clear();
+    this.#adapterReady.clear();
+    this.#inputDeliveryRuns.clear();
+    this.#inputDeliveryControllers.clear();
   }
 
   async execute(operation: string, params: unknown): Promise<unknown> {
@@ -345,8 +378,12 @@ export class Broker {
         return this.cancel(parseInvocationIdParams(params).invocationId);
       case "invocation.respond":
         return this.respond(parseRespondParams(params));
+      case "invocation.answer":
+        return this.answer(parseAnswerParams(params));
       case "invocation.send":
+        return this.send(parseSendInvocationParams(params));
       case "invocation.continue":
+        return this.continue(parseContinueInvocationParams(params));
       case "invocation.delete":
         throw new BridgeError({
           code: "unsupported_operation",
@@ -530,6 +567,305 @@ export class Broker {
     return result;
   }
 
+  async continue(request: ContinueInvocationRequest): Promise<StartInvocationResult> {
+    const requestDigest = sha256(
+      canonicalJson({
+        operation: "invocation.continue",
+        invocationId: request.invocationId,
+        input: request.input,
+        idempotencyKey: request.idempotencyKey,
+      }),
+    );
+    const existing = await this.#existingIdempotent(request.idempotencyKey, requestDigest);
+    if (existing !== undefined) {
+      return this.#startResult(existing, true);
+    }
+
+    const predecessor = this.#requireRecord(request.invocationId);
+    if (!TERMINAL_STATES.has(predecessor.state) || predecessor.outcome === undefined) {
+      throw new BridgeError({
+        code: "invocation_not_active",
+        message: `Invocation ${request.invocationId} must be terminal before it can be continued.`,
+        retryable: false,
+        details: { invocationId: request.invocationId, state: predecessor.state },
+      });
+    }
+    if (!predecessor.resolvedRoute.capabilities.includes("continuation")) {
+      throw new BridgeError({
+        code: "unsupported_capability",
+        message: `Resolved route ${predecessor.resolvedRoute.routeId} does not support native continuation.`,
+        retryable: false,
+        details: { routeId: predecessor.resolvedRoute.routeId, capability: "continuation" },
+      });
+    }
+    const handle = predecessor.continuationHandle;
+    if (handle === undefined) {
+      throw new BridgeError({
+        code: "continuation_unavailable",
+        message: `Invocation ${request.invocationId} has no retained native continuation handle.`,
+        retryable: false,
+        details: { invocationId: request.invocationId },
+      });
+    }
+    if (handle.expiresAt !== undefined && Date.parse(handle.expiresAt) <= Date.now()) {
+      throw new BridgeError({
+        code: "continuation_expired",
+        message: `The native continuation handle for invocation ${request.invocationId} has expired.`,
+        retryable: false,
+        details: { invocationId: request.invocationId, expiresAt: handle.expiresAt },
+      });
+    }
+    this.#registry.adapter(predecessor.resolvedRoute.adapter);
+    let freshResolution: Awaited<ReturnType<AdapterRegistry["resolve"]>>;
+    try {
+      freshResolution = await this.#registry.resolve(predecessor.request, { refresh: true });
+    } catch (error) {
+      if (
+        error instanceof BridgeError &&
+        (error.code === "route_unavailable" || error.code === "route_ambiguous")
+      ) {
+        throw new BridgeError(
+          {
+            code: "continuation_route_changed",
+            message: `The requested route, interaction strategy, or policy for invocation ${request.invocationId} is no longer supported; continuation cannot be safely retargeted.`,
+            retryable: false,
+            details: { invocationId: request.invocationId, cause: error.code },
+          },
+          { cause: error },
+        );
+      }
+      throw error;
+    }
+    if (
+      canonicalJson(freshResolution.route) !== canonicalJson(predecessor.resolvedRoute) ||
+      canonicalJson(freshResolution.effectiveNativePolicy) !==
+        canonicalJson(predecessor.policy.effectiveNativePolicy) ||
+      freshResolution.descriptor.assurance !== predecessor.policy.assurance ||
+      (freshResolution.route.connectionId === undefined
+        ? freshResolution.connectionContext !== undefined
+        : freshResolution.connectionContext?.id !== freshResolution.route.connectionId ||
+          freshResolution.connectionContext.revision !==
+            freshResolution.route.connectionRevision)
+    ) {
+      throw new BridgeError({
+        code: "continuation_route_changed",
+        message: `The resolved route or effective policy for invocation ${request.invocationId} changed; continuation cannot be safely retargeted.`,
+        retryable: false,
+        details: { invocationId: request.invocationId, routeId: predecessor.resolvedRoute.routeId },
+      });
+    }
+
+    const continuedRequest: StartInvocationRequest = {
+      ...predecessor.request,
+      input: request.input,
+      idempotencyKey: request.idempotencyKey,
+    };
+    const invocationId = `inv_${randomUUID()}`;
+    const createdAt = new Date().toISOString();
+    let workspaceKey: string;
+    try {
+      workspaceKey = await realpath(continuedRequest.workingDirectory);
+    } catch {
+      workspaceKey = resolve(continuedRequest.workingDirectory);
+    }
+
+    const result = await this.#mutate(() => {
+      const deduplicated = this.#findIdempotent(request.idempotencyKey, requestDigest);
+      if (deduplicated !== undefined) {
+        return { value: this.#startResult(deduplicated, true), changed: false };
+      }
+      const currentPredecessor = this.#requireRecord(request.invocationId);
+      if (
+        !TERMINAL_STATES.has(currentPredecessor.state) ||
+        currentPredecessor.continuationHandle?.reference !== handle.reference ||
+        canonicalJson(currentPredecessor.resolvedRoute) !==
+          canonicalJson(predecessor.resolvedRoute) ||
+        canonicalJson(currentPredecessor.policy.effectiveNativePolicy) !==
+          canonicalJson(predecessor.policy.effectiveNativePolicy)
+      ) {
+        throw new BridgeError({
+          code: "continuation_route_changed",
+          message: `Invocation ${request.invocationId} no longer has the same retained continuation context.`,
+          retryable: false,
+          details: { invocationId: request.invocationId },
+        });
+      }
+      const lockOwner = this.#workspaceLocks.get(workspaceKey);
+      if (lockOwner !== undefined) {
+        throw new BridgeError({
+          code: "invocation_conflict",
+          message: "Another active invocation already owns this working directory.",
+          retryable: false,
+          details: { workingDirectory: workspaceKey, invocationId: lockOwner },
+        });
+      }
+      const base: StoredInvocationRecord = {
+        schemaVersion: SCHEMA_VERSION,
+        invocationId,
+        ...(currentPredecessor.callerCorrelationId === undefined
+          ? {}
+          : { callerCorrelationId: currentPredecessor.callerCorrelationId }),
+        idempotencyKey: request.idempotencyKey,
+        requestDigest,
+        continuedFrom: currentPredecessor.invocationId,
+        continuationHandle: handle,
+        request: continuedRequest,
+        resolvedRoute: freshResolution.route,
+        policy: {
+          requestedPolicy: continuedRequest.requestedPolicy,
+          effectiveNativePolicy: freshResolution.effectiveNativePolicy,
+          assurance: freshResolution.descriptor.assurance,
+        },
+        state: "queued",
+        createdAt,
+        updatedAt: createdAt,
+        eventCount: 0,
+        events: [],
+      };
+      const record = this.#appendBridgeEvent(
+        base,
+        "lifecycle",
+        { state: "queued", continuedFrom: currentPredecessor.invocationId },
+        createdAt,
+      );
+      this.#records.set(invocationId, record);
+      this.#workspaceLocks.set(workspaceKey, invocationId);
+      return { value: this.#startResult(record, false), changed: true };
+    });
+
+    if (!result.deduplicated) {
+      this.#beforeSnapshots.set(
+        invocationId,
+        await captureWorkspaceSnapshot(continuedRequest.workingDirectory, this.#effectLimits),
+      );
+      if (freshResolution.connectionContext !== undefined) {
+        this.#connectionContexts.set(invocationId, freshResolution.connectionContext);
+      }
+      this.#launch(invocationId);
+    }
+    return result;
+  }
+
+  async send(request: SendInvocationRequest): Promise<SendInvocationResult> {
+    const digest = sha256(canonicalJson(request.input));
+    const result = await this.#mutate<{
+      readonly result: SendInvocationResult;
+      readonly dispatch: boolean;
+    }>(() => {
+      const current = this.#requireRecord(request.invocationId);
+      const prior = (current.acceptedInputs ?? []).find(
+        (candidate) => candidate.idempotencyKey === request.idempotencyKey,
+      );
+      if (prior !== undefined) {
+        if (prior.digest !== digest) {
+          throw new BridgeError({
+            code: "invocation_conflict",
+            message: "The send idempotency key is already bound to different input.",
+            retryable: false,
+            details: {
+              invocationId: request.invocationId,
+              inputId: prior.inputId,
+              idempotencyKey: request.idempotencyKey,
+            },
+          });
+        }
+        return {
+          value: {
+            result: {
+              invocationId: request.invocationId,
+              inputId: prior.inputId,
+              accepted: true as const,
+              deduplicated: true,
+              delivery: prior.delivery,
+            },
+            dispatch: false,
+          },
+          changed: false,
+        };
+      }
+      if (TERMINAL_STATES.has(current.state) || current.state === "cancelling") {
+        throw new BridgeError({
+          code: "invocation_not_active",
+          message: `Invocation ${request.invocationId} is not accepting new input.`,
+          retryable: false,
+          details: { invocationId: request.invocationId, state: current.state },
+        });
+      }
+      if (this.#completing.has(request.invocationId)) {
+        throw new BridgeError({
+          code: "invocation_not_active",
+          message: `Invocation ${request.invocationId} is completing and cannot accept new input.`,
+          retryable: false,
+          details: { invocationId: request.invocationId, state: current.state },
+        });
+      }
+      if (this.#controllers.get(request.invocationId)?.signal.aborted === true) {
+        throw new BridgeError({
+          code: "invocation_not_active",
+          message: `Invocation ${request.invocationId} is closing and cannot accept new input.`,
+          retryable: false,
+          details: { invocationId: request.invocationId, state: current.state },
+        });
+      }
+      if (current.state === "waiting_for_input") {
+        throw new BridgeError({
+          code: "invocation_conflict",
+          message: `Invocation ${request.invocationId} is waiting for a correlated permission response or question answer.`,
+          retryable: false,
+          details: { invocationId: request.invocationId, state: current.state },
+        });
+      }
+      const adapter = this.#registry.adapter(current.resolvedRoute.adapter);
+      if (
+        !current.resolvedRoute.capabilities.includes("steering") ||
+        adapter.sendInput === undefined
+      ) {
+        throw new BridgeError({
+          code: "unsupported_capability",
+          message: `Resolved route ${current.resolvedRoute.routeId} does not implement active invocation input.`,
+          retryable: false,
+          details: { routeId: current.resolvedRoute.routeId, capability: "steering" },
+        });
+      }
+      const inputId = `input_${randomUUID()}`;
+      const accepted: StoredAcceptedInput = {
+        inputId,
+        idempotencyKey: request.idempotencyKey,
+        digest,
+        delivery: "pending",
+      };
+      const timestamp = new Date().toISOString();
+      const withEvent = this.#appendBridgeEvent(
+        current,
+        "input_accepted",
+        { inputId, delivery: "pending" },
+        timestamp,
+        request.input,
+      );
+      this.#records.set(request.invocationId, {
+        ...withEvent,
+        acceptedInputs: [...(current.acceptedInputs ?? []), accepted],
+      });
+      return {
+        value: {
+          result: {
+            invocationId: request.invocationId,
+            inputId,
+            accepted: true as const,
+            deduplicated: false,
+            delivery: "pending",
+          },
+          dispatch: this.#adapterReady.has(request.invocationId),
+        },
+        changed: true,
+      };
+    });
+    if (result.dispatch) {
+      this.#launchPendingInputs(request.invocationId);
+    }
+    return result.result;
+  }
+
   async inspect(invocationId: string): Promise<Readonly<Record<string, unknown>>> {
     await this.#mutationTail;
     const record = this.#requireRecord(invocationId);
@@ -545,15 +881,14 @@ export class Broker {
       ...(record.callerCorrelationId === undefined
         ? {}
         : { callerCorrelationId: record.callerCorrelationId }),
+      ...(record.continuedFrom === undefined ? {} : { continuedFrom: record.continuedFrom }),
       requested: record.request.selector,
       resolved: record.resolvedRoute,
       policy: record.policy,
       eventCount: record.eventCount,
       ...(lastEvent === undefined ? {} : { lastCursor: lastEvent.cursor }),
       ...(record.outcome === undefined ? {} : { outcome: record.outcome }),
-      next: TERMINAL_STATES.has(record.state)
-        ? ["invocation.events"]
-        : ["invocation.events", "invocation.cancel"],
+      next: this.#nextOperations(record),
     };
   }
 
@@ -583,6 +918,7 @@ export class Broker {
         state: record.state,
         requestedSelector: record.request.selector,
         resolvedRouteId: record.resolvedRoute.routeId,
+        ...(record.continuedFrom === undefined ? {} : { continuedFrom: record.continuedFrom }),
         createdAt: record.createdAt,
         ...(record.outcome?.completedAt === undefined
           ? {}
@@ -782,10 +1118,13 @@ export class Broker {
     let partialResult: Partial<AdapterRunResult> = {};
     try {
       const adapter = this.#registry.adapter(current.resolvedRoute.adapter);
-      const runContext = {
+      const runContext: AdapterRunContext = {
         invocationId,
         request: current.request,
         route: current.resolvedRoute,
+        ...(current.continuationHandle === undefined
+          ? {}
+          : { continuationHandle: current.continuationHandle }),
         signal: controller.signal,
         emit: async (event: AdapterEvent) => this.#appendAdapterEvent(invocationId, event),
         reportPartial(partial: Partial<AdapterRunResult>) {
@@ -793,12 +1132,14 @@ export class Broker {
         },
         awaitInput: async (requestId: string, signal?: AbortSignal) =>
           this.#awaitInput(invocationId, requestId, signal),
+        awaitAnswer: async (requestId: string, signal?: AbortSignal) =>
+          this.#awaitAnswer(invocationId, requestId, signal),
         terminationGraceMs: this.#terminationGraceMs,
       };
       const connectionContext = this.#connectionContexts.get(invocationId);
-      let result: AdapterRunResult;
+      let run: Promise<AdapterRunResult>;
       if (connectionContext === undefined) {
-        result = await adapter.run(runContext);
+        run = adapter.run(runContext);
       } else {
         if (adapter.runConnection === undefined) {
           throw new BridgeError({
@@ -807,8 +1148,11 @@ export class Broker {
             retryable: false,
           });
         }
-        result = await adapter.runConnection({ ...runContext, connection: connectionContext });
+        run = adapter.runConnection({ ...runContext, connection: connectionContext });
       }
+      this.#adapterReady.add(invocationId);
+      this.#launchPendingInputs(invocationId);
+      const result = await run;
       const latest = this.#requireRecord(invocationId);
       if (latest.state === "cancelling" || controller.signal.aborted) {
         const interrupted = this.#shutdownRequested;
@@ -863,7 +1207,22 @@ export class Broker {
         clearTimeout(timeout);
       }
       this.#controllers.delete(invocationId);
+      this.#adapterReady.delete(invocationId);
       this.#inputWaiters.delete(invocationId);
+      this.#inputResponses.forEach((_response, key) => {
+        if (key.startsWith(`${invocationId}:`)) {
+          this.#inputResponses.delete(key);
+        }
+      });
+      for (const waiter of this.#questionWaiters.get(invocationId)?.values() ?? []) {
+        waiter.reject(new DOMException("The invocation is no longer active.", "AbortError"));
+      }
+      this.#questionWaiters.delete(invocationId);
+      this.#questionResponses.forEach((_answer, key) => {
+        if (key.startsWith(`${invocationId}:`)) {
+          this.#questionResponses.delete(key);
+        }
+      });
     }
   }
 
@@ -893,13 +1252,26 @@ export class Broker {
   }
 
   async #appendAdapterEvent(invocationId: string, event: AdapterEvent): Promise<void> {
+    const current = this.#records.get(invocationId);
+    if (
+      event.inputRequest?.kind === "question" &&
+      current !== undefined &&
+      !current.resolvedRoute.capabilities.includes("questions")
+    ) {
+      throw new BridgeError({
+        code: "unsupported_capability",
+        message: `Resolved route ${current.resolvedRoute.routeId} emitted an unqualified delegate question.`,
+        retryable: false,
+        details: { routeId: current.resolvedRoute.routeId, capability: "questions" },
+      });
+    }
     await this.#mutate(() => {
       const current = this.#requireRecord(invocationId);
       if (TERMINAL_STATES.has(current.state)) {
         return { value: undefined, changed: false };
       }
       const timestamp = new Date().toISOString();
-      let updated: InvocationRecord = current;
+      let updated: StoredInvocationRecord = current;
       if (!isEffectOnlyCarrier(event)) {
         const sequence = current.eventCount + 1;
         const appended: InvocationEvent = {
@@ -924,10 +1296,12 @@ export class Broker {
                         requestId: event.inputRequest.requestId,
                         kind: event.inputRequest.kind,
                         prompt: event.inputRequest.prompt,
-                        ...(event.inputRequest.toolName === undefined
+                        ...(event.inputRequest.kind !== "permission" ||
+                        event.inputRequest.toolName === undefined
                           ? {}
                           : { toolName: event.inputRequest.toolName }),
-                        ...(event.inputRequest.input === undefined
+                        ...(event.inputRequest.kind !== "permission" ||
+                        event.inputRequest.input === undefined
                           ? {}
                           : { input: event.inputRequest.input }),
                       }),
@@ -983,10 +1357,13 @@ export class Broker {
       const pendingRequest = [...current.events]
         .reverse()
         .find((event) => event.category === "input_required");
-      if (pendingRequest?.data?.requestId !== response.requestId) {
+      if (
+        pendingRequest?.data?.requestId !== response.requestId ||
+        pendingRequest.data.kind !== "permission"
+      ) {
         throw new BridgeError({
-          code: "invalid_request",
-          message: `Request ${response.requestId} is not the pending input request for invocation ${response.invocationId}.`,
+          code: "invocation_input_stale",
+          message: `Request ${response.requestId} is not the pending permission request for invocation ${response.invocationId}.`,
           retryable: false,
           details: { invocationId: response.invocationId, requestId: response.requestId },
         });
@@ -1029,6 +1406,72 @@ export class Broker {
     return result;
   }
 
+  async answer(request: AnswerInputRequest): Promise<Readonly<Record<string, unknown>>> {
+    const result = await this.#mutate(() => {
+      const current = this.#requireRecord(request.invocationId);
+      if (current.state !== "waiting_for_input") {
+        throw new BridgeError({
+          code: "invocation_not_active",
+          message: `Invocation ${request.invocationId} is not waiting for a question answer.`,
+          retryable: false,
+          details: { invocationId: request.invocationId, state: current.state },
+        });
+      }
+      if (!current.resolvedRoute.capabilities.includes("questions")) {
+        throw new BridgeError({
+          code: "unsupported_capability",
+          message: `Resolved route ${current.resolvedRoute.routeId} does not support caller answers to delegate questions.`,
+          retryable: false,
+          details: { routeId: current.resolvedRoute.routeId, capability: "questions" },
+        });
+      }
+      const pendingRequest = [...current.events]
+        .reverse()
+        .find((event) => event.category === "input_required");
+      if (
+        pendingRequest?.data?.requestId !== request.requestId ||
+        pendingRequest.data.kind !== "question"
+      ) {
+        throw new BridgeError({
+          code: "invocation_input_stale",
+          message: `Request ${request.requestId} is not the pending question for invocation ${request.invocationId}.`,
+          retryable: false,
+          details: { invocationId: request.invocationId, requestId: request.requestId },
+        });
+      }
+      const timestamp = new Date().toISOString();
+      const withEvent = this.#appendBridgeEvent(
+        current,
+        "input_answered",
+        { requestId: request.requestId, kind: "question" },
+        timestamp,
+        request.answer,
+      );
+      this.#records.set(request.invocationId, {
+        ...withEvent,
+        state: "running",
+        updatedAt: timestamp,
+      });
+      return {
+        value: {
+          invocationId: request.invocationId,
+          requestId: request.requestId,
+          accepted: true,
+          state: "running",
+        },
+        changed: true,
+      };
+    });
+    const waiter = this.#questionWaiters.get(request.invocationId)?.get(request.requestId);
+    if (waiter !== undefined) {
+      this.#questionWaiters.get(request.invocationId)?.delete(request.requestId);
+      waiter.resolve(request.answer);
+    } else {
+      this.#questionResponses.set(`${request.invocationId}:${request.requestId}`, request.answer);
+    }
+    return result;
+  }
+
   async #awaitInput(
     invocationId: string,
     requestId: string,
@@ -1061,6 +1504,243 @@ export class Broker {
     });
   }
 
+  async #awaitAnswer(
+    invocationId: string,
+    requestId: string,
+    signal?: AbortSignal,
+  ): Promise<readonly ContentPart[]> {
+    const key = `${invocationId}:${requestId}`;
+    const answer = this.#questionResponses.get(key);
+    if (answer !== undefined) {
+      this.#questionResponses.delete(key);
+      return answer;
+    }
+    if (signal?.aborted === true) {
+      throw new DOMException("The invocation was cancelled.", "AbortError");
+    }
+    return new Promise((resolve, reject) => {
+      const waiters = this.#questionWaiters.get(invocationId) ?? new Map<string, QuestionWaiter>();
+      const finish = (callback: () => void): void => {
+        waiters.delete(requestId);
+        signal?.removeEventListener("abort", onAbort);
+        callback();
+      };
+      const onAbort = (): void => {
+        finish(() => reject(new DOMException("The invocation was cancelled.", "AbortError")));
+      };
+      waiters.set(requestId, {
+        resolve: (response) => finish(() => resolve(response)),
+        reject: (error) => finish(() => reject(error)),
+      });
+      this.#questionWaiters.set(invocationId, waiters);
+      signal?.addEventListener("abort", onAbort, { once: true });
+      if (signal?.aborted === true) {
+        onAbort();
+      }
+    });
+  }
+
+  #launchPendingInputs(invocationId: string): void {
+    const record = this.#records.get(invocationId);
+    if (
+      record === undefined ||
+      TERMINAL_STATES.has(record.state) ||
+      record.state === "cancelling" ||
+      this.#completing.has(invocationId) ||
+      this.#controllers.get(invocationId)?.signal.aborted === true ||
+      [...this.#inputDeliveryRuns.keys()].some((key) => key.startsWith(`${invocationId}:`))
+    ) {
+      return;
+    }
+    const accepted = (record.acceptedInputs ?? []).find(
+      (candidate) => candidate.delivery === "pending",
+    );
+    if (accepted === undefined) {
+      return;
+    }
+    const event = record.events.find(
+      (candidate) =>
+        candidate.category === "input_accepted" && candidate.data?.inputId === accepted.inputId,
+    );
+    if (event?.content === undefined) {
+      return;
+    }
+    this.#launchInputDelivery(invocationId, accepted.inputId, event.content);
+  }
+
+  #launchInputDelivery(
+    invocationId: string,
+    inputId: string,
+    content: readonly ContentPart[],
+  ): void {
+    const key = `${invocationId}:${inputId}`;
+    if (this.#inputDeliveryRuns.has(key)) {
+      return;
+    }
+    const record = this.#records.get(invocationId);
+    const controller = this.#controllers.get(invocationId);
+    if (
+      record === undefined ||
+      controller === undefined ||
+      TERMINAL_STATES.has(record.state) ||
+      record.state === "cancelling" ||
+      this.#completing.has(invocationId) ||
+      controller.signal.aborted ||
+      !this.#adapterReady.has(invocationId)
+    ) {
+      return;
+    }
+    const adapter = this.#registry.adapter(record.resolvedRoute.adapter);
+    if (adapter.sendInput === undefined) {
+      return;
+    }
+    const sendInput = adapter.sendInput.bind(adapter);
+    const deliveryController = new AbortController();
+    const abortWithInvocation = (): void => {
+      deliveryController.abort("invocation_cancelled");
+    };
+    if (controller.signal.aborted) {
+      abortWithInvocation();
+    } else {
+      controller.signal.addEventListener("abort", abortWithInvocation, { once: true });
+    }
+    this.#inputDeliveryControllers.set(key, deliveryController);
+    const context: AdapterSendInputContext = {
+      invocationId,
+      route: record.resolvedRoute,
+      inputId,
+      content,
+      signal: deliveryController.signal,
+    };
+    const delivery = this.#deliverInput(sendInput, context)
+      .catch((error: unknown) => {
+        this.#log(
+          "error",
+          `Failed to record input delivery for ${invocationId}: ${messageFrom(error)}`,
+        );
+      })
+      .finally(() => {
+        controller.signal.removeEventListener("abort", abortWithInvocation);
+        this.#inputDeliveryControllers.delete(key);
+        this.#inputDeliveryRuns.delete(key);
+        this.#launchPendingInputs(invocationId);
+      });
+    this.#inputDeliveryRuns.set(key, delivery);
+  }
+
+  async #deliverInput(
+    sendInput: NonNullable<Adapter["sendInput"]>,
+    context: AdapterSendInputContext,
+  ): Promise<void> {
+    try {
+      const result: AdapterInputResult = await sendInput(context);
+      await this.#mutate(() => {
+        const current = this.#records.get(context.invocationId);
+        const accepted = current?.acceptedInputs?.find(
+          (input) => input.inputId === context.inputId,
+        );
+        if (
+          current === undefined ||
+          accepted === undefined ||
+          accepted.delivery !== "pending" ||
+          TERMINAL_STATES.has(current.state)
+        ) {
+          return { value: undefined, changed: false };
+        }
+        const timestamp = new Date().toISOString();
+        const withEvent = this.#appendBridgeEvent(
+          current,
+          "input_delivered",
+          {
+            inputId: context.inputId,
+            boundary: result.boundary,
+            evidence: "native_session_acknowledgement",
+          },
+          timestamp,
+          undefined,
+          { source: "adapter", adapter: current.resolvedRoute.adapter },
+        );
+        const acceptedInputs = current.acceptedInputs?.map((input) =>
+          input.inputId === context.inputId ? { ...input, delivery: "delivered" as const } : input,
+        );
+        this.#records.set(context.invocationId, {
+          ...withEvent,
+          ...(acceptedInputs === undefined ? {} : { acceptedInputs }),
+        });
+        return { value: undefined, changed: true };
+      });
+    } catch (error) {
+      await this.#mutate(() => {
+        const current = this.#records.get(context.invocationId);
+        const accepted = current?.acceptedInputs?.find(
+          (input) => input.inputId === context.inputId,
+        );
+        if (
+          current === undefined ||
+          accepted === undefined ||
+          accepted.delivery !== "pending" ||
+          TERMINAL_STATES.has(current.state)
+        ) {
+          return { value: undefined, changed: false };
+        }
+        const expired = current.state === "cancelling" || context.signal.aborted;
+        const timestamp = new Date().toISOString();
+        const withEvent = this.#appendBridgeEvent(
+          current,
+          expired ? "input_expired" : "input_delivery_failed",
+          {
+            inputId: context.inputId,
+            ...(expired
+              ? {
+                  reason:
+                    current.state === "cancelling" ? "invocation_cancelled" : "invocation_terminal",
+                }
+              : {}),
+            ...(error instanceof BridgeError ? { code: error.code } : { code: "adapter_failed" }),
+          },
+          timestamp,
+        );
+        const acceptedInputs = current.acceptedInputs?.map((input) =>
+          input.inputId === context.inputId
+            ? { ...input, delivery: expired ? ("expired" as const) : ("failed" as const) }
+            : input,
+        );
+        this.#records.set(context.invocationId, {
+          ...withEvent,
+          ...(acceptedInputs === undefined ? {} : { acceptedInputs }),
+        });
+        return { value: undefined, changed: true };
+      });
+    }
+  }
+
+  #expirePendingInputs(
+    record: StoredInvocationRecord,
+    reason: "broker_restart" | "invocation_terminal",
+    timestamp: string,
+  ): StoredInvocationRecord {
+    const pending = (record.acceptedInputs ?? []).filter((input) => input.delivery === "pending");
+    if (pending.length === 0) {
+      return record;
+    }
+    let updated = record;
+    for (const input of pending) {
+      updated = this.#appendBridgeEvent(
+        updated,
+        "input_expired",
+        { inputId: input.inputId, reason },
+        timestamp,
+      );
+    }
+    const acceptedInputs = updated.acceptedInputs?.map((input) =>
+      input.delivery === "pending" ? { ...input, delivery: "expired" as const } : input,
+    );
+    return {
+      ...updated,
+      ...(acceptedInputs === undefined ? {} : { acceptedInputs }),
+    };
+  }
+
   async #complete(
     invocationId: string,
     status: TerminalStatus,
@@ -1070,6 +1750,12 @@ export class Broker {
       readonly error?: InvocationOutcome["error"];
     } & Partial<AdapterRunResult>,
   ): Promise<void> {
+    this.#completing.add(invocationId);
+    for (const [key, controller] of this.#inputDeliveryControllers) {
+      if (key.startsWith(`${invocationId}:`)) {
+        controller.abort("invocation_terminal");
+      }
+    }
     const current = this.#records.get(invocationId);
     const afterSnapshot =
       current === undefined
@@ -1098,7 +1784,7 @@ export class Broker {
         ),
         ...observed.effects,
       ];
-      let withEvent = current;
+      let withEvent = this.#expirePendingInputs(current, "invocation_terminal", completedAt);
       for (const effect of observed.effects) {
         withEvent = this.#appendBridgeEvent(
           withEvent,
@@ -1125,6 +1811,9 @@ export class Broker {
         ...withEvent,
         state: status,
         updatedAt: completedAt,
+        ...(result.continuationHandle === undefined
+          ? {}
+          : { continuationHandle: result.continuationHandle }),
         outcome,
       });
       for (const [workspace, owner] of this.#workspaceLocks) {
@@ -1135,6 +1824,7 @@ export class Broker {
       this.#beforeSnapshots.delete(invocationId);
       return { value: undefined, changed: true };
     });
+    this.#completing.delete(invocationId);
   }
 
   #outcome(
@@ -1206,11 +1896,13 @@ export class Broker {
   }
 
   #appendBridgeEvent(
-    record: InvocationRecord,
+    record: StoredInvocationRecord,
     category: InvocationEvent["category"],
     data: NonNullable<InvocationEvent["data"]>,
     timestamp: string,
-  ): InvocationRecord {
+    content?: readonly ContentPart[],
+    provenance: InvocationEvent["provenance"] = { source: "bridge" },
+  ): StoredInvocationRecord {
     const sequence = record.eventCount + 1;
     const event: InvocationEvent = {
       schemaVersion: SCHEMA_VERSION,
@@ -1219,8 +1911,9 @@ export class Broker {
       cursor: eventCursor(sequence),
       timestamp,
       category,
+      ...(content === undefined ? {} : { content }),
       data,
-      provenance: { source: "bridge" },
+      provenance,
     };
     return {
       ...record,
@@ -1235,8 +1928,38 @@ export class Broker {
       invocationId: record.invocationId,
       state: record.state,
       deduplicated,
-      next: ["invocation.inspect", "invocation.events", "invocation.cancel"],
+      next: ["invocation.inspect", ...this.#nextOperations(record)],
     };
+  }
+
+  #nextOperations(record: StoredInvocationRecord): readonly string[] {
+    if (TERMINAL_STATES.has(record.state)) {
+      const handleAvailable =
+        record.continuationHandle !== undefined &&
+        (record.continuationHandle.expiresAt === undefined ||
+          Date.parse(record.continuationHandle.expiresAt) > Date.now());
+      return record.resolvedRoute.capabilities.includes("continuation") && handleAvailable
+        ? ["invocation.events", "invocation.continue"]
+        : ["invocation.events"];
+    }
+    const next = ["invocation.events", "invocation.cancel"];
+    if (record.state === "waiting_for_input") {
+      const inputRequest = [...record.events]
+        .reverse()
+        .find((event) => event.category === "input_required");
+      if (inputRequest?.data?.kind === "permission") next.push("invocation.respond");
+      if (inputRequest?.data?.kind === "question") next.push("invocation.answer");
+      return next;
+    }
+    const adapter = this.#registry.adapter(record.resolvedRoute.adapter);
+    if (
+      record.state !== "cancelling" &&
+      record.resolvedRoute.capabilities.includes("steering") &&
+      adapter.sendInput !== undefined
+    ) {
+      next.push("invocation.send");
+    }
+    return next;
   }
 
   async #existingIdempotent(
@@ -1271,7 +1994,7 @@ export class Broker {
     return record;
   }
 
-  #requireRecord(invocationId: string): InvocationRecord {
+  #requireRecord(invocationId: string): StoredInvocationRecord {
     const record = this.#records.get(invocationId);
     if (record === undefined) {
       const tombstone = this.#tombstones.get(invocationId);

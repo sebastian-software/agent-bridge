@@ -1,6 +1,9 @@
 export type BridgeErrorCode =
   | "auth_required"
   | "broker_unavailable"
+  | "continuation_expired"
+  | "continuation_route_changed"
+  | "continuation_unavailable"
   | "harness_failed"
   | "internal_error"
   | "invalid_request"
@@ -8,6 +11,7 @@ export type BridgeErrorCode =
   | "invocation_evicted"
   | "invocation_not_active"
   | "invocation_not_found"
+  | "invocation_input_stale"
   | "output_unparseable"
   | "protocol_version_mismatch"
   | "route_ambiguous"

@@ -6,6 +6,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { Broker } from "./broker.js";
 import { createClient } from "./client.js";
 import { type BrokerConfigValues, loadBrokerConfig } from "./config.js";
+import { parseContentParts } from "./contract.js";
 import { BridgeError, errorDetail } from "./errors.js";
 import { BrokerServer, IpcClient } from "./ipc.js";
 import { writeBrokerLog } from "./log.js";
@@ -28,6 +29,9 @@ Usage:
   harness-relay wait <invocation-id> [--timeout-ms <milliseconds>] [--json]
   harness-relay events <invocation-id> [--after <cursor>] [--follow] [--json]
   harness-relay cancel <invocation-id> [--json]
+  harness-relay answer <invocation-id> --request-id <id> [--text <text>] [--json]
+  harness-relay send <invocation-id> --idempotency-key <key> [--text <text>] [--json]
+  harness-relay continue <invocation-id> --idempotency-key <key> [--text <text>] [--json]
   harness-relay request <operation> [--params <json>] [--json]
   harness-relay broker serve [configuration flags]
   harness-relay broker status [--json]
@@ -211,9 +215,14 @@ function exitCode(code: string): number {
     case "invocation_not_found":
     case "invocation_evicted":
     case "invocation_not_active":
+    case "invocation_input_stale":
+    case "continuation_expired":
+    case "continuation_unavailable":
       return 4;
     case "route_ambiguous":
     case "route_unavailable":
+    case "continuation_route_changed":
+    case "unsupported_capability":
       return 5;
     case "invocation_conflict":
       return 6;
@@ -879,6 +888,40 @@ async function runCommand(argv: readonly string[]): Promise<void> {
       }),
       json,
     );
+    return;
+  }
+  if (command === "answer" || command === "send" || command === "continue") {
+    const invocationId = positional(parsed, 0, "invocation ID");
+    const promptArguments: ParsedArguments = {
+      ...parsed,
+      positionals: parsed.positionals.slice(1),
+    };
+    const input = parseContentParts(await promptAndInput(promptArguments), "input");
+    let result: unknown;
+    if (command === "answer") {
+      result = await client.answer({
+        invocationId,
+        requestId: requiredOption(parsed, "request-id"),
+        answer: input,
+      });
+    } else if (command === "send") {
+      result = await client.send({
+        invocationId,
+        input,
+        idempotencyKey: requiredOption(parsed, "idempotency-key"),
+      });
+    } else {
+      result = await client.continue({
+        invocationId,
+        input,
+        idempotencyKey: requiredOption(parsed, "idempotency-key"),
+      });
+    }
+    if (json) {
+      output(result, true);
+    } else {
+      human(result);
+    }
     return;
   }
   if (command === "request") {

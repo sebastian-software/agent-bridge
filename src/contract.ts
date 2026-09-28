@@ -148,6 +148,10 @@ export type EventCategory =
   | "diagnostic"
   | "effect"
   | "input_accepted"
+  | "input_answered"
+  | "input_delivered"
+  | "input_delivery_failed"
+  | "input_expired"
   | "input_required"
   | "lifecycle"
   | "output"
@@ -194,19 +198,51 @@ export type Usage = {
   readonly source: string;
 };
 
-export type InputRequest = {
-  readonly requestId: string;
-  readonly kind: "permission";
-  readonly prompt: string;
-  readonly toolName?: string;
-  /** Original tool input, kept transiently for native permission responses. */
-  readonly input?: JsonValue;
-};
+export type InputRequest =
+  | {
+      readonly requestId: string;
+      readonly kind: "permission";
+      readonly prompt: string;
+      readonly toolName?: string;
+      /** Original tool input, kept transiently for native permission responses. */
+      readonly input?: JsonValue;
+    }
+  | {
+      readonly requestId: string;
+      readonly kind: "question";
+      readonly prompt: string;
+    };
 
 export type InputResponse = {
   readonly invocationId: string;
   readonly requestId: string;
   readonly decision: "allow" | "deny";
+};
+
+export type AnswerInputRequest = {
+  readonly invocationId: string;
+  readonly requestId: string;
+  readonly answer: readonly ContentPart[];
+};
+
+export type SendInvocationRequest = {
+  readonly invocationId: string;
+  readonly input: readonly ContentPart[];
+  readonly idempotencyKey: string;
+};
+
+export type ContinueInvocationRequest = {
+  readonly invocationId: string;
+  readonly input: readonly ContentPart[];
+  readonly idempotencyKey: string;
+};
+
+export type SendInvocationResult = {
+  readonly invocationId: string;
+  readonly inputId: string;
+  readonly accepted: true;
+  readonly deduplicated: boolean;
+  readonly delivery: "pending" | "delivered" | "failed" | "expired";
 };
 
 export type InvocationOutcome = {
@@ -235,6 +271,7 @@ export type InvocationRecord = {
   readonly callerCorrelationId?: string;
   readonly idempotencyKey?: string;
   readonly requestDigest: string;
+  readonly continuedFrom?: string;
   readonly request: StartInvocationRequest;
   readonly resolvedRoute: ResolvedRoute;
   readonly policy: PolicyEvidence;
@@ -274,6 +311,7 @@ export type InvocationSummary = {
   readonly state: InvocationState;
   readonly requestedSelector: DelegationSelector;
   readonly resolvedRouteId: string;
+  readonly continuedFrom?: string;
   readonly createdAt: string;
   readonly completedAt?: string;
   readonly workingDirectory: string;
@@ -417,6 +455,14 @@ export function parseContentParts(value: unknown, field = "content"): readonly C
     invalid(`${field} must be an array.`);
   }
   return value.map((part, index) => parseContentPart(part, `${field}[${index}]`));
+}
+
+function requiredContentParts(value: unknown, field: string): readonly ContentPart[] {
+  const content = parseContentParts(value, field);
+  if (content.length === 0) {
+    invalid(`${field} must contain at least one content part.`);
+  }
+  return content;
 }
 
 export function isJsonValue(value: unknown): value is JsonValue {
@@ -603,6 +649,37 @@ export function parseRespondParams(value: unknown): InputResponse {
     invocationId: stringValue(source.invocationId, "params.invocationId", { nonEmpty: true }),
     requestId: stringValue(source.requestId, "params.requestId", { nonEmpty: true }),
     decision: oneOf(source.decision, "params.decision", ["allow", "deny"] as const),
+  };
+}
+
+export function parseAnswerParams(value: unknown): AnswerInputRequest {
+  const source = record(value, "params");
+  return {
+    invocationId: stringValue(source.invocationId, "params.invocationId", { nonEmpty: true }),
+    requestId: stringValue(source.requestId, "params.requestId", { nonEmpty: true }),
+    answer: requiredContentParts(source.answer, "params.answer"),
+  };
+}
+
+export function parseSendInvocationParams(value: unknown): SendInvocationRequest {
+  const source = record(value, "params");
+  return {
+    invocationId: stringValue(source.invocationId, "params.invocationId", { nonEmpty: true }),
+    input: requiredContentParts(source.input, "params.input"),
+    idempotencyKey: stringValue(source.idempotencyKey, "params.idempotencyKey", {
+      nonEmpty: true,
+    }),
+  };
+}
+
+export function parseContinueInvocationParams(value: unknown): ContinueInvocationRequest {
+  const source = record(value, "params");
+  return {
+    invocationId: stringValue(source.invocationId, "params.invocationId", { nonEmpty: true }),
+    input: requiredContentParts(source.input, "params.input"),
+    idempotencyKey: stringValue(source.idempotencyKey, "params.idempotencyKey", {
+      nonEmpty: true,
+    }),
   };
 }
 

@@ -81,10 +81,12 @@ outcome. It does not become the caller's workflow orchestrator.
   `inferred`, `reported`, or `verified`.
 - **Tombstone:** Minimal retention metadata left after an invocation payload is
   evicted.
-- **Continuation:** A future linked invocation that resumes a native session;
-  it is not an active-turn operation.
-- **Steering:** A future operation that sends direction into an active native
-  invocation.
+- **Continuation:** A new invocation linked to a terminal predecessor that
+  resumes a retained native session when the exact route and policy remain
+  qualified. It has a new identity and does not alter the predecessor outcome.
+- **Steering:** Additional caller input queued for an active invocation through
+  an adapter's supported native session boundary. Acceptance and native
+  delivery are distinct evidence; delivery does not prove model consumption.
 - **Caller correlation ID:** Optional caller-owned metadata used to search or
   group invocations.
 - **Idempotency key:** Optional caller-owned key that deduplicates an equivalent
@@ -95,8 +97,9 @@ outcome. It does not become the caller's workflow orchestrator.
 - The caller remains the only root in the initial architecture.
 - The bridge exposes bounded operations and does not silently create a second
   orchestration loop.
-- The initial execution primitive is a one-shot invocation. Persistent delegate
-  sessions are optional future capabilities, not part of the core contract.
+- The initial execution primitive is a one-shot invocation. Steering and
+  continuation are separate optional adapter capabilities; continuation creates
+  a linked invocation rather than making an invocation persistent.
 - Starting an invocation returns control immediately with a handle. Progress and
   output remain observable while the delegate runs.
 - An outcome may include both returned content and effects that remain in the
@@ -160,7 +163,7 @@ explicitly limited to:
 - Windows Named Pipes, Job Objects, packaging, and process-tree qualification.
 - Non-Git effect observation that can attribute changes without a repository.
 - A genuinely isolated assurance level rather than native permission mapping.
-- Active-turn steering and linked continuation semantics.
+- Native steering and linked-continuation qualification for each adapter.
 - Additional non-harness capability providers such as OCR and vision.
 
 The current operation list, state machine, evidence rules, and retention

@@ -43,7 +43,22 @@ test("typed client follows and runs an invocation through the broker", async () 
       requestedPolicy: { minimumAssurance: "none" },
     });
     assert.equal(result.outcome.status, "succeeded");
-    assert.equal((await client.list()).invocations.length, 1);
+    const continuation = await client.continue({
+      invocationId: result.invocationId,
+      input: [{ type: "text", text: "continue from the prior session" }],
+      idempotencyKey: "typed-continuation-1",
+    });
+    const continued = await client.wait(continuation.invocationId);
+    assert.equal(continued.continuedFrom, result.invocationId);
+    assert.equal(continued.outcome?.status, "succeeded");
+    const repeated = await client.continue({
+      invocationId: result.invocationId,
+      input: [{ type: "text", text: "continue from the prior session" }],
+      idempotencyKey: "typed-continuation-1",
+    });
+    assert.equal(repeated.invocationId, continuation.invocationId);
+    assert.equal(repeated.deduplicated, true);
+    assert.equal((await client.list()).invocations.length, 2);
   } finally {
     await server.stop();
     await rm(root, { recursive: true, force: true });

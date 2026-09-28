@@ -1,11 +1,18 @@
 import assert from "node:assert/strict";
-import { chmod, cp, mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { chmod, cp, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import type { Adapter, AdapterRunContext, AdapterRunResult } from "../src/adapters/types.js";
 import type {
+  Adapter,
+  AdapterRunContext,
+  AdapterRunResult,
+  AdapterSendInputContext,
+} from "../src/adapters/types.js";
+import type {
+  ContentPart,
+  InvocationEvent,
   ObservedIdentity,
   RouteDescriptor,
   StartInvocationRequest,
@@ -79,16 +86,32 @@ async function waitForTerminal(
   broker: Broker,
   invocationId: string,
 ): Promise<Readonly<Record<string, unknown>>> {
+  const inspected = await broker.wait(invocationId, 15_000);
+  if (inspected.waited !== true) assert.fail(`Invocation ${invocationId} did not become terminal.`);
+  return inspected;
+}
+
+async function waitForState(broker: Broker, invocationId: string, expected: string): Promise<void> {
   for (let attempt = 0; attempt < 200; attempt += 1) {
-    const inspected = await broker.inspect(invocationId);
-    if (
-      ["cancelled", "failed", "interrupted", "succeeded", "timed_out"].includes(stateOf(inspected))
-    ) {
-      return inspected;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    if (stateOf(await broker.inspect(invocationId)) === expected) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
   }
-  assert.fail("Invocation did not become terminal.");
+  assert.fail(`Invocation ${invocationId} did not reach ${expected}.`);
+}
+
+async function waitForEventCount(
+  broker: Broker,
+  invocationId: string,
+  category: string,
+  count: number,
+): Promise<readonly InvocationEvent[]> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const events = (await broker.events({ invocationId })).events;
+    const matches = events.filter((event) => event.category === category);
+    if (matches.length >= count) return events;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.fail(`Invocation ${invocationId} did not record ${count} ${category} events.`);
 }
 
 class InteractiveAdapter implements Adapter {
@@ -199,6 +222,171 @@ class NativePayloadAdapter implements Adapter {
   }
 }
 
+function deferred(): { readonly promise: Promise<void>; readonly resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((complete) => {
+    resolve = complete;
+  });
+  return { promise, resolve };
+}
+
+const fixtureIdentity: ObservedIdentity = {
+  provider: { value: "harness-relay", evidence: "verified", source: "dialogue-fixture" },
+  model: { value: "dialogue", evidence: "verified", source: "dialogue-fixture" },
+  harnessVersion: { value: "1.0.0", evidence: "verified", source: "dialogue-fixture" },
+  nativeSessionId: { value: "dialogue-session", evidence: "reported", source: "dialogue-fixture" },
+};
+
+class ControlledDialogueAdapter implements Adapter {
+  readonly id = "dialogue";
+  readonly firstDeliveryStarted = deferred();
+  readonly secondDeliveryStarted = deferred();
+  readonly releaseFirstDelivery = deferred();
+  readonly completeRun = deferred();
+  readonly deliveryOrder: string[] = [];
+  ignoreDeliveryCancellation = true;
+
+  async discover(): Promise<readonly RouteDescriptor[]> {
+    return [
+      {
+        routeId: "dialogue:test",
+        provider: "harness-relay",
+        model: "dialogue",
+        efforts: ["low", "medium", "high"],
+        via: "dialogue",
+        adapter: this.id,
+        harnessVersion: "1.0.0",
+        authenticationMode: "none",
+        capabilities: ["core.input.text", "steering"],
+        interactionStrategies: ["orchestrator"],
+        assurance: "none",
+        runtimeIdentityEvidence: "verified",
+        readiness: "ready",
+        qualification: [
+          {
+            qualificationId: "dialogue-test-v1",
+            testedAt: "2026-08-27T00:00:00.000Z",
+            claim: "Deterministic fixture for ordered native input delivery tests.",
+          },
+        ],
+        diagnostics: [],
+      },
+    ];
+  }
+
+  run(context: AdapterRunContext): Promise<AdapterRunResult> {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const onAbort = (): void => {
+        if (settled) return;
+        settled = true;
+        context.signal.removeEventListener("abort", onAbort);
+        reject(new DOMException("The invocation was cancelled.", "AbortError"));
+      };
+      const onComplete = (): void => {
+        if (settled) return;
+        settled = true;
+        context.signal.removeEventListener("abort", onAbort);
+        resolve({
+          content: [{ type: "text", text: "dialogue complete" }],
+          artifacts: [],
+          effects: [],
+          observedIdentity: fixtureIdentity,
+        });
+      };
+      context.signal.addEventListener("abort", onAbort, { once: true });
+      this.completeRun.promise.then(onComplete);
+      if (context.signal.aborted) onAbort();
+    });
+  }
+
+  async sendInput(context: AdapterSendInputContext): Promise<{ readonly boundary: "active-turn" }> {
+    const value = context.content
+      .map((part) => (part.type === "text" ? part.text : "[non-text]"))
+      .join("");
+    this.deliveryOrder.push(value);
+    if (this.deliveryOrder.length === 1) {
+      this.firstDeliveryStarted.resolve();
+      if (this.ignoreDeliveryCancellation) {
+        // Deliberately ignore cancellation so the broker must suppress a late ACK.
+        await this.releaseFirstDelivery.promise;
+      } else {
+        await new Promise<void>((resolve, reject) => {
+          const onAbort = (): void => {
+            context.signal.removeEventListener("abort", onAbort);
+            reject(new DOMException("Input delivery was cancelled.", "AbortError"));
+          };
+          context.signal.addEventListener("abort", onAbort, { once: true });
+          if (context.signal.aborted) onAbort();
+          this.releaseFirstDelivery.promise.then(() => {
+            context.signal.removeEventListener("abort", onAbort);
+            resolve();
+          });
+        });
+      }
+    } else if (this.deliveryOrder.length === 2) {
+      this.secondDeliveryStarted.resolve();
+    }
+    return { boundary: "active-turn" };
+  }
+}
+
+class MutableContinuationAdapter implements Adapter {
+  readonly id = "mutable-continuation";
+  effortSupported = true;
+  policySupported = true;
+
+  async discover(): Promise<readonly RouteDescriptor[]> {
+    return [
+      {
+        routeId: "mutable-continuation:test",
+        provider: "harness-relay",
+        model: "mutable-continuation",
+        efforts: this.effortSupported ? ["high"] : ["low"],
+        via: this.id,
+        adapter: this.id,
+        harnessVersion: "1.0.0",
+        authenticationMode: "none",
+        capabilities: ["core.input.text", "continuation"],
+        interactionStrategies: ["orchestrator"],
+        assurance: "none",
+        runtimeIdentityEvidence: "verified",
+        readiness: "ready",
+        qualification: [
+          {
+            qualificationId: "mutable-continuation-v1",
+            testedAt: "2026-08-27T00:00:00.000Z",
+            claim: "Mutable route fixture for continuation re-resolution tests.",
+          },
+        ],
+        diagnostics: [],
+      },
+    ];
+  }
+
+  resolvePolicy(): {
+    readonly supported: boolean;
+    readonly unsupported: readonly string[];
+    readonly effectiveNativePolicy: Readonly<Record<string, never>>;
+  } {
+    return {
+      supported: this.policySupported,
+      unsupported: this.policySupported ? [] : ["commands"],
+      effectiveNativePolicy: {},
+    };
+  }
+
+  async run(): Promise<AdapterRunResult> {
+    return {
+      content: [{ type: "text", text: "complete" }],
+      artifacts: [],
+      effects: [],
+      observedIdentity: fixtureIdentity,
+      continuationHandle: { reference: "retained-native-session" },
+    };
+  }
+}
+
 test("broker runs asynchronously, persists events, and deduplicates starts", async () => {
   const root = await mkdtemp(join(tmpdir(), "harness-relay-broker-"));
   const broker = new Broker(paths(root));
@@ -256,6 +444,370 @@ test("broker runs asynchronously, persists events, and deduplicates starts", asy
   }
 });
 
+test("active input acceptance is idempotent and records only native delivery acknowledgement", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-relay-send-"));
+  const broker = new Broker(paths(root));
+  await broker.initialize();
+  try {
+    const started = await broker.start(request(root, "fake-slow"));
+    await waitForState(broker, started.invocationId, "running");
+    assert.ok(
+      ((await broker.inspect(started.invocationId)).next as string[]).includes("invocation.send"),
+    );
+    const sendRequest = {
+      invocationId: started.invocationId,
+      input: [{ type: "text", text: "add one detail" }],
+      idempotencyKey: "send-detail-1",
+    };
+    const accepted = (await broker.execute("invocation.send", sendRequest)) as {
+      inputId: string;
+      accepted: boolean;
+      deduplicated: boolean;
+      delivery: string;
+    };
+    assert.equal(accepted.accepted, true);
+    assert.equal(accepted.deduplicated, false);
+    assert.equal(accepted.delivery, "pending");
+
+    const duplicate = (await broker.execute("invocation.send", sendRequest)) as {
+      inputId: string;
+      deduplicated: boolean;
+    };
+    assert.equal(duplicate.inputId, accepted.inputId);
+    assert.equal(duplicate.deduplicated, true);
+    await assert.rejects(
+      broker.execute("invocation.send", {
+        ...sendRequest,
+        input: [{ type: "text", text: "a different detail" }],
+      }),
+      (error: unknown) => error instanceof BridgeError && error.code === "invocation_conflict",
+    );
+
+    const events = await waitForEventCount(broker, started.invocationId, "input_delivered", 1);
+    const acceptedEvent = events.find(
+      (event) => event.category === "input_accepted" && event.data?.inputId === accepted.inputId,
+    );
+    const deliveredEvent = events.find(
+      (event) => event.category === "input_delivered" && event.data?.inputId === accepted.inputId,
+    );
+    assert.ok(acceptedEvent);
+    assert.ok(deliveredEvent);
+    assert.ok(acceptedEvent.sequence < deliveredEvent.sequence);
+    assert.equal(deliveredEvent.data?.evidence, "native_session_acknowledgement");
+    assert.equal(deliveredEvent.data?.boundary, "next-supported-boundary");
+    assert.equal(deliveredEvent.data?.modelConsumed, undefined);
+
+    const terminal = await waitForTerminal(broker, started.invocationId);
+    assert.ok(
+      ((await broker.inspect(started.invocationId)).next as string[]).includes(
+        "invocation.continue",
+      ),
+    );
+    assert.deepEqual((terminal.outcome as { content: readonly ContentPart[] }).content, [
+      { type: "text", text: "echo this" },
+      { type: "text", text: "add one detail" },
+    ]);
+    await assert.rejects(
+      broker.execute("invocation.send", {
+        invocationId: started.invocationId,
+        input: [{ type: "text", text: "late" }],
+        idempotencyKey: "send-late",
+      }),
+      (error: unknown) => error instanceof BridgeError && error.code === "invocation_not_active",
+    );
+  } finally {
+    await broker.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("caller answers general delegate questions separately from permission decisions", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-relay-answer-"));
+  const broker = new Broker(paths(root));
+  await broker.initialize();
+  try {
+    const started = await broker.start(request(root, "fake-question"));
+    await waitForState(broker, started.invocationId, "waiting_for_input");
+    const next = (await broker.inspect(started.invocationId)).next as string[];
+    assert.ok(next.includes("invocation.answer"));
+    assert.equal(next.includes("invocation.respond"), false);
+    await assert.rejects(
+      broker.execute("invocation.respond", {
+        invocationId: started.invocationId,
+        requestId: "fake-question-1",
+        decision: "allow",
+      }),
+      (error: unknown) => error instanceof BridgeError && error.code === "invocation_input_stale",
+    );
+    const response = (await broker.execute("invocation.answer", {
+      invocationId: started.invocationId,
+      requestId: "fake-question-1",
+      answer: [{ type: "text", text: "inspect the source tree" }],
+    })) as { accepted: boolean; state: string };
+    assert.equal(response.accepted, true);
+    assert.equal(response.state, "running");
+    const terminal = await waitForTerminal(broker, started.invocationId);
+    assert.deepEqual((terminal.outcome as { content: readonly ContentPart[] }).content, [
+      { type: "text", text: "echo this" },
+      { type: "text", text: "inspect the source tree" },
+    ]);
+    await assert.rejects(
+      broker.execute("invocation.answer", {
+        invocationId: started.invocationId,
+        requestId: "fake-question-1",
+        answer: [{ type: "text", text: "a second answer" }],
+      }),
+      (error: unknown) => error instanceof BridgeError && error.code === "invocation_not_active",
+    );
+  } finally {
+    await broker.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("continuation creates an idempotent linked invocation with an immutable predecessor result", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-relay-continue-"));
+  const broker = new Broker(paths(root));
+  await broker.initialize();
+  try {
+    const original = await broker.start(request(root, "fake-echo"));
+    const predecessor = await waitForTerminal(broker, original.invocationId);
+    const predecessorOutcome = predecessor.outcome;
+    const continuation = {
+      invocationId: original.invocationId,
+      input: [{ type: "text", text: "continue the same task" }],
+      idempotencyKey: "follow-up-1",
+    };
+    const started = (await broker.execute("invocation.continue", continuation)) as {
+      invocationId: string;
+      deduplicated: boolean;
+    };
+    assert.notEqual(started.invocationId, original.invocationId);
+    assert.equal(started.deduplicated, false);
+    const duplicate = (await broker.execute("invocation.continue", continuation)) as {
+      invocationId: string;
+      deduplicated: boolean;
+    };
+    assert.equal(duplicate.invocationId, started.invocationId);
+    assert.equal(duplicate.deduplicated, true);
+
+    const child = await waitForTerminal(broker, started.invocationId);
+    assert.equal((await broker.inspect(started.invocationId)).continuedFrom, original.invocationId);
+    assert.deepEqual((child.outcome as { content: readonly ContentPart[] }).content, [
+      { type: "text", text: "echo this" },
+      { type: "text", text: "continue the same task" },
+    ]);
+    assert.deepEqual((await broker.result(original.invocationId)).outcome, predecessorOutcome);
+  } finally {
+    await broker.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("continuation re-resolves route effort and policy before resuming a native session", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-relay-continuation-route-"));
+  const adapter = new MutableContinuationAdapter();
+  const broker = new Broker(paths(root), { registry: new AdapterRegistry([adapter]) });
+  await broker.initialize();
+  try {
+    const started = await broker.start(
+      request(root, "mutable-continuation", {
+        selector: {
+          provider: "harness-relay",
+          model: "mutable-continuation",
+          via: "mutable-continuation",
+          effort: "high",
+          requiredCapabilities: ["core.input.text"],
+        },
+      }),
+    );
+    await waitForTerminal(broker, started.invocationId);
+    adapter.effortSupported = false;
+    await assert.rejects(
+      broker.execute("invocation.continue", {
+        invocationId: started.invocationId,
+        input: [{ type: "text", text: "do more" }],
+        idempotencyKey: "route-changed-effort",
+      }),
+      (error: unknown) =>
+        error instanceof BridgeError && error.code === "continuation_route_changed",
+    );
+    adapter.effortSupported = true;
+    adapter.policySupported = false;
+    await assert.rejects(
+      broker.execute("invocation.continue", {
+        invocationId: started.invocationId,
+        input: [{ type: "text", text: "do more" }],
+        idempotencyKey: "route-changed-policy",
+      }),
+      (error: unknown) =>
+        error instanceof BridgeError && error.code === "continuation_route_changed",
+    );
+  } finally {
+    await broker.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("active input delivery is FIFO for each invocation despite a delayed native ACK", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-relay-send-order-"));
+  const adapter = new ControlledDialogueAdapter();
+  const broker = new Broker(paths(root), { registry: new AdapterRegistry([adapter]) });
+  await broker.initialize();
+  try {
+    const started = await broker.start(
+      request(root, "dialogue", {
+        selector: {
+          provider: "harness-relay",
+          model: "dialogue",
+          via: "dialogue",
+          effort: "high",
+          requiredCapabilities: ["core.input.text"],
+        },
+      }),
+    );
+    const send = (text: string, idempotencyKey: string): Promise<unknown> =>
+      broker.execute("invocation.send", {
+        invocationId: started.invocationId,
+        input: [{ type: "text", text }],
+        idempotencyKey,
+      });
+    await send("first instruction", "ordered-send-1");
+    await adapter.firstDeliveryStarted.promise;
+    await send("later correction", "ordered-send-2");
+    assert.deepEqual(adapter.deliveryOrder, ["first instruction"]);
+
+    adapter.releaseFirstDelivery.resolve();
+    await adapter.secondDeliveryStarted.promise;
+    const events = await waitForEventCount(broker, started.invocationId, "input_delivered", 2);
+    assert.deepEqual(adapter.deliveryOrder, ["first instruction", "later correction"]);
+    const acceptedIds = events
+      .filter((event) => event.category === "input_accepted")
+      .map((event) => event.data?.inputId);
+    const deliveredIds = events
+      .filter((event) => event.category === "input_delivered")
+      .map((event) => event.data?.inputId);
+    assert.deepEqual(deliveredIds, acceptedIds);
+    await broker.cancel(started.invocationId);
+    await waitForTerminal(broker, started.invocationId);
+  } finally {
+    adapter.releaseFirstDelivery.resolve();
+    await broker.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("cancellation expires queued inputs and suppresses a late delivery acknowledgement", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-relay-send-cancel-"));
+  const adapter = new ControlledDialogueAdapter();
+  const broker = new Broker(paths(root), { registry: new AdapterRegistry([adapter]) });
+  await broker.initialize();
+  try {
+    const started = await broker.start(
+      request(root, "dialogue", {
+        selector: {
+          provider: "harness-relay",
+          model: "dialogue",
+          via: "dialogue",
+          effort: "high",
+          requiredCapabilities: ["core.input.text"],
+        },
+      }),
+    );
+    const send = (text: string, idempotencyKey: string): Promise<unknown> =>
+      broker.execute("invocation.send", {
+        invocationId: started.invocationId,
+        input: [{ type: "text", text }],
+        idempotencyKey,
+      });
+    await send("first instruction", "cancel-send-1");
+    await adapter.firstDeliveryStarted.promise;
+    await send("queued follow-up", "cancel-send-2");
+    await broker.cancel(started.invocationId);
+    await waitForTerminal(broker, started.invocationId);
+
+    adapter.releaseFirstDelivery.resolve();
+    await broker.close();
+    const events = (await broker.events({ invocationId: started.invocationId })).events;
+    assert.equal(events.filter((event) => event.category === "input_expired").length, 2);
+    assert.equal(
+      events.some((event) => event.category === "input_delivered"),
+      false,
+    );
+  } finally {
+    adapter.releaseFirstDelivery.resolve();
+    await broker.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a finishing invocation never dispatches the next input while completion is settling", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-relay-send-complete-race-"));
+  const adapter = new ControlledDialogueAdapter();
+  adapter.ignoreDeliveryCancellation = false;
+  const broker = new Broker(paths(root), { registry: new AdapterRegistry([adapter]) });
+  await broker.initialize();
+  try {
+    const started = await broker.start(
+      request(root, "dialogue", {
+        selector: {
+          provider: "harness-relay",
+          model: "dialogue",
+          via: "dialogue",
+          effort: "high",
+          requiredCapabilities: ["core.input.text"],
+        },
+      }),
+    );
+    const send = (text: string, idempotencyKey: string): Promise<unknown> =>
+      broker.execute("invocation.send", {
+        invocationId: started.invocationId,
+        input: [{ type: "text", text }],
+        idempotencyKey,
+      });
+    await send("first instruction", "completion-send-1");
+    await adapter.firstDeliveryStarted.promise;
+    await send("queued follow-up", "completion-send-2");
+
+    adapter.completeRun.resolve();
+    await waitForTerminal(broker, started.invocationId);
+    assert.deepEqual(adapter.deliveryOrder, ["first instruction"]);
+    const events = (await broker.events({ invocationId: started.invocationId })).events;
+    assert.equal(events.filter((event) => event.category === "input_expired").length, 2);
+    assert.equal(
+      events.some((event) => event.category === "input_delivered"),
+      false,
+    );
+  } finally {
+    adapter.releaseFirstDelivery.resolve();
+    await broker.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a route with no native active-input handler returns an explicit capability error", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-relay-send-unsupported-"));
+  const broker = new Broker(paths(root));
+  await broker.initialize();
+  try {
+    const started = await broker.start(request(root, "fake-echo"));
+    await waitForState(broker, started.invocationId, "running");
+    await assert.rejects(
+      broker.execute("invocation.send", {
+        invocationId: started.invocationId,
+        input: [{ type: "text", text: "not supported" }],
+        idempotencyKey: "unsupported-send",
+      }),
+      (error: unknown) => error instanceof BridgeError && error.code === "unsupported_capability",
+    );
+    await broker.cancel(started.invocationId);
+    await waitForTerminal(broker, started.invocationId);
+  } finally {
+    await broker.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("store persists invocation metadata and events in separate files", async () => {
   const root = await mkdtemp(join(tmpdir(), "harness-relay-store-layout-"));
   const broker = new Broker(paths(root));
@@ -291,6 +843,44 @@ test("store persists invocation metadata and events in separate files", async ()
     assert.ok(await readFile(join(invocationDirectory, "outcome.json"), "utf8"));
   } finally {
     await broker.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("older invocation metadata without dialogue fields remains loadable", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-relay-store-legacy-dialogue-"));
+  const broker = new Broker(paths(root));
+  await broker.initialize();
+  let invocationId = "";
+  try {
+    const started = await broker.start(request(root, "fake-echo"));
+    invocationId = started.invocationId;
+    await waitForTerminal(broker, invocationId);
+  } finally {
+    await broker.close();
+  }
+
+  const metadataPath = join(
+    paths(root).stateDirectory,
+    "invocations",
+    encodeURIComponent(invocationId),
+    "meta.json",
+  );
+  const metadata = JSON.parse(await readFile(metadataPath, "utf8")) as Record<string, unknown>;
+  delete metadata.continuationHandle;
+  delete metadata.acceptedInputs;
+  await writeFile(metadataPath, `${JSON.stringify(metadata)}\n`, { mode: 0o600 });
+
+  const restarted = new Broker(paths(root));
+  await restarted.initialize();
+  try {
+    const inspected = await restarted.inspect(invocationId);
+    assert.equal(stateOf(inspected), "succeeded");
+    assert.deepEqual((inspected.outcome as { content: readonly ContentPart[] }).content, [
+      { type: "text", text: "echo this" },
+    ]);
+  } finally {
+    await restarted.close();
     await rm(root, { recursive: true, force: true });
   }
 });
