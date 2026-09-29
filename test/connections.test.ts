@@ -15,6 +15,8 @@ import type {
 } from "../src/adapters/types.js";
 import type { AdapterConnectionContext, HarnessConnection } from "../src/connections.js";
 import type {
+  ConnectionDiscoverResult,
+  ConnectionInspection,
   ConnectionPrepareResult,
   ObservedIdentity,
   RouteDescriptor,
@@ -44,6 +46,41 @@ function deferred(): { readonly promise: Promise<void>; readonly resolve: () => 
     settle = resolve;
   });
   return { promise, resolve: () => settle?.() };
+}
+
+type McpToolCallResult = {
+  readonly isError?: boolean;
+  readonly structuredContent?: unknown;
+  readonly content?: ReadonlyArray<{ readonly text?: string }>;
+};
+
+async function callMcpTool(
+  server: McpServer,
+  requestId: number,
+  name: string,
+  args: unknown = {},
+): Promise<McpToolCallResult> {
+  const response = await server.handle(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: requestId,
+      method: "tools/call",
+      params: { name, arguments: args },
+    }),
+  );
+  assert.ok(response);
+  const envelope = JSON.parse(response) as { readonly result?: McpToolCallResult };
+  assert.ok(envelope.result);
+  return envelope.result;
+}
+
+function mcpErrorCode(result: McpToolCallResult): string | undefined {
+  const message = result.content?.find((entry) => entry.text !== undefined)?.text;
+  if (message === undefined) {
+    return undefined;
+  }
+  const payload = JSON.parse(message) as { readonly error?: { readonly code?: unknown } };
+  return typeof payload.error?.code === "string" ? payload.error.code : undefined;
 }
 
 function brokerPaths(root: string): BrokerPaths {
@@ -179,6 +216,24 @@ class ConnectionFixtureAdapter implements Adapter {
 
   releaseRun(): void {
     this.runGate.resolve();
+  }
+}
+
+class AmbiguousRouteFixtureAdapter implements Adapter {
+  readonly id: string;
+  runCalls = 0;
+
+  constructor(id: string) {
+    this.id = id;
+  }
+
+  async discover(): Promise<readonly RouteDescriptor[]> {
+    return [{ ...descriptor(this.id), routeId: `${this.id}:fixture-model` }];
+  }
+
+  async run(_context: AdapterRunContext): Promise<AdapterRunResult> {
+    this.runCalls += 1;
+    return fixtureResult();
   }
 }
 
@@ -483,8 +538,12 @@ test("broker, typed client, and MCP share safe connection management semantics",
   const connectionsPath = join(configDirectory, "connections.json");
   const contextOne = join(root, "native-one");
   const contextTwo = join(root, "native-two");
+  const mcpContext = join(root, "native-mcp");
+  const mcpSentinel = join(mcpContext, "context.marker");
   await mkdir(contextOne, { mode: 0o700 });
   await mkdir(contextTwo, { mode: 0o700 });
+  await mkdir(mcpContext, { mode: 0o700 });
+  await writeFile(mcpSentinel, "preserve this user-owned context\n");
   const adapter = new NativeContextFixtureAdapter();
   const brokerPathsValue = {
     ...brokerPaths(root),
@@ -607,22 +666,111 @@ test("broker, typed client, and MCP share safe connection management semantics",
         `Missing MCP tool ${name}`,
       );
     }
-    const mcpPrepared = JSON.parse(
-      (await mcp.handle(
-        JSON.stringify({
-          jsonrpc: "2.0",
-          id: 2,
-          method: "tools/call",
-          params: {
-            name: "harness_relay_connection_prepare",
-            arguments: { id: "prepared", harness: "codex", purpose: "analysis" },
-          },
-        }),
-      )) ?? "null",
-    ) as {
-      result?: { structuredContent?: ConnectionPrepareResult };
+    const invalidMcpRegistration = await callMcpTool(mcp, 2, "harness_relay_connection_register", {
+      id: "../escape",
+      harness: "codex",
+      nativeContextRef: mcpContext,
+    });
+    assert.equal(mcpErrorCode(invalidMcpRegistration), "invalid_request");
+
+    const mcpRegistration = await callMcpTool(mcp, 3, "harness_relay_connection_register", {
+      id: "mcp-analysis",
+      harness: "codex",
+      nativeContextRef: mcpContext,
+      purpose: "mcp setup",
+    });
+    assert.equal(mcpRegistration.isError, undefined);
+    const mcpRegistrationResult = mcpRegistration.structuredContent as {
+      readonly connection: {
+        readonly id: string;
+        readonly revision: string;
+        readonly purpose?: string;
+      };
+      readonly readiness: string;
     };
-    const prepared = mcpPrepared.result?.structuredContent;
+    assert.equal(mcpRegistrationResult.connection.id, "mcp-analysis");
+    assert.equal(mcpRegistrationResult.readiness, "ready");
+    assert.ok(!JSON.stringify(mcpRegistration.structuredContent).includes(mcpContext));
+
+    const mcpInspection = await callMcpTool(mcp, 4, "harness_relay_connection_inspect", {
+      id: mcpRegistrationResult.connection.id,
+    });
+    assert.equal(mcpInspection.isError, undefined);
+    const mcpInspectionResult = mcpInspection.structuredContent as ConnectionInspection;
+    assert.equal(mcpInspectionResult.connection.id, "mcp-analysis");
+    assert.equal(mcpInspectionResult.readiness, "ready");
+
+    const mcpDuplicate = await callMcpTool(mcp, 5, "harness_relay_connection_register", {
+      id: "mcp-duplicate",
+      harness: "codex",
+      nativeContextRef: mcpContext,
+    });
+    assert.equal(mcpErrorCode(mcpDuplicate), "connection_conflict");
+
+    const mcpUpdate = await callMcpTool(mcp, 6, "harness_relay_connection_update", {
+      id: mcpRegistrationResult.connection.id,
+      expectedRevision: mcpRegistrationResult.connection.revision,
+      purpose: "mcp review",
+    });
+    assert.equal(mcpUpdate.isError, undefined);
+    const mcpUpdateResult = mcpUpdate.structuredContent as {
+      readonly connection: {
+        readonly id: string;
+        readonly revision: string;
+        readonly purpose?: string;
+      };
+    };
+    assert.equal(mcpUpdateResult.connection.purpose, "mcp review");
+    assert.notEqual(mcpUpdateResult.connection.revision, mcpRegistrationResult.connection.revision);
+
+    const staleMcpUpdate = await callMcpTool(mcp, 7, "harness_relay_connection_update", {
+      id: mcpRegistrationResult.connection.id,
+      expectedRevision: mcpRegistrationResult.connection.revision,
+      purpose: "stale MCP update",
+    });
+    assert.equal(mcpErrorCode(staleMcpUpdate), "connection_conflict");
+
+    const mcpDiscovery = await callMcpTool(mcp, 8, "harness_relay_connection_discover", {
+      refresh: true,
+    });
+    assert.equal(mcpDiscovery.isError, undefined);
+    const mcpDiscoveryResult = mcpDiscovery.structuredContent as ConnectionDiscoverResult;
+    assert.ok(mcpDiscoveryResult.routes.some((route) => route.connectionId === undefined));
+    assert.ok(mcpDiscoveryResult.routes.some((route) => route.connectionId === "mcp-analysis"));
+    assert.ok(!JSON.stringify(mcpDiscovery.structuredContent).includes(mcpContext));
+
+    const defaultStart = await callMcpTool(mcp, 9, "harness_relay_invocation_start", request(root));
+    assert.equal(defaultStart.isError, undefined);
+    const defaultStartResult = defaultStart.structuredContent as { readonly invocationId: string };
+    const defaultInspection = await callMcpTool(mcp, 10, "harness_relay_invocation_inspect", {
+      invocationId: defaultStartResult.invocationId,
+    });
+    const defaultInspectionResult = defaultInspection.structuredContent as {
+      readonly resolved: { readonly connectionId?: string };
+    };
+    assert.equal(defaultInspectionResult.resolved.connectionId, undefined);
+
+    const mcpRemove = await callMcpTool(mcp, 11, "harness_relay_connection_remove", {
+      id: mcpUpdateResult.connection.id,
+      expectedRevision: mcpUpdateResult.connection.revision,
+    });
+    assert.equal(mcpRemove.isError, undefined);
+    assert.equal((mcpRemove.structuredContent as { readonly removed: boolean }).removed, true);
+    await lstat(mcpContext);
+    assert.equal(await readFile(mcpSentinel, "utf8"), "preserve this user-owned context\n");
+    const mcpList = await callMcpTool(mcp, 12, "harness_relay_connection_list");
+    const mcpListResult = mcpList.structuredContent as {
+      readonly connections: ReadonlyArray<{ readonly id: string }>;
+    };
+    assert.ok(!mcpListResult.connections.some(({ id }) => id === "mcp-analysis"));
+
+    const mcpPrepared = await callMcpTool(mcp, 13, "harness_relay_connection_prepare", {
+      id: "prepared",
+      harness: "codex",
+      purpose: "analysis",
+    });
+    assert.equal(mcpPrepared.isError, undefined);
+    const prepared = mcpPrepared.structuredContent as ConnectionPrepareResult;
     assert.ok(prepared);
     assert.equal(prepared.setup.login.executable, "codex");
     assert.deepEqual(prepared.setup.login.args, ["login"]);
@@ -707,6 +855,47 @@ test("connection routing keeps the default context and exposes no native referen
       (error: unknown) => error instanceof BridgeError && error.code === "route_unavailable",
     );
   } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("ambiguous route resolution returns candidates without running an adapter", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-relay-connections-ambiguous-"));
+  const first = new AmbiguousRouteFixtureAdapter("fixture-first");
+  const second = new AmbiguousRouteFixtureAdapter("fixture-second");
+  const broker = new Broker(brokerPaths(root), {
+    registry: new AdapterRegistry([first, second], {
+      catalogPath: join(root, "models.json"),
+      connectionsPath: join(root, "connections.json"),
+    }),
+  });
+  await broker.initialize();
+  try {
+    let rejection: unknown;
+    try {
+      await broker.start(request(root));
+    } catch (error) {
+      rejection = error;
+    }
+    assert.ok(rejection instanceof BridgeError);
+    assert.equal(rejection.code, "route_ambiguous");
+    const candidates = rejection.details?.candidates;
+    assert.ok(Array.isArray(candidates));
+    const routeIds = candidates.flatMap((candidate: unknown) => {
+      if (typeof candidate !== "object" || candidate === null || !("routeId" in candidate)) {
+        return [];
+      }
+      return typeof candidate.routeId === "string" ? [candidate.routeId] : [];
+    });
+    const sortedRouteIds = [...routeIds].sort();
+    assert.deepEqual(sortedRouteIds, [
+      "fixture-first:fixture-model",
+      "fixture-second:fixture-model",
+    ]);
+    assert.equal(first.runCalls, 0);
+    assert.equal(second.runCalls, 0);
+  } finally {
+    await broker.close();
     await rm(root, { recursive: true, force: true });
   }
 });
