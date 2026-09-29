@@ -1,9 +1,17 @@
 import type { JsonValue, RouteDescriptor } from "../contract.js";
 import type { PiWorkerSessionRequest } from "./pi-protocol.js";
-import type { Adapter, AdapterRunContext, AdapterRunResult, PolicyResolution } from "./types.js";
+import type {
+  Adapter,
+  AdapterInputResult,
+  AdapterRunContext,
+  AdapterRunResult,
+  AdapterSendInputContext,
+  PolicyResolution,
+} from "./types.js";
 
 import { BridgeError } from "../errors.js";
 import { piContinuationBinding, PiContinuationStore } from "./pi-continuation.js";
+import { PiSteeringPort } from "./pi-steering.js";
 import { type PiRuntimeConfiguration, runPiWorkerSession } from "./pi-supervisor.js";
 
 const MUTATING_TOOLS = new Set(["write", "edit", "bash"]);
@@ -12,6 +20,7 @@ export class PiAdapter implements Adapter {
   readonly id = "pi";
   readonly #configuration: PiRuntimeConfiguration;
   readonly #continuations: PiContinuationStore;
+  readonly #steeringPorts = new Map<string, PiSteeringPort>();
 
   constructor(
     configuration: PiRuntimeConfiguration,
@@ -66,58 +75,102 @@ export class PiAdapter implements Adapter {
   }
 
   async run(context: AdapterRunContext): Promise<AdapterRunResult> {
-    if (context.request.interactionStrategy === "orchestrator") {
+    if (this.#steeringPorts.has(context.invocationId)) {
       throw new BridgeError({
-        code: "unsupported_capability",
-        message: "The private Pi worker has no qualified orchestrator input channel.",
+        code: "invocation_conflict",
+        message: "The Pi adapter already has an active invocation with this ID.",
         retryable: false,
       });
     }
-    if (
-      context.request.interactionStrategy !== "deny" &&
-      context.request.interactionStrategy !== "unattended"
-    ) {
-      throw new BridgeError({
-        code: "unsupported_capability",
-        message: "The private Pi worker cannot honor this interaction strategy.",
-        retryable: false,
+    const steeringPort = new PiSteeringPort();
+    this.#steeringPorts.set(context.invocationId, steeringPort);
+    try {
+      if (context.request.interactionStrategy === "orchestrator") {
+        throw new BridgeError({
+          code: "unsupported_capability",
+          message: "The private Pi worker has no qualified orchestrator input channel.",
+          retryable: false,
+        });
+      }
+      if (
+        context.request.interactionStrategy !== "deny" &&
+        context.request.interactionStrategy !== "unattended"
+      ) {
+        throw new BridgeError({
+          code: "unsupported_capability",
+          message: "The private Pi worker cannot honor this interaction strategy.",
+          retryable: false,
+        });
+      }
+      const policy = this.#resolvePolicy(context.request);
+      if (!policy.supported) {
+        throw new BridgeError({
+          code: "unsupported_capability",
+          message: "The private Pi worker cannot enforce the requested policy.",
+          retryable: false,
+          details: { unsupported: [...policy.unsupported] },
+        });
+      }
+      const isContinuation = context.continuationHandle !== undefined;
+      const binding = await piContinuationBinding(context, this.#configuration, {
+        requireWorkingDirectory: isContinuation,
       });
-    }
-    const policy = this.#resolvePolicy(context.request);
-    if (!policy.supported) {
-      throw new BridgeError({
-        code: "unsupported_capability",
-        message: "The private Pi worker cannot enforce the requested policy.",
-        retryable: false,
-        details: { unsupported: [...policy.unsupported] },
-      });
-    }
-    const isContinuation = context.continuationHandle !== undefined;
-    const binding = await piContinuationBinding(context, this.#configuration, {
-      requireWorkingDirectory: isContinuation,
-    });
-    if (context.continuationHandle !== undefined) {
-      const retained = await this.#continuations.resume(context.continuationHandle, binding);
+      if (context.continuationHandle !== undefined) {
+        const retained = await this.#continuations.resume(context.continuationHandle, binding);
+        const directory = await this.#continuations.createSessionDirectory();
+        try {
+          const sessionRequest: PiWorkerSessionRequest = {
+            mode: "branch",
+            sourceDirectory: retained.directory,
+            directory,
+            sessionFile: retained.snapshot.sessionFile,
+            expectedSessionId: retained.snapshot.sessionId,
+            expectedCwd: retained.snapshot.cwd,
+            terminalLeafId: retained.snapshot.terminalLeafId,
+          };
+          const run = await runPiWorkerSession(
+            context,
+            this.#configuration,
+            sessionRequest,
+            steeringPort,
+          );
+          const nextBinding = await piContinuationBinding(context, this.#configuration, {
+            requireWorkingDirectory: true,
+          });
+          if (nextBinding !== binding) {
+            throw new BridgeError({
+              code: "continuation_route_changed",
+              message:
+                "The Pi route, account, policy, or model configuration changed during continuation.",
+              retryable: false,
+            });
+          }
+          return {
+            ...run.result,
+            continuationHandle: await this.#continuations.retain(directory, run.session, binding),
+          };
+        } catch (error) {
+          await this.#continuations.discardSessionDirectory(directory);
+          throw error;
+        }
+      }
+
       const directory = await this.#continuations.createSessionDirectory();
       try {
-        const sessionRequest: PiWorkerSessionRequest = {
-          mode: "branch",
-          sourceDirectory: retained.directory,
-          directory,
-          sessionFile: retained.snapshot.sessionFile,
-          expectedSessionId: retained.snapshot.sessionId,
-          expectedCwd: retained.snapshot.cwd,
-          terminalLeafId: retained.snapshot.terminalLeafId,
-        };
-        const run = await runPiWorkerSession(context, this.#configuration, sessionRequest);
-        const nextBinding = await piContinuationBinding(context, this.#configuration, {
-          requireWorkingDirectory: true,
-        });
+        const run = await runPiWorkerSession(
+          context,
+          this.#configuration,
+          {
+            mode: "create",
+            directory,
+          },
+          steeringPort,
+        );
+        const nextBinding = await piContinuationBinding(context, this.#configuration);
         if (nextBinding !== binding) {
           throw new BridgeError({
-            code: "continuation_route_changed",
-            message:
-              "The Pi route, account, policy, or model configuration changed during continuation.",
+            code: "harness_failed",
+            message: "The Pi model configuration changed during the invocation.",
             retryable: false,
           });
         }
@@ -129,33 +182,29 @@ export class PiAdapter implements Adapter {
         await this.#continuations.discardSessionDirectory(directory);
         throw error;
       }
-    }
-
-    const directory = await this.#continuations.createSessionDirectory();
-    try {
-      const run = await runPiWorkerSession(context, this.#configuration, {
-        mode: "create",
-        directory,
-      });
-      const nextBinding = await piContinuationBinding(context, this.#configuration);
-      if (nextBinding !== binding) {
-        throw new BridgeError({
-          code: "harness_failed",
-          message: "The Pi model configuration changed during the invocation.",
-          retryable: false,
-        });
-      }
-      return {
-        ...run.result,
-        continuationHandle: await this.#continuations.retain(directory, run.session, binding),
-      };
-    } catch (error) {
-      await this.#continuations.discardSessionDirectory(directory);
-      throw error;
+    } finally {
+      this.#steeringPorts.delete(context.invocationId);
+      steeringPort.close();
     }
   }
 
+  async sendInput(context: AdapterSendInputContext): Promise<AdapterInputResult> {
+    const port = this.#steeringPorts.get(context.invocationId);
+    if (port === undefined) {
+      throw new BridgeError({
+        code: "invocation_not_active",
+        message: "The Pi invocation is no longer accepting input.",
+        retryable: false,
+        details: { invocationId: context.invocationId },
+      });
+    }
+    return port.send(context.inputId, context.content, context.signal);
+  }
+
   async dispose(): Promise<void> {
+    for (const port of this.#steeringPorts.values()) {
+      port.close();
+    }
     await this.#continuations.dispose();
   }
 }

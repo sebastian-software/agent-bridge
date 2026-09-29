@@ -13,17 +13,22 @@ import type {
   AdapterEvent,
   AdapterRunContext,
   AdapterRunResult,
+  AdapterSendInputContext,
 } from "../src/adapters/types.js";
 import type { ResolvedRoute, StartInvocationRequest } from "../src/contract.js";
 import type { BrokerPaths } from "../src/paths.js";
 
 import { PiContinuationStore } from "../src/adapters/pi-continuation.js";
 import {
+  MAX_PI_PENDING_STEERING_INPUTS,
   MAX_PI_WORKER_EVENT_BYTES,
   parsePiWorkerControl,
   parsePiWorkerLine,
+  PI_WORKER_PROTOCOL_VERSION,
+  type PiWorkerStart,
   readBoundedLines,
 } from "../src/adapters/pi-protocol.js";
+import { PiSteeringPort } from "../src/adapters/pi-steering.js";
 import { supervisePiWorker } from "../src/adapters/pi-supervisor.js";
 import { supportsPiNodeVersion, WorkerOutput } from "../src/adapters/pi-worker.js";
 import { PiAdapter } from "../src/adapters/pi.js";
@@ -244,6 +249,21 @@ function runContext(
   };
 }
 
+function steeringInput(
+  context: AdapterRunContext,
+  inputId: string,
+  text: string,
+  signal = new AbortController().signal,
+): AdapterSendInputContext {
+  return {
+    invocationId: context.invocationId,
+    route: context.route,
+    inputId,
+    content: [{ type: "text", text }],
+    signal,
+  };
+}
+
 async function waitForProcessExit(pid: number): Promise<void> {
   const deadline = Date.now() + 5000;
   while (Date.now() < deadline) {
@@ -301,6 +321,153 @@ test("Pi worker protocol rejects process group IDs that could signal unrelated p
       processGroupId: 1,
     }),
   );
+});
+
+test("Pi worker protocol rejects malformed steering controls and acknowledgements", () => {
+  assert.throws(() => parsePiWorkerControl({ type: "steer", inputId: "input-1", text: "" }));
+  assert.throws(() =>
+    parsePiWorkerLine(
+      JSON.stringify({
+        type: "steer_ack",
+        inputId: "input-1",
+        accepted: true,
+        message: "accepted ACKs cannot include a rejection message",
+      }),
+    ),
+  );
+});
+
+test("Pi worker reports malformed or missing start messages without waiting for a finish handshake", async () => {
+  const workerPath = fileURLToPath(new URL("../src/adapters/pi-worker.js", import.meta.url));
+  for (const [description, initialInput] of [
+    ["missing", ""],
+    ["malformed", "not-json\n"],
+  ] as const) {
+    const child = spawn(process.execPath, [workerPath], {
+      stdio: ["pipe", "pipe", "ignore"],
+    });
+    const output: string[] = [];
+    child.stdout?.setEncoding("utf8").on("data", (chunk: string) => {
+      output.push(chunk);
+    });
+    const closed = childClosed(child);
+    const timeout = new AbortController();
+    try {
+      child.stdin?.end(initialInput);
+      const result = await Promise.race([
+        closed,
+        delay(3000, undefined, { signal: timeout.signal }).then(() => {
+          child.kill("SIGKILL");
+          throw new Error(`Pi worker hung after a ${description} start message.`);
+        }),
+      ]);
+      assert.deepEqual(result, { code: 0, signal: null });
+      const lines = output
+        .join("")
+        .trim()
+        .split("\n")
+        .map(
+          (line) =>
+            JSON.parse(line) as {
+              readonly type: string;
+              readonly status?: string;
+            },
+        );
+      assert.ok(lines.some((line) => line.type === "settling"));
+      assert.ok(
+        lines.some((line) => line.type === "terminal" && line.status === "failed"),
+        `Pi worker must report the ${description} start as a failure`,
+      );
+    } finally {
+      timeout.abort();
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGKILL");
+      }
+    }
+  }
+});
+
+test("Pi steering port cancels queued delivery before the worker is ready", async () => {
+  const port = new PiSteeringPort();
+  const controller = new AbortController();
+  const pending = port.send(
+    "input-cancelled",
+    [{ type: "text", text: "wait for Pi" }],
+    controller.signal,
+  );
+  controller.abort();
+  await assert.rejects(pending, { name: "AbortError" });
+  port.close();
+});
+
+test("Pi steering port rejects premature ACKs and waits for the SDK ACK after sending", async () => {
+  const port = new PiSteeringPort();
+  const pending = port.send(
+    "input-ack",
+    [{ type: "text", text: "wait for the native boundary" }],
+    new AbortController().signal,
+  );
+  assert.equal(port.acknowledge("input-ack", true), false);
+  assert.equal(port.acknowledge("unknown-input", true), false);
+
+  let senderStarted!: () => void;
+  let releaseSender!: () => void;
+  const started = new Promise<void>((resolve) => {
+    senderStarted = resolve;
+  });
+  const senderDrain = new Promise<void>((resolve) => {
+    releaseSender = resolve;
+  });
+  port.setSender(async () => {
+    senderStarted();
+    await senderDrain;
+  });
+  await started;
+  assert.equal(port.acknowledge("input-ack", true), true);
+  assert.deepEqual(await pending, { boundary: "next-supported-boundary" });
+  releaseSender();
+  await port.seal();
+  port.close();
+});
+
+test("Pi steering port expires a sent input on cancellation and ignores its late ACK", async () => {
+  const port = new PiSteeringPort();
+  const controller = new AbortController();
+  let senderStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    senderStarted = resolve;
+  });
+  const pending = port.send(
+    "input-cancelled-after-send",
+    [{ type: "text", text: "cancel after writing the control frame" }],
+    controller.signal,
+  );
+  port.setSender(async () => {
+    senderStarted();
+  });
+  await started;
+  controller.abort();
+  await assert.rejects(pending, { name: "AbortError" });
+  port.close();
+  assert.equal(port.acknowledge("input-cancelled-after-send", true), true);
+  assert.equal(port.acknowledge("unknown-after-close", true), false);
+});
+
+test("Pi steering port bounds pending inputs before a worker sender is available", async () => {
+  const port = new PiSteeringPort();
+  const pending = Array.from({ length: MAX_PI_PENDING_STEERING_INPUTS }, async (_, index) =>
+    port.send(
+      `input-${index}`,
+      [{ type: "text", text: `queued-${index}` }],
+      new AbortController().signal,
+    ),
+  );
+  await assert.rejects(
+    port.send("input-overflow", [{ type: "text", text: "overflow" }], new AbortController().signal),
+    (error: unknown) => error instanceof BridgeError && error.code === "invocation_conflict",
+  );
+  port.close();
+  await Promise.allSettled(pending);
 });
 
 test("fire-and-forget worker output observes overflow and closed-pipe rejections", async () => {
@@ -697,6 +864,192 @@ await new Promise(() => {});
     await fixture.close();
   }
 });
+test("Pi native steering queues FIFO while Bash continues and reaches the next model turn", async () => {
+  const fixture = await startFixture();
+  const workingDirectory = join(fixture.root, "work");
+  const startedPath = join(workingDirectory, "steering-started");
+  const releasePath = join(workingDirectory, "release-steering");
+  const finishedPath = join(workingDirectory, "steering-finished");
+  let correctionRequests = 0;
+  const replyForCorrections: FixtureReply = (response, request) => {
+    correctionRequests += 1;
+    const serialized = JSON.stringify(request.messages ?? []);
+    const first = serialized.indexOf("first native correction");
+    const second = serialized.indexOf("second native correction");
+    if (second !== -1) {
+      assert.ok(first !== -1, "the second correction must not arrive before the first");
+      assert.ok(second > first, "Pi must retain FIFO steering order");
+      stream(response, { content: "Both corrections received." }, "stop");
+      return;
+    }
+    assert.ok(
+      correctionRequests <= 2,
+      "both accepted corrections must reach a subsequent model request",
+    );
+    bashReply("true")(response, request);
+  };
+  fixture.setReplies([
+    bashReply(
+      `touch steering-started\nwhile [ ! -f release-steering ]; do sleep 0.02; done\ntouch steering-finished`,
+    ),
+    replyForCorrections,
+    replyForCorrections,
+  ]);
+  const { context, events, controller } = runContext(workingDirectory);
+  const adapter = new PiAdapter(
+    {
+      model: { provider: "fixture", id: "fixture-model", thinkingLevel: "off" },
+      modelFiles: fixture.modelFiles,
+      tools: ["read", "write", "edit", "bash"],
+    },
+    { continuationStore: new PiContinuationStore({ baseDirectory: fixture.root }) },
+  );
+  const completion = adapter.run(context).then(
+    (value) => ({ ok: true as const, value }),
+    (error: unknown) => ({ ok: false as const, error }),
+  );
+  try {
+    const first = adapter
+      .sendInput(steeringInput(context, "input-first", "first native correction"))
+      .then(
+        (value) => ({ ok: true as const, value }),
+        (error: unknown) => ({ ok: false as const, error }),
+      );
+    await waitForFile(startedPath, "Pi Bash to reach its steering barrier");
+    const second = adapter.sendInput(
+      steeringInput(context, "input-second", "second native correction"),
+    );
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+    if (!firstResult.ok) {
+      throw firstResult.error;
+    }
+    assert.deepEqual(firstResult.value, { boundary: "next-supported-boundary" });
+    assert.deepEqual(secondResult, { boundary: "next-supported-boundary" });
+    assert.equal(
+      events.some((event) => event.data?.phase === "tool_finished"),
+      false,
+    );
+    await assert.rejects(access(finishedPath), { code: "ENOENT" });
+    await writeFile(releasePath, "release");
+    const timeout = new AbortController();
+    const result = await Promise.race([
+      completion,
+      delay(10_000, undefined, { signal: timeout.signal }).then(() => {
+        throw new Error("Pi did not finish the steered turn within ten seconds.");
+      }),
+    ]).finally(() => {
+      timeout.abort();
+    });
+    assert.equal(result.ok, true);
+    assert.ok(result.ok);
+    assert.deepEqual(result.value.content, [{ type: "text", text: "Both corrections received." }]);
+    await access(finishedPath);
+    assert.equal(fixture.requests.length, correctionRequests + 1);
+    assert.ok(correctionRequests >= 1 && correctionRequests <= 2);
+    assert.deepEqual(fixture.errors, []);
+  } finally {
+    controller.abort();
+    await writeFile(releasePath, "release").catch(() => {});
+    const cleanupTimeout = new AbortController();
+    await Promise.race([
+      completion,
+      delay(5000, undefined, { signal: cleanupTimeout.signal }),
+    ]).finally(() => {
+      cleanupTimeout.abort();
+    });
+    await adapter.dispose();
+    await fixture.close();
+  }
+});
+
+test(
+  "Pi worker settles a premature control EOF during the finish handshake",
+  { timeout: 15_000 },
+  async () => {
+    const fixture = await startFixture();
+    const workingDirectory = join(fixture.root, "work");
+    const home = join(fixture.root, "home");
+    await mkdir(home, { recursive: true });
+    fixture.setReplies([textReply("Finished before the host closed control.")]);
+    const start: PiWorkerStart = {
+      type: "start",
+      protocolVersion: PI_WORKER_PROTOCOL_VERSION,
+      workingDirectory,
+      model: { provider: "fixture", id: "fixture-model", thinkingLevel: "off" },
+      modelFiles: fixture.modelFiles,
+      prompt: "Reply with one short sentence. Do not call tools.",
+      tools: ["read"],
+    };
+    const workerPath = fileURLToPath(new URL("../src/adapters/pi-worker.js", import.meta.url));
+    const child = spawn(process.execPath, [workerPath], {
+      cwd: workingDirectory,
+      env: {
+        PATH: process.env.PATH ?? "/usr/bin:/bin:/usr/sbin:/sbin",
+        HOME: home,
+        TMPDIR: home,
+        TMP: home,
+        TEMP: home,
+        XDG_CONFIG_HOME: join(home, "config"),
+        XDG_CACHE_HOME: join(home, "cache"),
+        PI_OFFLINE: "1",
+        NO_COLOR: "1",
+      },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    const outputs: Array<{
+      readonly type?: string;
+      readonly status?: string;
+      readonly failure?: { readonly message?: string };
+    }> = [];
+    const stderr: string[] = [];
+    let remainder = "";
+    child.stdout?.setEncoding("utf8").on("data", (chunk: string) => {
+      remainder += chunk;
+      while (true) {
+        const newline = remainder.indexOf("\n");
+        if (newline === -1) {
+          return;
+        }
+        const line = remainder.slice(0, newline);
+        remainder = remainder.slice(newline + 1);
+        const output = JSON.parse(line) as (typeof outputs)[number];
+        outputs.push(output);
+        if (output.type === "settling" && child.stdin !== null && !child.stdin.writableEnded) {
+          child.stdin.end();
+        }
+      }
+    });
+    child.stderr?.setEncoding("utf8").on("data", (chunk: string) => stderr.push(chunk));
+    const closed = childClosed(child);
+    const timeout = new AbortController();
+    assert.ok(child.stdin);
+    child.stdin.write(`${JSON.stringify(start)}\n`);
+    try {
+      const result = await Promise.race([
+        closed,
+        delay(10_000, undefined, { signal: timeout.signal }).then(() => {
+          child.kill("SIGKILL");
+          throw new Error("Pi worker hung after the host closed control during settlement.");
+        }),
+      ]);
+      assert.deepEqual(result, { code: 0, signal: null }, stderr.join(""));
+      const terminal = outputs.find((output) => output.type === "terminal");
+      assert.equal(terminal?.status, "failed");
+      assert.match(
+        terminal?.failure?.message ?? "",
+        /control channel closed before the finish handshake/,
+      );
+      assert.deepEqual(fixture.errors, []);
+    } finally {
+      timeout.abort();
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGKILL");
+      }
+      await fixture.close();
+    }
+  },
+);
+
 test("cancelling a live Pi Bash call rejects with identity partials and kills descendants", async () => {
   const fixture = await startFixture();
   const workingDirectory = join(fixture.root, "work");
@@ -1339,7 +1692,7 @@ test("Pi SDK stays optional, version checks are explicit, and failed worker spaw
   const workerPath = fileURLToPath(new URL("../src/adapters/pi-worker.js", import.meta.url));
   const start = {
     type: "start",
-    protocolVersion: 1,
+    protocolVersion: PI_WORKER_PROTOCOL_VERSION,
     workingDirectory: root,
     model: { provider: "fixture", id: "fixture-model", thinkingLevel: "off" },
     modelFiles: {

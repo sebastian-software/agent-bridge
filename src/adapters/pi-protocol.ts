@@ -3,10 +3,13 @@ import { isAbsolute } from "node:path";
 import type { JsonValue, ObservedIdentity, Usage } from "../contract.js";
 import type { AdapterEvent } from "./types.js";
 
-export const PI_WORKER_PROTOCOL_VERSION = 1;
+export const PI_WORKER_PROTOCOL_VERSION = 2;
 export const MAX_PI_WORKER_MESSAGE_BYTES = 1_048_576;
 export const MAX_PI_WORKER_EVENT_BYTES = 64 * 1024;
 export const MAX_PI_TEXT_FRAME_BYTES = 48 * 1024;
+export const MAX_PI_STEERING_INPUT_BYTES = 64 * 1024;
+export const MAX_PI_PENDING_STEERING_INPUTS = 32;
+export const MAX_PI_PENDING_STEERING_BYTES = 256 * 1024;
 
 export const PI_TOOL_NAMES = ["read", "write", "edit", "bash", "grep", "find", "ls"] as const;
 export type PiToolName = (typeof PI_TOOL_NAMES)[number];
@@ -54,6 +57,8 @@ export type PiWorkerSessionSnapshot = {
 
 export type PiWorkerControl =
   | { readonly type: "cancel" }
+  | { readonly type: "finish" }
+  | { readonly type: "steer"; readonly inputId: string; readonly text: string }
   | {
       readonly type:
         | "tool_process_cleaned"
@@ -63,6 +68,11 @@ export type PiWorkerControl =
       readonly processGroupId: number;
     }
   | PiWorkerStart;
+
+export type PiSteeringMessage = {
+  readonly inputId: string;
+  readonly text: string;
+};
 
 export type PiWorkerOutput =
   | {
@@ -74,6 +84,13 @@ export type PiWorkerOutput =
   | { readonly type: "event"; readonly event: AdapterEvent }
   | { readonly type: "identity"; readonly identity: ObservedIdentity }
   | { readonly type: "session"; readonly session: PiWorkerSessionSnapshot }
+  | { readonly type: "settling" }
+  | {
+      readonly type: "steer_ack";
+      readonly inputId: string;
+      readonly accepted: boolean;
+      readonly message?: string;
+    }
   | {
       readonly type: "terminal";
       readonly settled: true;
@@ -375,6 +392,27 @@ export function parsePiWorkerOutput(value: unknown): PiWorkerOutput {
   if (record.type === "event" && adapterEvent(record.event)) {
     return { type: "event", event: record.event };
   }
+  if (record.type === "settling") {
+    return { type: "settling" };
+  }
+  if (
+    record.type === "steer_ack" &&
+    nonEmptyString(record.inputId) &&
+    record.inputId.length <= 128 &&
+    typeof record.accepted === "boolean" &&
+    (record.message === undefined ||
+      (string(record.message) && Buffer.byteLength(record.message, "utf8") <= 1024))
+  ) {
+    if (record.accepted && record.message !== undefined) {
+      throw new Error("Pi worker accepted steering cannot include a rejection message.");
+    }
+    return {
+      type: "steer_ack",
+      inputId: record.inputId,
+      accepted: record.accepted,
+      ...(record.message === undefined ? {} : { message: record.message }),
+    };
+  }
   if (
     record.type === "content" &&
     safeInteger(record.index) &&
@@ -456,6 +494,18 @@ export function parsePiWorkerControl(value: unknown): PiWorkerControl {
   }
   if (record.type === "cancel") {
     return { type: "cancel" };
+  }
+  if (record.type === "finish") {
+    return { type: "finish" };
+  }
+  if (
+    record.type === "steer" &&
+    nonEmptyString(record.inputId) &&
+    record.inputId.length <= 128 &&
+    nonEmptyString(record.text) &&
+    Buffer.byteLength(record.text, "utf8") <= MAX_PI_STEERING_INPUT_BYTES
+  ) {
+    return { type: "steer", inputId: record.inputId, text: record.text };
   }
   if (
     ["tool_process_registered", "tool_process_cleaned", "tool_process_cleanup_done"].includes(

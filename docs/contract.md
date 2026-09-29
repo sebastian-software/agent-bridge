@@ -116,8 +116,14 @@ at cancellation, terminal completion, or broker restart are recorded as
 the same per-invocation idempotency key returns its existing input ID; reusing
 that key for different content is a conflict. Native send is available only
 when both the route capability and adapter handler are implemented. The fake
-fixture exercises this contract; current native adapters do not advertise
-active-session input support.
+fixture exercises this contract. The private Pi 0.87.1 worker implements
+text-only native steering through `AgentSession.steer(text)` and returns its
+delivery ACK only after the SDK accepts the message into its queue. Pinned-SDK
+integration tests cover FIFO delivery across a running shell command and the
+following model requests. This does not establish model consumption or qualify
+a live local inference route. The private adapter does not make Pi available
+through the default route registry; other native adapters remain unsupported
+until individually qualified.
 
 `invocation.continue` is a separate operation that creates a new invocation
 linked by `continuedFrom`; it never changes the predecessor's terminal outcome.
@@ -129,7 +135,11 @@ changed or ambiguous route, requested effort/strategy, account revision, or
 effective policy. Missing or expired native handles and routes without the
 continuation capability fail explicitly; the broker does not restart without
 the retained session or fall back to a different route. The fake fixture
-exercises linked continuation; current native adapters do not advertise it.
+exercises linked continuation. Pi's pinned SDK worker also covers persisted
+session branching in scripted integration tests; this does not qualify live
+local inference or make the private adapter available through the default
+route registry. Other native adapters remain unsupported until individually
+qualified.
 
 ## Outcomes
 

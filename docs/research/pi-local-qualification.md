@@ -4,11 +4,11 @@ Date: 2026-09-29. Decision: [ADR-0025](../adr/0025-direct-local-model-access.md)
 
 The internal Pi 0.87.1 worker now satisfies the worker/runtime portion of #149:
 it reuses Pi's full coding-agent SDK in a Relay-supervised process and has
-scripted-SDK coverage for lifecycle, policy boundaries, configuration, and
-private session continuation. The adapter remains absent from the default
-registry and discovers no routes. This evidence does not qualify an Ollama or
-LM Studio route; those are tracked in #150 and #151. Active dialogue and live
-continuation qualification remain in #153.
+scripted-SDK coverage for lifecycle, policy boundaries, configuration, native
+text steering, and private session continuation. The private adapter remains
+absent from the default route registry and does not discover routes. This evidence does not
+qualify an Ollama or LM Studio route; those are tracked in #150 and #151. #153
+tracks dialogue behavior across adapters and any live local-model qualification.
 
 ## Reproduce the standalone SDK probe
 
@@ -27,10 +27,10 @@ and published files. It does not register a new adapter or change the wire
 contract. The probe uses POSIX shell commands and has only been run on macOS.
 
 The probe is deliberately retained as an opt-in SDK-upgrade and direct-steering
-compatibility check. Relay's worker tests cover the supervised adapter
-boundary; this probe still exercises Pi's native steering during inference and
-tool execution, which the private adapter does not expose. Run it explicitly
-when changing the probe or upgrading the pinned Pi release.
+compatibility check. Relay's worker tests cover the supervised control port,
+SDK acceptance ACK, FIFO ordering across a long-running tool, and
+persisted-session branching. The probe remains useful when changing it or
+upgrading the pinned Pi release because it exercises the SDK directly.
 
 The runner starts a child process with an isolated temporary home and a minimal
 environment, before importing Pi. It injects a resource loader without plugins,
@@ -116,12 +116,15 @@ CLI, and Claude/Codex discovery are smoke-tested from a packed installation
 with optional dependencies omitted. Without Pi installed, Pi execution reports
 that it is unavailable instead of preventing the rest of Relay from starting.
 
-Each invocation still starts a fresh one-shot worker. The private adapter now
+Each invocation still starts a fresh one-shot worker. The private adapter
 persists Pi sessions and can branch a settled session into a new native session
 file; scripted SDK fixtures cover continuation and reject changed checkpoint
-identity before making another model request. This does not qualify a local
-model route, so the adapter remains absent from the default registry and does
-not advertise steering, continuation, or questions.
+identity before making another model request. It also exposes text-only native
+steering to its worker through the bounded control port; tests verify SDK ACK,
+FIFO delivery across a long-running tool, and the following model requests.
+This does not qualify a local model route, so the private adapter remains absent
+from the default registry and no route advertises these capabilities. General
+questions remain unsupported.
 
 Opaque continuation handles and their route, account, policy, working-directory,
 and model-configuration bindings live only in the broker process. Handles expire
@@ -146,9 +149,10 @@ and private adapter do not imply that a local model route is ready:
   does not establish local inference.
 - [#153](https://github.com/sebastian-software/harness-relay/issues/153) covers
   dialogue capabilities across Pi and the other supported harnesses. Scripted
-  tests already cover retained-session continuation and binding; active
-  steering, correlated questions and answers, progress, dialogue races, and
-  continuation with live local inference remain unqualified.
+  tests cover Pi worker text steering, retained-session continuation and
+  binding. General questions remain unsupported; the other harness adapters,
+  live local inference, and route-level Pi capability advertisement still need
+  their own qualification.
 
 On the observed machine, Ollama responds at `127.0.0.1:11434`, but `/api/tags`
 contains no models. Nothing listens at the conventional LM Studio port
