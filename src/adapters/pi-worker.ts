@@ -1,4 +1,7 @@
-import type { SessionManager as PiSessionManager } from "@earendil-works/pi-coding-agent";
+import type {
+  ModelRuntime,
+  SessionManager as PiSessionManager,
+} from "@earendil-works/pi-coding-agent";
 
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -9,6 +12,13 @@ import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import type { ObservedIdentity, Usage, WorkspaceEffect } from "../contract.js";
 import type { AdapterEvent } from "./types.js";
 
+import {
+  assertPiAuthStorageContentSafe,
+  assertPiModelRuntimeConfigurationSafe,
+  assertPiRuntimeConfigurationSafe,
+  PiRuntimeConfigurationError,
+  type PiRuntimeConfigurationFailureCode,
+} from "./pi-config-guard.js";
 import {
   MAX_PI_TEXT_FRAME_BYTES,
   MAX_PI_WORKER_EVENT_BYTES,
@@ -30,6 +40,25 @@ const MAX_QUEUED_OUTPUT_BYTES = 34 * 1024 * 1024;
 const MAX_TOOL_OUTPUT_BYTES = 16 * 1024 * 1024;
 const MAX_ASSISTANT_OUTPUT_BYTES = 16 * 1024 * 1024;
 const MAX_TOOL_TIMEOUT_MS = 2_147_483_647;
+
+type PiRuntimeCredentialStore = NonNullable<
+  NonNullable<Parameters<typeof ModelRuntime.create>[0]>["credentials"]
+>;
+type PiAuthOperationOptions = Parameters<PiRuntimeCredentialStore["read"]>[1];
+type PiAuthLockResult<T> = { readonly result: T; readonly next?: string };
+type PiAuthStorageBackend = {
+  readonly withLock: <T>(callback: (current: string | undefined) => PiAuthLockResult<T>) => T;
+  readonly withLockAsync: <T>(
+    callback: (current: string | undefined) => Promise<PiAuthLockResult<T>>,
+    options?: PiAuthOperationOptions,
+  ) => Promise<T>;
+};
+type PiAuthStorageModule = {
+  readonly FileAuthStorageBackend: new (authPath: string) => PiAuthStorageBackend;
+  readonly AuthStorage: {
+    readonly fromStorage: (storage: PiAuthStorageBackend) => PiRuntimeCredentialStore;
+  };
+};
 
 type PiSdk = {
   readonly SessionManager: {
@@ -99,7 +128,7 @@ export function supportsPiNodeVersion(version: string): boolean {
 }
 
 function failureCode(error: unknown): string {
-  if (error instanceof PiSessionCheckpointError) {
+  if (error instanceof PiSessionCheckpointError || error instanceof PiRuntimeConfigurationError) {
     return error.code;
   }
   if (error instanceof Error && error.message.includes("Pi assistant output exceeded")) {
@@ -113,6 +142,157 @@ function failureCode(error: unknown): string {
     return "pi_sdk_unavailable";
   }
   return "pi_worker_failed";
+}
+
+function recordFromUnknown(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function isPiAuthStorageModule(value: unknown): value is PiAuthStorageModule {
+  const module = recordFromUnknown(value);
+  const authStorage = module?.AuthStorage;
+  if (
+    typeof module?.FileAuthStorageBackend !== "function" ||
+    (typeof authStorage !== "function" && recordFromUnknown(authStorage) === undefined)
+  ) {
+    return false;
+  }
+  return typeof Reflect.get(authStorage as object, "fromStorage") === "function";
+}
+
+function isPiCredentialStore(value: unknown): value is PiRuntimeCredentialStore {
+  const store = recordFromUnknown(value);
+  return (
+    typeof store?.read === "function" &&
+    typeof store.list === "function" &&
+    typeof store.modify === "function" &&
+    typeof store.delete === "function"
+  );
+}
+
+function piAuthStorageFailure(
+  error: unknown,
+  state: { failureCode?: PiRuntimeConfigurationFailureCode },
+): PiRuntimeConfigurationError {
+  if (error instanceof PiRuntimeConfigurationError) {
+    state.failureCode = error.code;
+  } else {
+    state.failureCode = "pi_config_unavailable";
+  }
+  return new PiRuntimeConfigurationError(state.failureCode);
+}
+
+async function createGuardedPiCredentials(authPath: string): Promise<{
+  readonly credentials: PiRuntimeCredentialStore;
+  readonly assertHealthy: () => void;
+}> {
+  let authStorageModuleValue: unknown;
+  try {
+    const sdkEntry = import.meta.resolve("@earendil-works/pi-coding-agent");
+    authStorageModuleValue = await import(new URL("core/auth-storage.js", sdkEntry).href);
+  } catch {
+    throw new PiRuntimeConfigurationError("pi_config_unavailable");
+  }
+  if (!isPiAuthStorageModule(authStorageModuleValue)) {
+    throw new PiRuntimeConfigurationError("pi_config_unavailable");
+  }
+  // This internal module is intentionally pinned to the worker's verified Pi 0.87.1 runtime.
+  const authStorageModule = authStorageModuleValue;
+  const state: { failureCode?: PiRuntimeConfigurationFailureCode } = {};
+  const assertHealthy = (): void => {
+    if (state.failureCode !== undefined) {
+      throw new PiRuntimeConfigurationError(state.failureCode);
+    }
+  };
+  const inspectAuthContent = (content: string | undefined): void => {
+    try {
+      assertPiAuthStorageContentSafe(content);
+    } catch (error) {
+      throw piAuthStorageFailure(error, state);
+    }
+  };
+  const inspectLockResult = <T>(value: PiAuthLockResult<T>): PiAuthLockResult<T> => {
+    const result = recordFromUnknown(value);
+    if (result === undefined || !("result" in result)) {
+      throw piAuthStorageFailure(undefined, state);
+    }
+    if (result.next !== undefined) {
+      if (typeof result.next !== "string") {
+        throw piAuthStorageFailure(undefined, state);
+      }
+      inspectAuthContent(result.next);
+    }
+    return value;
+  };
+
+  let nativeBackend: PiAuthStorageBackend;
+  try {
+    nativeBackend = new authStorageModule.FileAuthStorageBackend(authPath);
+  } catch (error) {
+    throw piAuthStorageFailure(error, state);
+  }
+  const backend: PiAuthStorageBackend = {
+    withLock<T>(callback: (current: string | undefined) => PiAuthLockResult<T>): T {
+      try {
+        return nativeBackend.withLock((current) => {
+          inspectAuthContent(current);
+          return inspectLockResult(callback(current));
+        });
+      } catch (error) {
+        throw piAuthStorageFailure(error, state);
+      }
+    },
+    async withLockAsync<T>(
+      callback: (current: string | undefined) => Promise<PiAuthLockResult<T>>,
+      options?: PiAuthOperationOptions,
+    ): Promise<T> {
+      try {
+        return await nativeBackend.withLockAsync(async (current) => {
+          inspectAuthContent(current);
+          return inspectLockResult(await callback(current));
+        }, options);
+      } catch (error) {
+        throw piAuthStorageFailure(error, state);
+      }
+    },
+  };
+
+  let nativeCredentials: unknown;
+  try {
+    nativeCredentials = authStorageModule.AuthStorage.fromStorage(backend);
+  } catch (error) {
+    throw piAuthStorageFailure(error, state);
+  }
+  if (!isPiCredentialStore(nativeCredentials)) {
+    throw piAuthStorageFailure(undefined, state);
+  }
+  assertHealthy();
+
+  const guardedOperation = async <T>(operation: () => Promise<T>): Promise<T> => {
+    assertHealthy();
+    try {
+      const result = await operation();
+      assertHealthy();
+      return result;
+    } catch (error) {
+      if (state.failureCode !== undefined) {
+        throw new PiRuntimeConfigurationError(state.failureCode);
+      }
+      throw error;
+    }
+  };
+  const credentials: PiRuntimeCredentialStore = {
+    read: async (providerId, options) =>
+      guardedOperation(async () => nativeCredentials.read(providerId, options)),
+    list: async (options) => guardedOperation(async () => nativeCredentials.list(options)),
+    modify: async (providerId, callback, options) =>
+      guardedOperation(async () => nativeCredentials.modify(providerId, callback, options)),
+    delete: async (providerId, options) =>
+      guardedOperation(async () => nativeCredentials.delete(providerId, options)),
+  };
+  return { credentials, assertHealthy };
 }
 
 function sessionPathWithin(directory: string, file: string): boolean {
@@ -866,6 +1046,7 @@ async function runPiWorker(): Promise<void> {
   let terminalWritten = false;
   let eventFailure: Error | undefined;
   let sdkVerified = false;
+  let assertAuthHealthy: (() => void) | undefined;
   let streamedAssistantBytes = 0;
   let identity: ObservedIdentity | undefined;
   let resolveSettled: (() => void) | undefined;
@@ -952,6 +1133,7 @@ async function runPiWorker(): Promise<void> {
       abortSession();
     });
 
+    await assertPiRuntimeConfigurationSafe(workerStart.modelFiles);
     if (process.platform === "win32") {
       throw new Error(
         "Pi worker is unavailable on Windows because supervised process groups are required.",
@@ -979,13 +1161,17 @@ async function runPiWorker(): Promise<void> {
       themes: [],
       defaultTools: [...workerStart.tools],
     });
+    const guardedAuth = await createGuardedPiCredentials(workerStart.modelFiles.authPath);
+    assertAuthHealthy = guardedAuth.assertHealthy;
     const modelRuntime = await pi.ModelRuntime.create({
-      authPath: workerStart.modelFiles.authPath,
+      credentials: guardedAuth.credentials,
       modelsPath: workerStart.modelFiles.modelsPath,
       modelsStorePath: workerStart.modelFiles.modelsStorePath,
       allowModelNetwork: false,
       refreshOnCreate: false,
     });
+    guardedAuth.assertHealthy();
+    assertPiModelRuntimeConfigurationSafe(modelRuntime);
     const model = modelRuntime.getModel(workerStart.model.provider, workerStart.model.id);
     if (model === undefined) {
       throw new Error(
@@ -1135,6 +1321,7 @@ async function runPiWorker(): Promise<void> {
     await created.session.prompt(workerStart.prompt, { expandPromptTemplates: false });
     await settledPromise;
     await output.drain();
+    guardedAuth.assertHealthy();
     if (eventFailure !== undefined) {
       throw eventFailure;
     }
@@ -1192,7 +1379,13 @@ async function runPiWorker(): Promise<void> {
     });
   } catch (error) {
     if (!terminalWritten) {
-      const message = error instanceof Error ? error.message : String(error);
+      let failure = error;
+      try {
+        assertAuthHealthy?.();
+      } catch (error) {
+        failure = error;
+      }
+      const message = failure instanceof Error ? failure.message : String(failure);
       try {
         await output.drain();
         const lastMessage = assistantMessages.at(-1);
@@ -1201,7 +1394,7 @@ async function runPiWorker(): Promise<void> {
           output,
           start,
           "failed",
-          { code: failureCode(error), message },
+          { code: failureCode(failure), message },
           {
             ...(identity !== undefined
               ? { identity }
