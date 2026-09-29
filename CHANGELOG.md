@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.2.0](https://github.com/sebastian-software/harness-relay/compare/v0.1.0...v0.2.0) (2026-09-29)
+
+
+### Features
+
+* **adapters:** bind named connections to native contexts ([#158](https://github.com/sebastian-software/harness-relay/issues/158)) ([adba981](https://github.com/sebastian-software/harness-relay/commit/adba981f7264e2d6219ad0caeb98bd863cab876e))
+* add local Pi model routes ([#167](https://github.com/sebastian-software/harness-relay/issues/167)) ([196c6eb](https://github.com/sebastian-software/harness-relay/commit/196c6eb63c0b31398c471e6727f6e5bec73f8f4b))
+* **connections:** add named native connection routing ([#155](https://github.com/sebastian-software/harness-relay/issues/155)) ([1b69675](https://github.com/sebastian-software/harness-relay/commit/1b696754280ec54c6b3722f610160ffd8e8b431b))
+* **connections:** add shared connection management ([#161](https://github.com/sebastian-software/harness-relay/issues/161)) ([dd4f611](https://github.com/sebastian-software/harness-relay/commit/dd4f6117142bdb43cd5f17074c5b7a4b0b4e75b7))
+* **dialogue:** add caller-to-delegate dialogue contract ([#157](https://github.com/sebastian-software/harness-relay/issues/157)) ([07fe7b4](https://github.com/sebastian-software/harness-relay/commit/07fe7b4f6c5b821e08a61fff1749a2d9455f7668))
+* **grok:** add bounded ACP adapter foundation ([#168](https://github.com/sebastian-software/harness-relay/issues/168)) ([6b738e6](https://github.com/sebastian-software/harness-relay/commit/6b738e604f891a0940ad30af1b4e877bf0d704f8))
+* **pi:** add native live steering ([#166](https://github.com/sebastian-software/harness-relay/issues/166)) ([dd16f9c](https://github.com/sebastian-software/harness-relay/commit/dd16f9c2fd56107f0f8f6be24c4ffeda643e7fce))
+* **pi:** add supervised private worker foundation ([#159](https://github.com/sebastian-software/harness-relay/issues/159)) ([81f540e](https://github.com/sebastian-software/harness-relay/commit/81f540e7d5558d991d16ad96701a1ba5885d3db1))
+* **pi:** support bound native session continuation ([#162](https://github.com/sebastian-software/harness-relay/issues/162)) ([edc6105](https://github.com/sebastian-software/harness-relay/commit/edc6105d6033e1e1664f8a048ac883e78b972b81))
+
+
+### Bug Fixes
+
+* **ci:** accept generated release manifest formatting ([#169](https://github.com/sebastian-software/harness-relay/issues/169)) ([ad1fb5d](https://github.com/sebastian-software/harness-relay/commit/ad1fb5d358e1e04984b78a16f1eba9f55c69f293))
+* **pi:** reject shell-backed runtime configuration ([#164](https://github.com/sebastian-software/harness-relay/issues/164)) ([7a677f3](https://github.com/sebastian-software/harness-relay/commit/7a677f3282905da80f34d268e7ebd02a56f04fc2))
+
 ## 0.1.0 (2026-09-16)
 
 
