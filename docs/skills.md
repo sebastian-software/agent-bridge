@@ -119,13 +119,23 @@ git clone --branch main --depth 1 \
 cd harness-relay
 corepack pnpm install --frozen-lockfile
 pnpm build
-node dist/src/cli.js describe --json
+relay_cli="$PWD/dist/src/cli.js"
+node "$relay_cli" describe --json
+node "$relay_cli" connections discover --refresh --json
 ```
 
-Use the setup skill only if that feature check reports all seven operations as
-implemented. Do not present the source skill as compatible with the released
-CLI. The tagged `v0.1.0` checkout above remains the reproducible install for
-the three released skills.
+Use the same source-built executable for every later CLI command, for
+example `node /absolute/path/to/harness-relay/dist/src/cli.js`. Do not run a
+bare `harness-relay` command afterward unless that binary also passed the
+feature check; it may still resolve to the released
+`v0.1.0` CLI. Since `describe` is local and package versions may match, an
+already-running broker can still lack the operations. If an operation reports
+unsupported, inspect it with the same CLI using `broker status --json` and
+`list --active --json`. Run `broker restart` through that CLI without
+`--force` only when no invocations are active; otherwise wait for them to
+finish. Use the setup skill only if the feature check reports all seven
+operations as implemented. The tagged `v0.1.0` checkout above remains the
+reproducible install for the three released skills.
 
 ## Optional Dalo catalog installation
 

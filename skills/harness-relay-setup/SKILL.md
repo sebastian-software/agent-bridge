@@ -14,20 +14,33 @@ do not establish the identity of the account signed in to the native harness.
 
 ## Procedure
 
-1. Check the installed CLI before using this skill. Run
-   `harness-relay describe --json` and confirm that all seven operations
-   `connection.discover`, `connection.list`, `connection.inspect`,
-   `connection.register`, `connection.prepare`, `connection.update`, and
-   `connection.remove` are marked `implemented`. The published `v0.1.0` CLI
-   does not include them. If they are missing, stop and explain that this skill
-   needs a source-built CLI with these operations; installation instructions
-   are at https://github.com/sebastian-software/harness-relay/blob/main/docs/skills.md.
-   Do not install runtimes or plugins automatically. Confirm that the selected
-   harness runtime is installed before managing its context.
+1. Check the CLI before using this skill, and keep using the exact executable
+   that passes this check. For an installed CLI, run
+   `harness-relay describe --json`; for a source build, run
+   `node /absolute/path/to/checkout/dist/src/cli.js describe --json`. Confirm
+   that all seven operations `connection.discover`, `connection.list`,
+   `connection.inspect`, `connection.register`, `connection.prepare`,
+   `connection.update`, and `connection.remove` are marked `implemented`. The
+   published `v0.1.0` CLI does not include them. If they are missing, stop and
+   explain that this skill needs a source-built CLI with these operations;
+   installation instructions are at
+   https://github.com/sebastian-software/harness-relay/blob/main/docs/skills.md.
+   Do not fall back to another `harness-relay` found on `PATH` after validating
+   a source build. If using MCP, also verify these operations on the exact
+   configured MCP server. Do not install runtimes or plugins automatically.
+   Confirm that the selected harness runtime is installed before managing its
+   context. If a connection operation reports unsupported, inspect the broker
+   with `broker status --json` and `list --active --json` using the same CLI.
+   Restart it with that CLI's `broker restart` command without `--force` only
+   when no invocations are active. If work is active, wait for it to finish;
+   never interrupt it to enable connection management.
 
-2. Call `connection.discover` (or `harness-relay connections discover
---refresh --json`) and `connection.list` to review the default route,
-   available named routes, and existing redacted registrations. Use
+2. Call `connection.discover` and `connection.list` to review the default
+   route, available named routes, and existing redacted registrations. With an
+   installed CLI, the discover command is
+   `harness-relay connections discover --refresh --json`; with a source build,
+   use the same `node /absolute/path/to/checkout/dist/src/cli.js` prefix you
+   validated above. Use
    `connection.inspect` for a registered context. Keep the default route when
    no connection ID is explicitly selected.
 
