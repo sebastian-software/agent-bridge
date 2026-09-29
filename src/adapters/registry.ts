@@ -28,8 +28,8 @@ import { CodexAdapter } from "./codex.js";
 import { inspectNativeContextDirectory, redactNativeContextData } from "./environment.js";
 import { FakeProcessAdapter } from "./fake-process.js";
 import { FakeAdapter } from "./fake.js";
-import { LocalPiAdapter } from "./local-pi.js";
 import { GrokAdapter } from "./grok.js";
+import { LocalPiAdapter } from "./local-pi.js";
 
 const ASSURANCE_RANK: Readonly<Record<Assurance, number>> = {
   none: 0,
