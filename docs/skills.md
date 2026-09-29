@@ -1,12 +1,15 @@
 # Caller skills
 
-Harness Relay ships three caller-side skills:
+The `v0.1.0` release contains three caller-side skills. The current source tree
+also contains `harness-relay-setup`, which requires a CLI that implements all
+seven `connection.*` operations; it is not part of `v0.1.0`.
 
-| Skill                          | Use it for                                                        |
-| ------------------------------ | ----------------------------------------------------------------- |
-| `harness-relay`                | One bounded analysis or implementation delegation                 |
-| `harness-relay-second-opinion` | An independent appraisal of a plan, change, or decision           |
-| `harness-relay-review`         | A review with multiple model contributors and attributed findings |
+| Skill                          | Use it for                                                           |
+| ------------------------------ | -------------------------------------------------------------------- |
+| `harness-relay`                | One bounded analysis or implementation delegation                    |
+| `harness-relay-second-opinion` | An independent appraisal of a plan, change, or decision              |
+| `harness-relay-review`         | A review with multiple model contributors and attributed findings    |
+| `harness-relay-setup`          | Manage named native contexts with explicit user-owned authentication |
 
 Each skill runs in the caller's context. The caller remains the root, owns the
 working directory and user constraints, and makes the final decision. Skills
@@ -26,14 +29,15 @@ harness-relay describe --json
 npx --yes harness-relay@0.1.0 describe --json
 ```
 
-The release package uses the authenticated native sessions already configured
-for the selected harness. It does not accept credentials as CLI arguments.
+The published `v0.1.0` CLI uses the default native session. The current
+source adds explicitly selected native contexts through the `connection.*`
+operations described below. Neither accepts credentials as CLI arguments.
 
 ## Harness prerequisites
 
-Harness Relay supervises an installed, authenticated harness; it does not
-install the harness or create its native login. Install at least one supported
-harness and complete its own sign-in before expecting a qualified route:
+Harness Relay supervises an installed harness; it does not install the harness
+or create its native login. Install at least one supported harness and
+complete its native sign-in before expecting a qualified default route:
 
 | Harness     | Install                                          | Native login/setup                                                                                                                             |
 | ----------- | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -46,6 +50,26 @@ its environment changed. Check the qualified result with
 `harness-relay routes --json`. A missing login, adapter, or qualified route is
 reported as unavailable; the relay does not silently substitute a different
 model or harness.
+
+## Set up another native context
+
+Use the `harness-relay-setup` skill or the same shared CLI/MCP operations to
+register a context the user already configured or prepare a separate private
+context. For example:
+
+```sh
+harness-relay connections discover --refresh --json
+harness-relay connections prepare --id implementation --harness codex --json
+harness-relay connections inspect implementation --json
+```
+
+`prepare` creates an empty private context and returns structured login
+instructions (`executable`, `args`, and `env`). The user runs the native
+authentication flow. Relay never asks for credentials, copies login files,
+starts a login command, or changes the default account. A context label and a
+ready route do not prove which account is signed in. Use a stable ID when
+repeating setup; an identical prepare or registration reuses the existing
+revision instead of adding a duplicate.
 
 ## Install the skills with the public Skills CLI
 
@@ -73,18 +97,35 @@ only Codex should receive the skills. To inspect the installed result:
 npx skills list --global --agent codex
 ```
 
-The Skills CLI also accepts a public repository directly when an unpinned
-working-tree install is appropriate:
+The setup skill can be installed from current `main` when an unpinned source
+install is appropriate:
 
 ```sh
 npx skills add https://github.com/sebastian-software/harness-relay \
-  --skill harness-relay harness-relay-second-opinion harness-relay-review \
+  --skill harness-relay-setup \
   --agent codex claude-code --global
 ```
 
-For reproducible release installs, use the explicit Git checkout above. The
-`v0.1.0` tag is the release target; before that tag is published, a source
-checkout can validate the skill layout but cannot complete this pinned command.
+Before using the setup skill, run `harness-relay describe --json` and confirm
+that `connection.discover`, `connection.list`, `connection.inspect`,
+`connection.register`, `connection.prepare`, `connection.update`, and
+`connection.remove` are all marked `implemented`. The `v0.1.0` CLI does not
+include these operations. To build the CLI from current `main`, use Node.js 22
+or newer:
+
+```sh
+git clone --branch main --depth 1 \
+  https://github.com/sebastian-software/harness-relay.git
+cd harness-relay
+corepack pnpm install --frozen-lockfile
+pnpm build
+node dist/src/cli.js describe --json
+```
+
+Use the setup skill only if that feature check reports all seven operations as
+implemented. Do not present the source skill as compatible with the released
+CLI. The tagged `v0.1.0` checkout above remains the reproducible install for
+the three released skills.
 
 ## Optional Dalo catalog installation
 
@@ -97,10 +138,11 @@ dalo source add-catalog harness-relay \
   https://github.com/sebastian-software/harness-relay.git
 dalo source inspect harness-relay
 dalo source select harness-relay harness-relay \
-  harness-relay-second-opinion harness-relay-review
+  harness-relay-second-opinion harness-relay-review harness-relay-setup
 dalo approve skill harness-relay:harness-relay
 dalo approve skill harness-relay:harness-relay-second-opinion
 dalo approve skill harness-relay:harness-relay-review
+dalo approve skill harness-relay:harness-relay-setup
 dalo sync
 ```
 

@@ -18,6 +18,7 @@ const MAX_MESSAGE_BYTES = 1_048_576;
 
 const BRIDGE_ERROR_CODES: ReadonlySet<string> = new Set<BridgeErrorCode>([
   "invalid_request",
+  "connection_conflict",
   "invocation_conflict",
   "invocation_evicted",
   "invocation_input_stale",

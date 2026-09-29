@@ -4,6 +4,11 @@ import { fileURLToPath } from "node:url";
 
 import type {
   AnswerInputRequest,
+  ConnectionDiscoverResult,
+  ConnectionInspection,
+  ConnectionPrepareResult,
+  ConnectionSummary,
+  ConnectionUpdateParams,
   ContinueInvocationRequest,
   EventsResult,
   InvocationEvent,
@@ -109,6 +114,13 @@ type OperationResultMap = {
   readonly "system.describe": ContractDescription;
   readonly "system.status": BrokerStatus;
   readonly "route.discover": { readonly routes: readonly RouteDescriptor[] };
+  readonly "connection.discover": ConnectionDiscoverResult;
+  readonly "connection.list": { readonly connections: readonly ConnectionSummary[] };
+  readonly "connection.inspect": ConnectionInspection;
+  readonly "connection.register": ConnectionInspection;
+  readonly "connection.prepare": ConnectionPrepareResult;
+  readonly "connection.update": ConnectionInspection;
+  readonly "connection.remove": { readonly removed: true; readonly connection: ConnectionSummary };
   readonly "invocation.start": StartInvocationResult;
   readonly "invocation.inspect": InspectionResult;
   readonly "invocation.get": InspectionResult;
@@ -167,6 +179,48 @@ export class HarnessRelayClient {
       refresh: options.refresh ?? false,
       ...(options.connectionId === undefined ? {} : { connectionId: options.connectionId }),
     });
+  }
+
+  async discoverConnections(
+    options: { readonly refresh?: boolean } = {},
+  ): Promise<ConnectionDiscoverResult> {
+    return this.#request("connection.discover", { refresh: options.refresh ?? false });
+  }
+
+  async connections(): Promise<{ readonly connections: readonly ConnectionSummary[] }> {
+    return this.#request("connection.list", {});
+  }
+
+  async inspectConnection(id: string): Promise<ConnectionInspection> {
+    return this.#request("connection.inspect", { id });
+  }
+
+  async registerConnection(request: {
+    readonly id: string;
+    readonly harness: string;
+    readonly nativeContextRef: string;
+    readonly purpose?: string;
+  }): Promise<ConnectionInspection> {
+    return this.#request("connection.register", request);
+  }
+
+  async prepareConnection(request: {
+    readonly id: string;
+    readonly harness: string;
+    readonly purpose?: string;
+  }): Promise<ConnectionPrepareResult> {
+    return this.#request("connection.prepare", request);
+  }
+
+  async updateConnection(request: ConnectionUpdateParams): Promise<ConnectionInspection> {
+    return this.#request("connection.update", request);
+  }
+
+  async removeConnection(request: {
+    readonly id: string;
+    readonly expectedRevision: string;
+  }): Promise<{ readonly removed: true; readonly connection: ConnectionSummary }> {
+    return this.#request("connection.remove", request);
   }
 
   async start(request: StartInvocationRequest): Promise<StartInvocationResult> {

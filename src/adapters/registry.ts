@@ -96,6 +96,10 @@ export class AdapterRegistry {
     return adapter;
   }
 
+  get connectionsPath(): string {
+    return this.#connectionsPath;
+  }
+
   async discover(options: DiscoveryOptions = {}): Promise<readonly RouteDescriptor[]> {
     const connections = await loadUserConnections(this.#connectionsPath);
     return (await this.#discoverSnapshot(connections, options)).routes;

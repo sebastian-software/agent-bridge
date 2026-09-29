@@ -21,23 +21,36 @@ args = ["mcp", "serve"]
 
 ## Recommended tool flow
 
-1. Call `harness_relay_system_describe` to inspect the contract and routes.
-2. Call `harness_relay_route_discover` to inspect qualified routes. Pass
-   `connectionId` to inspect one named native context.
-3. Call `harness_relay_invocation_start` with an absolute working directory,
+1. Call `harness_relay_system_describe` to inspect the contract and operations.
+2. Call `harness_relay_connection_discover` or
+   `harness_relay_connection_list` to inspect routes and redacted registrations.
+   `harness_relay_connection_inspect` refreshes readiness for one registration;
+   readiness does not prove account identity.
+3. If needed, call `harness_relay_connection_register` for a native context the
+   user already configured, or `harness_relay_connection_prepare` to create an
+   empty private context and receive structured `executable`, `args`, and `env`
+   login instructions. Relay never launches native authentication or copies
+   credentials. Only the explicit prepare result includes the new context path.
+4. Call `harness_relay_invocation_start` with an absolute working directory,
    the smallest required policy, and optional `selector.connectionId`. Omitting
    the selector preserves the harness's normal native login.
-4. Follow progress with `harness_relay_invocation_events` using the returned
+5. Follow progress with `harness_relay_invocation_events` using the returned
    cursors. Answer pending permission requests with
    `harness_relay_invocation_respond`; answer general delegate questions with
    `harness_relay_invocation_answer`.
-5. Call `harness_relay_invocation_result` after the terminal event.
+6. Call `harness_relay_invocation_result` after the terminal event.
 
 `harness_relay_invocation_send` queues additional input for an active native
 session when its route advertises steering. `harness_relay_invocation_continue`
 starts a new invocation linked to a terminal predecessor when a retained native
 session handle is available. Each operation reports its own capability errors;
 the broker does not silently restart or retarget a delegate.
+
+Use `harness_relay_connection_update` and `harness_relay_connection_remove`
+with the current registration revision. Removal only unregisters the context;
+it leaves native configuration and credentials untouched. Connection tools
+use the same broker operations as the CLI and typed client, including
+revision-conflict and duplicate-registration behavior.
 
 Only operations marked `implemented` in `system.describe` are advertised as
 MCP tools. Tool schemas are self-contained so hosts do not need to resolve

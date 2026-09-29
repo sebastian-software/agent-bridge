@@ -91,6 +91,127 @@ export const OPERATION_DEFINITIONS: readonly OperationDefinition[] = [
     output: { type: "object", required: ["routes"] },
   },
   {
+    name: "connection.discover",
+    summary: "Refresh default and named routes with redacted registered-connection summaries.",
+    availability: "implemented",
+    cli: ["connections discover [--refresh] --json"],
+    input: {
+      type: "object",
+      additionalProperties: false,
+      properties: { refresh: { type: "boolean" } },
+    },
+    output: { type: "object", required: ["connections", "routes", "nextSteps"] },
+  },
+  {
+    name: "connection.list",
+    summary: "List registered native contexts without exposing their private references.",
+    availability: "implemented",
+    cli: ["connections list --json"],
+    input: { type: "object", additionalProperties: false },
+    output: { type: "object", required: ["connections"] },
+  },
+  {
+    name: "connection.inspect",
+    summary: "Refresh readiness evidence for one registered native context.",
+    availability: "implemented",
+    cli: ["connections inspect <id> --json"],
+    input: {
+      type: "object",
+      required: ["id"],
+      additionalProperties: false,
+      properties: { id: { type: "string", minLength: 1 } },
+    },
+    output: {
+      type: "object",
+      required: ["connection", "readiness", "userActionRequired", "routes", "nextSteps"],
+    },
+  },
+  {
+    name: "connection.register",
+    summary:
+      "Register an existing native context without copying credentials or changing defaults.",
+    availability: "implemented",
+    cli: [
+      "connections register --id <id> --harness <id> --native-context <path> [--purpose <text>]",
+    ],
+    input: {
+      type: "object",
+      required: ["id", "harness", "nativeContextRef"],
+      additionalProperties: false,
+      properties: {
+        id: { type: "string", minLength: 1 },
+        harness: { type: "string", minLength: 1 },
+        nativeContextRef: { type: "string", minLength: 1 },
+        purpose: { type: "string", minLength: 1 },
+      },
+    },
+    output: {
+      type: "object",
+      required: ["connection", "readiness", "userActionRequired", "routes", "nextSteps"],
+    },
+  },
+  {
+    name: "connection.prepare",
+    summary:
+      "Create a private native context and return structured instructions for user-owned login.",
+    availability: "implemented",
+    cli: ["connections prepare --id <id> --harness <id> [--purpose <text>]"],
+    input: {
+      type: "object",
+      required: ["id", "harness"],
+      additionalProperties: false,
+      properties: {
+        id: { type: "string", minLength: 1 },
+        harness: { type: "string", minLength: 1 },
+        purpose: { type: "string", minLength: 1 },
+      },
+    },
+    output: {
+      type: "object",
+      required: ["connection", "readiness", "userActionRequired", "routes", "nextSteps", "setup"],
+    },
+  },
+  {
+    name: "connection.update",
+    summary: "Update a registered context with optimistic revision checks.",
+    availability: "implemented",
+    cli: [
+      "connections update <id> --revision <revision> [--native-context <path>] [--purpose <text>|--clear-purpose]",
+    ],
+    input: {
+      type: "object",
+      required: ["id", "expectedRevision"],
+      additionalProperties: false,
+      properties: {
+        id: { type: "string", minLength: 1 },
+        expectedRevision: { type: "string", minLength: 1 },
+        nativeContextRef: { type: "string", minLength: 1 },
+        purpose: { type: "string", minLength: 1 },
+        clearPurpose: { type: "boolean" },
+      },
+    },
+    output: {
+      type: "object",
+      required: ["connection", "readiness", "userActionRequired", "routes", "nextSteps"],
+    },
+  },
+  {
+    name: "connection.remove",
+    summary: "Remove only a registration; preserve the native context and its credentials.",
+    availability: "implemented",
+    cli: ["connections remove <id> --revision <revision>"],
+    input: {
+      type: "object",
+      required: ["id", "expectedRevision"],
+      additionalProperties: false,
+      properties: {
+        id: { type: "string", minLength: 1 },
+        expectedRevision: { type: "string", minLength: 1 },
+      },
+    },
+    output: { type: "object", required: ["removed", "connection"] },
+  },
+  {
     name: "invocation.start",
     summary:
       "Resolve and asynchronously start one bounded invocation in an optional named connection.",

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
-import { isAbsolute, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 import type {
@@ -11,13 +11,24 @@ import type {
   AdapterRunResult,
   AdapterSendInputContext,
 } from "./adapters/types.js";
-import type { AdapterConnectionContext } from "./connections.js";
+import type { AdapterConnectionContext, HarnessConnection } from "./connections.js";
 import type { BrokerPaths } from "./paths.js";
 
+import { inspectNativeContextDirectory } from "./adapters/environment.js";
 import { AdapterRegistry } from "./adapters/registry.js";
 import { type BrokerConfig, brokerConfigFromValues, type BrokerConfigValues } from "./config.js";
 import {
+  createHarnessConnection,
+  loadUserConnections,
+  mutateUserConnections,
+  summarizeConnection,
+  updateHarnessConnection,
+} from "./connections.js";
+import {
   type AnswerInputRequest,
+  type ConnectionDiscoverResult,
+  type ConnectionInspection,
+  type ConnectionPrepareResult,
   type ContentPart,
   type ContinueInvocationRequest,
   type EffectObservation,
@@ -32,6 +43,12 @@ import {
   type JsonValue,
   type ObservedIdentity,
   parseAnswerParams,
+  parseConnectionDiscoverParams,
+  parseConnectionIdParams,
+  parseConnectionPrepareParams,
+  parseConnectionRegisterParams,
+  parseConnectionRemoveParams,
+  parseConnectionUpdateParams,
   parseContinueInvocationParams,
   parseEventsParams,
   parseInvocationIdParams,
@@ -83,6 +100,15 @@ function unverifiedIdentity(): ObservedIdentity {
     harnessVersion: { evidence: "unverified" },
     nativeSessionId: { evidence: "unverified" },
   };
+}
+
+function sameConnectionInput(left: HarnessConnection, right: HarnessConnection): boolean {
+  return (
+    left.id === right.id &&
+    left.harness === right.harness &&
+    left.nativeContextRef === right.nativeContextRef &&
+    left.purpose === right.purpose
+  );
 }
 
 function isAbortError(error: unknown): boolean {
@@ -363,6 +389,20 @@ export class Broker {
         return this.status();
       case "route.discover":
         return { routes: await this.#registry.discover(parseRouteDiscoverParams(params)) };
+      case "connection.discover":
+        return this.#connectionDiscover(parseConnectionDiscoverParams(params));
+      case "connection.list":
+        return this.#connectionList();
+      case "connection.inspect":
+        return this.#connectionInspect(parseConnectionIdParams(params).id);
+      case "connection.register":
+        return this.#connectionRegister(parseConnectionRegisterParams(params));
+      case "connection.prepare":
+        return this.#connectionPrepare(parseConnectionPrepareParams(params));
+      case "connection.update":
+        return this.#connectionUpdate(parseConnectionUpdateParams(params));
+      case "connection.remove":
+        return this.#connectionRemove(parseConnectionRemoveParams(params));
       case "invocation.start":
         return this.start(parseStartInvocationRequest(params));
       case "invocation.inspect":
@@ -402,6 +442,308 @@ export class Broker {
           retryable: false,
         });
     }
+  }
+
+  async #connectionDiscover(
+    params: ReturnType<typeof parseConnectionDiscoverParams>,
+  ): Promise<ConnectionDiscoverResult> {
+    const snapshot = await loadUserConnections(this.#registry.connectionsPath);
+    const routes = await this.#registry.discover({ refresh: params.refresh });
+    const current = await loadUserConnections(this.#registry.connectionsPath);
+    if (JSON.stringify(snapshot) !== JSON.stringify(current)) {
+      throw new BridgeError({
+        code: "connection_conflict",
+        message: "Connection registrations changed during discovery. Refresh and retry.",
+        retryable: true,
+      });
+    }
+    return {
+      connections: snapshot.map(summarizeConnection),
+      routes,
+      nextSteps: [
+        "Use a listed connection ID explicitly when starting an invocation; omit it to preserve the native default login.",
+        "Readiness describes the available route only and does not verify account identity.",
+      ],
+    };
+  }
+
+  async #connectionList(): Promise<{
+    readonly connections: ReadonlyArray<ReturnType<typeof summarizeConnection>>;
+  }> {
+    const connections = await loadUserConnections(this.#registry.connectionsPath);
+    return { connections: connections.map(summarizeConnection) };
+  }
+
+  async #connectionInspect(id: string): Promise<ConnectionInspection> {
+    const connections = await loadUserConnections(this.#registry.connectionsPath);
+    const connection = this.#requireConnection(id, connections);
+    let routes;
+    try {
+      routes = await this.#registry.discover({ refresh: true, connectionId: id });
+    } catch (error) {
+      if (!(error instanceof BridgeError) || error.code !== "route_unavailable") {
+        throw error;
+      }
+      routes = [];
+    }
+    const latest = await loadUserConnections(this.#registry.connectionsPath);
+    const latestConnection = latest.find((candidate) => candidate.id === id);
+    if (latestConnection?.revision !== connection.revision) {
+      throw new BridgeError({
+        code: "connection_conflict",
+        message: "The connection changed during inspection. Refresh and retry.",
+        retryable: true,
+      });
+    }
+    const readiness = routes.some((route) => route.readiness === "ready")
+      ? "ready"
+      : routes.some((route) => route.readiness === "unqualified")
+        ? "unqualified"
+        : "unavailable";
+    return {
+      connection: summarizeConnection(connection),
+      readiness,
+      userActionRequired: readiness !== "ready",
+      routes,
+      nextSteps:
+        readiness === "ready"
+          ? [
+              "Select this connection explicitly for an invocation if you want to use it.",
+              "Route readiness does not verify account identity; confirm the selected native account yourself.",
+            ]
+          : [
+              "Review the route diagnostics and complete any required native harness setup yourself.",
+              "Inspect again after setup; Relay does not infer account identity from a context directory.",
+            ],
+    };
+  }
+
+  async #connectionRegister(params: ReturnType<typeof parseConnectionRegisterParams>) {
+    const connection = createHarnessConnection(params);
+    await this.#validateConnectionInput(connection);
+    const mutation = await mutateUserConnections((current) => {
+      const existing = current.find((candidate) => candidate.id === connection.id);
+      if (existing !== undefined) {
+        if (sameConnectionInput(existing, connection)) {
+          return { connections: current, result: existing };
+        }
+        throw new BridgeError({
+          code: "connection_conflict",
+          message: `Connection ${connection.id} is already registered with different settings. Update it or choose another ID.`,
+          retryable: false,
+        });
+      }
+      const duplicate = current.find(
+        (candidate) =>
+          candidate.harness === connection.harness &&
+          candidate.nativeContextRef === connection.nativeContextRef,
+      );
+      if (duplicate !== undefined) {
+        throw new BridgeError({
+          code: "connection_conflict",
+          message: `This native context is already registered as ${duplicate.id}.`,
+          retryable: false,
+        });
+      }
+      return { connections: [...current, connection], result: connection };
+    }, this.#registry.connectionsPath);
+    return this.#connectionInspect(mutation.result.id);
+  }
+
+  async #connectionPrepare(
+    params: ReturnType<typeof parseConnectionPrepareParams>,
+  ): Promise<ConnectionPrepareResult> {
+    const validatedInput = createHarnessConnection({
+      ...params,
+      nativeContextRef: "native-context-validation-placeholder",
+    });
+    const login =
+      validatedInput.harness === "codex"
+        ? { executable: "codex", args: ["login"], env: { CODEX_HOME: "" } }
+        : validatedInput.harness === "claude"
+          ? { executable: "claude", args: [], env: { CLAUDE_CONFIG_DIR: "" } }
+          : undefined;
+    if (login === undefined) {
+      throw new BridgeError({
+        code: "route_unavailable",
+        message: `Harness ${validatedInput.harness} has no supported native login setup instructions.`,
+        retryable: false,
+      });
+    }
+    await this.#validateHarness(validatedInput.harness);
+    const contextPath = join(
+      dirname(this.#registry.connectionsPath),
+      "native-contexts",
+      validatedInput.harness,
+      validatedInput.id,
+    );
+    const registered = await loadUserConnections(this.#registry.connectionsPath);
+    const existing = registered.find((candidate) => candidate.id === validatedInput.id);
+    if (
+      existing !== undefined &&
+      (existing.harness !== validatedInput.harness ||
+        existing.nativeContextRef !== contextPath ||
+        existing.purpose !== validatedInput.purpose)
+    ) {
+      throw new BridgeError({
+        code: "connection_conflict",
+        message: `Connection ${validatedInput.id} is already registered with different settings. Update it or choose another ID.`,
+        retryable: false,
+      });
+    }
+    const duplicate = registered.find(
+      (candidate) =>
+        candidate.id !== validatedInput.id &&
+        candidate.harness === validatedInput.harness &&
+        candidate.nativeContextRef === contextPath,
+    );
+    if (duplicate !== undefined) {
+      throw new BridgeError({
+        code: "connection_conflict",
+        message: `This native context is already registered as ${duplicate.id}.`,
+        retryable: false,
+      });
+    }
+    try {
+      await ensurePrivateDirectory(contextPath, "prepared native context");
+    } catch (error) {
+      throw new BridgeError(
+        {
+          code: "invalid_request",
+          message:
+            "The prepared native context could not be created with private permissions. Inspect the existing context directory and retry.",
+          retryable: false,
+        },
+        { cause: error },
+      );
+    }
+    const inspection = await this.#connectionRegister({
+      id: validatedInput.id,
+      harness: validatedInput.harness,
+      ...(validatedInput.purpose === undefined ? {} : { purpose: validatedInput.purpose }),
+      nativeContextRef: contextPath,
+    });
+    const environmentKey = validatedInput.harness === "codex" ? "CODEX_HOME" : "CLAUDE_CONFIG_DIR";
+    return {
+      ...inspection,
+      setup: {
+        contextPath,
+        login: {
+          ...login,
+          env: { [environmentKey]: contextPath },
+        },
+      },
+    };
+  }
+
+  async #connectionUpdate(params: ReturnType<typeof parseConnectionUpdateParams>) {
+    if (
+      params.nativeContextRef === undefined &&
+      params.purpose === undefined &&
+      params.clearPurpose !== true
+    ) {
+      throw new BridgeError({
+        code: "invalid_request",
+        message: "Provide nativeContextRef, purpose, or clearPurpose=true for a connection update.",
+        retryable: false,
+      });
+    }
+    const mutation = await mutateUserConnections(async (current) => {
+      const existing = this.#requireConnection(params.id, current);
+      if (existing.revision !== params.expectedRevision) {
+        throw this.#staleConnectionRevision(params.expectedRevision, existing.revision);
+      }
+      const nativeContextRef = params.nativeContextRef ?? existing.nativeContextRef;
+      if (nativeContextRef !== existing.nativeContextRef) {
+        await this.#validateConnectionInput({ ...existing, nativeContextRef });
+      }
+      const duplicate = current.find(
+        (candidate) =>
+          candidate.id !== existing.id &&
+          candidate.harness === existing.harness &&
+          candidate.nativeContextRef === nativeContextRef,
+      );
+      if (duplicate !== undefined) {
+        throw new BridgeError({
+          code: "connection_conflict",
+          message: `This native context is already registered as ${duplicate.id}.`,
+          retryable: false,
+        });
+      }
+      const purpose =
+        params.clearPurpose === true ? undefined : (params.purpose ?? existing.purpose);
+      if (nativeContextRef === existing.nativeContextRef && purpose === existing.purpose) {
+        return { connections: current, result: existing };
+      }
+      const updated = updateHarnessConnection(existing, {
+        id: existing.id,
+        harness: existing.harness,
+        nativeContextRef,
+        ...(purpose === undefined ? {} : { purpose }),
+      });
+      return {
+        connections: current.map((candidate) => (candidate.id === params.id ? updated : candidate)),
+        result: updated,
+      };
+    }, this.#registry.connectionsPath);
+    return this.#connectionInspect(mutation.result.id);
+  }
+
+  async #connectionRemove(params: ReturnType<typeof parseConnectionRemoveParams>) {
+    const mutation = await mutateUserConnections((current) => {
+      const existing = this.#requireConnection(params.id, current);
+      if (existing.revision !== params.expectedRevision) {
+        throw this.#staleConnectionRevision(params.expectedRevision, existing.revision);
+      }
+      return {
+        connections: current.filter((candidate) => candidate.id !== params.id),
+        result: summarizeConnection(existing),
+      };
+    }, this.#registry.connectionsPath);
+    return { removed: true, connection: mutation.result };
+  }
+
+  async #validateConnectionInput(connection: HarnessConnection): Promise<void> {
+    await this.#validateHarness(connection.harness);
+    if ((await inspectNativeContextDirectory(connection.nativeContextRef)) === undefined) {
+      throw new BridgeError({
+        code: "invalid_request",
+        message: "nativeContextRef must identify an absolute, readable native context directory.",
+        retryable: false,
+      });
+    }
+  }
+
+  async #validateHarness(harness: string): Promise<void> {
+    const adapter = this.#registry.adapter(harness);
+    if (adapter.discoverConnection === undefined || adapter.runConnection === undefined) {
+      throw new BridgeError({
+        code: "route_unavailable",
+        message: `Harness ${harness} does not support named native contexts.`,
+        retryable: false,
+      });
+    }
+  }
+
+  #requireConnection(id: string, connections: readonly HarnessConnection[]): HarnessConnection {
+    const connection = connections.find((candidate) => candidate.id === id);
+    if (connection === undefined) {
+      throw new BridgeError({
+        code: "route_unavailable",
+        message: `Connection ${id} is not registered. List connections and choose an existing ID.`,
+        retryable: false,
+      });
+    }
+    return connection;
+  }
+
+  #staleConnectionRevision(expectedRevision: string, actualRevision: string): BridgeError {
+    return new BridgeError({
+      code: "connection_conflict",
+      message: "The connection changed since it was read. Refresh it and retry the update.",
+      retryable: true,
+      details: { expectedRevision, actualRevision },
+    });
   }
 
   async shutdown(force = false): Promise<Readonly<Record<string, unknown>>> {

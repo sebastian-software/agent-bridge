@@ -20,6 +20,13 @@ const HELP = `harness-relay — local harness delegation gateway
 Usage:
   harness-relay describe [--json]
   harness-relay routes [--connection <id>] [--refresh] [--json]
+  harness-relay connections discover [--refresh] [--json]
+  harness-relay connections list [--json]
+  harness-relay connections inspect <id> [--json]
+  harness-relay connections register --id <id> --harness <id> --native-context <path> [--purpose <text>] [--json]
+  harness-relay connections prepare --id <id> --harness <id> [--purpose <text>] [--json]
+  harness-relay connections update <id> --revision <revision> [--native-context <path>] [--purpose <text>|--clear-purpose] [--json]
+  harness-relay connections remove <id> --revision <revision> [--json]
   harness-relay start --provider <id> --model <id> --text <text> [options]
   harness-relay run --provider <id> --model <id> [options] [prompt]
   harness-relay list [--active] [--correlation <id>] [--json]
@@ -81,6 +88,7 @@ type ParsedArguments = {
 
 const BOOLEAN_OPTIONS = new Set([
   "active",
+  "clear-purpose",
   "diagnostic-mode",
   "fail-on-error",
   "follow",
@@ -225,6 +233,7 @@ function exitCode(code: string): number {
     case "unsupported_capability":
       return 5;
     case "invocation_conflict":
+    case "connection_conflict":
       return 6;
     default:
       return 1;
@@ -733,6 +742,87 @@ async function runCommand(argv: readonly string[]): Promise<void> {
       process.stdout.write(`${routeTable(routes)}\n`);
     }
     return;
+  }
+  if (command === "connections") {
+    const action = positional(parsed, 0, "connections action");
+    if (action === "discover") {
+      output(
+        await requestBroker("connection.discover", { refresh: parsed.options.has("refresh") }),
+        json,
+      );
+      return;
+    }
+    if (action === "list") {
+      output(await requestBroker("connection.list", {}), json);
+      return;
+    }
+    if (action === "inspect") {
+      output(
+        await requestBroker("connection.inspect", { id: positional(parsed, 1, "connection ID") }),
+        json,
+      );
+      return;
+    }
+    if (action === "register") {
+      output(
+        await requestBroker("connection.register", {
+          id: requiredOption(parsed, "id"),
+          harness: requiredOption(parsed, "harness"),
+          nativeContextRef: requiredOption(parsed, "native-context"),
+          ...(option(parsed, "purpose") === undefined
+            ? {}
+            : { purpose: option(parsed, "purpose") }),
+        }),
+        json,
+      );
+      return;
+    }
+    if (action === "prepare") {
+      output(
+        await requestBroker("connection.prepare", {
+          id: requiredOption(parsed, "id"),
+          harness: requiredOption(parsed, "harness"),
+          ...(option(parsed, "purpose") === undefined
+            ? {}
+            : { purpose: option(parsed, "purpose") }),
+        }),
+        json,
+      );
+      return;
+    }
+    if (action === "update") {
+      output(
+        await requestBroker("connection.update", {
+          id: positional(parsed, 1, "connection ID"),
+          expectedRevision: requiredOption(parsed, "revision"),
+          ...(option(parsed, "native-context") === undefined
+            ? {}
+            : { nativeContextRef: option(parsed, "native-context") }),
+          ...(option(parsed, "purpose") === undefined
+            ? {}
+            : { purpose: option(parsed, "purpose") }),
+          ...(parsed.options.has("clear-purpose") ? { clearPurpose: true } : {}),
+        }),
+        json,
+      );
+      return;
+    }
+    if (action === "remove") {
+      output(
+        await requestBroker("connection.remove", {
+          id: positional(parsed, 1, "connection ID"),
+          expectedRevision: requiredOption(parsed, "revision"),
+        }),
+        json,
+      );
+      return;
+    }
+    throw new BridgeError({
+      code: "invalid_request",
+      message:
+        "Supported connection actions are discover, list, inspect, register, prepare, update, and remove.",
+      retryable: false,
+    });
   }
   if (command === "start" || command === "run") {
     const params = await startParams(parsed);

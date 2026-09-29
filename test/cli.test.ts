@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { type ChildProcess, execFile as execFileCallback, spawn } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import test from "node:test";
@@ -235,6 +235,224 @@ test("CLI discovers, starts, follows, and inspects through the Unix socket", asy
     ) as { readonly version?: unknown };
     const version = await execFile(process.execPath, [cliPath, "--version"], { env });
     assert.equal(version.stdout.trim(), packageManifest.version);
+  } finally {
+    try {
+      await execFile(process.execPath, [cliPath, "broker", "stop", "--json"], { env });
+    } catch {
+      broker.kill("SIGTERM");
+    }
+    await childExit(broker);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("CLI connection operations preserve default access and require current revisions", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-relay-connection-cli-"));
+  const env = testEnvironment(root);
+  env.HARNESS_RELAY_CONFIG_PATH = join(root, "config.json");
+  env.CODEX_HOME = join(root, "default-codex");
+  env.CLAUDE_CONFIG_DIR = join(root, "default-claude");
+  delete env.OPENAI_API_KEY;
+  delete env.CODEX_API_KEY;
+  delete env.ANTHROPIC_API_KEY;
+  delete env.CLAUDE_CODE_OAUTH_TOKEN;
+  await Promise.all([
+    mkdir(env.CODEX_HOME, { recursive: true, mode: 0o700 }),
+    mkdir(env.CLAUDE_CONFIG_DIR, { recursive: true, mode: 0o700 }),
+  ]);
+  const context = join(root, "existing-native-context");
+  await mkdir(context, { mode: 0o700 });
+  const broker = spawn(process.execPath, [cliPath, "broker", "serve"], { env, stdio: "ignore" });
+  try {
+    await waitForBroker(new IpcClient(env.HARNESS_RELAY_SOCKET_PATH ?? ""));
+    const baseline = await execFile(
+      process.execPath,
+      [cliPath, "connections", "discover", "--refresh", "--json"],
+      { env },
+    );
+    const baselineRoutes = JSON.parse(baseline.stdout) as {
+      routes?: ReadonlyArray<{ routeId?: string; connectionId?: string }>;
+    };
+    const defaultRouteIds = baselineRoutes.routes
+      ?.filter((route) => route.connectionId === undefined)
+      .map((route) => route.routeId);
+    assert.ok(defaultRouteIds && defaultRouteIds.length > 0);
+
+    await assert.rejects(
+      execFile(
+        process.execPath,
+        [cliPath, "connections", "prepare", "--id", "../../escape", "--harness", "codex", "--json"],
+        { env },
+      ),
+      (error: unknown) => error instanceof Error,
+    );
+    assert.ok(
+      !(await lstat(join(root, "native-contexts")).then(
+        () => true,
+        () => false,
+      )),
+    );
+
+    const registered = await execFile(
+      process.execPath,
+      [
+        cliPath,
+        "connections",
+        "register",
+        "--id",
+        "analysis",
+        "--harness",
+        "codex",
+        "--native-context",
+        context,
+        "--purpose",
+        "analysis",
+        "--json",
+      ],
+      { env },
+    );
+    const registeredResult = JSON.parse(registered.stdout) as {
+      connection: { revision: string };
+      readiness: string;
+    };
+    assert.equal(typeof registeredResult.connection.revision, "string");
+    assert.ok(!registered.stdout.includes(context));
+    const repeated = await execFile(
+      process.execPath,
+      [
+        cliPath,
+        "connections",
+        "register",
+        "--id",
+        "analysis",
+        "--harness",
+        "codex",
+        "--native-context",
+        context,
+        "--purpose",
+        "analysis",
+        "--json",
+      ],
+      { env },
+    );
+    assert.equal(
+      (JSON.parse(repeated.stdout) as typeof registeredResult).connection.revision,
+      registeredResult.connection.revision,
+    );
+
+    const list = await execFile(process.execPath, [cliPath, "connections", "list", "--json"], {
+      env,
+    });
+    const listed = JSON.parse(list.stdout) as { connections: ReadonlyArray<{ id: string }> };
+    assert.deepEqual(
+      listed.connections.map(({ id }) => id),
+      ["analysis"],
+    );
+    assert.ok(!list.stdout.includes(context));
+
+    const updated = await execFile(
+      process.execPath,
+      [
+        cliPath,
+        "connections",
+        "update",
+        "analysis",
+        "--revision",
+        registeredResult.connection.revision,
+        "--purpose",
+        "review",
+        "--json",
+      ],
+      { env },
+    );
+    const updatedResult = JSON.parse(updated.stdout) as {
+      connection: { revision: string; purpose?: string };
+    };
+    assert.notEqual(updatedResult.connection.revision, registeredResult.connection.revision);
+    assert.equal(updatedResult.connection.purpose, "review");
+
+    await assert.rejects(
+      execFile(
+        process.execPath,
+        [
+          cliPath,
+          "connections",
+          "update",
+          "analysis",
+          "--revision",
+          registeredResult.connection.revision,
+          "--purpose",
+          "stale",
+          "--json",
+        ],
+        { env },
+      ),
+      (error: unknown) => {
+        assert.ok(error instanceof Error && "stderr" in error);
+        return String(error.stderr).includes("connection_conflict");
+      },
+    );
+
+    const removed = await execFile(
+      process.execPath,
+      [
+        cliPath,
+        "connections",
+        "remove",
+        "analysis",
+        "--revision",
+        updatedResult.connection.revision,
+        "--json",
+      ],
+      { env },
+    );
+    assert.equal((JSON.parse(removed.stdout) as { removed?: unknown }).removed, true);
+    await lstat(context);
+    const prepared = await execFile(
+      process.execPath,
+      [cliPath, "connections", "prepare", "--id", "prepared", "--harness", "codex", "--json"],
+      { env },
+    );
+    const preparedResult = JSON.parse(prepared.stdout) as {
+      connection: { revision: string };
+      setup: {
+        contextPath: string;
+        login: { executable: string; args: string[]; env: Record<string, string> };
+      };
+    };
+    assert.equal(preparedResult.setup.login.executable, "codex");
+    assert.deepEqual(preparedResult.setup.login.args, ["login"]);
+    assert.equal(preparedResult.setup.login.env.CODEX_HOME, preparedResult.setup.contextPath);
+    const repeatedPrepare = await execFile(
+      process.execPath,
+      [cliPath, "connections", "prepare", "--id", "prepared", "--harness", "codex", "--json"],
+      { env },
+    );
+    assert.equal(
+      (JSON.parse(repeatedPrepare.stdout) as typeof preparedResult).connection.revision,
+      preparedResult.connection.revision,
+    );
+    assert.ok(
+      !(
+        await execFile(process.execPath, [cliPath, "connections", "list", "--json"], { env })
+      ).stdout.includes(preparedResult.setup.contextPath),
+    );
+
+    const after = await execFile(
+      process.execPath,
+      [cliPath, "connections", "discover", "--refresh", "--json"],
+      { env },
+    );
+    const afterRoutes = JSON.parse(after.stdout) as {
+      routes?: ReadonlyArray<{ routeId?: string; connectionId?: string }>;
+    };
+    assert.deepEqual(
+      afterRoutes.routes
+        ?.filter((route) => route.connectionId === undefined)
+        .map((route) => route.routeId),
+      defaultRouteIds,
+    );
+    assert.ok(!after.stdout.includes(preparedResult.setup.contextPath));
   } finally {
     try {
       await execFile(process.execPath, [cliPath, "broker", "stop", "--json"], { env });

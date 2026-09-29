@@ -158,6 +158,13 @@ test("MCP serves the broker contract to the official stdio client", async () => 
     const listed = await client.listTools();
     const requiredTools = [
       "harness_relay_system_describe",
+      "harness_relay_connection_discover",
+      "harness_relay_connection_list",
+      "harness_relay_connection_inspect",
+      "harness_relay_connection_register",
+      "harness_relay_connection_prepare",
+      "harness_relay_connection_update",
+      "harness_relay_connection_remove",
       "harness_relay_invocation_start",
       "harness_relay_invocation_events",
       "harness_relay_invocation_result",
