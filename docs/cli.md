@@ -94,13 +94,14 @@ To prepare a separate context, run:
 harness-relay connections prepare --id implementation --harness codex --json
 ```
 
-(or use `claude`). The explicit prepare
+(or use `claude` or `grok`). The explicit prepare
 response contains `setup.contextPath` and a structured native login instruction
 with `executable`, `args`, and `env`. Relay creates the empty private
 directory, but does not launch authentication; run the native login yourself
 with the returned environment, then inspect the connection. The setup response
 is the only routine connection view that includes this private path. Do not
-paste credentials into Relay.
+paste credentials into Relay. For Grok Build, the returned instruction runs
+`grok login` with `GROK_HOME` set to that context.
 
 Updates and removals require the revision returned by list/inspect. A stale
 revision returns `connection_conflict`; list again before retrying. Removal

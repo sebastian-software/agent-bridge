@@ -437,6 +437,23 @@ test("CLI connection operations preserve default access and require current revi
         await execFile(process.execPath, [cliPath, "connections", "list", "--json"], { env })
       ).stdout.includes(preparedResult.setup.contextPath),
     );
+    const preparedGrok = await execFile(
+      process.execPath,
+      [cliPath, "connections", "prepare", "--id", "grok-account", "--harness", "grok", "--json"],
+      { env },
+    );
+    const preparedGrokResult = JSON.parse(preparedGrok.stdout) as {
+      setup: {
+        contextPath: string;
+        login: { executable: string; args: string[]; env: Record<string, string> };
+      };
+    };
+    assert.equal(preparedGrokResult.setup.login.executable, "grok");
+    assert.deepEqual(preparedGrokResult.setup.login.args, ["login"]);
+    assert.equal(
+      preparedGrokResult.setup.login.env.GROK_HOME,
+      preparedGrokResult.setup.contextPath,
+    );
 
     const after = await execFile(
       process.execPath,
