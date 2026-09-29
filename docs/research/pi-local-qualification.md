@@ -33,21 +33,25 @@ uses no provider account. Temporary files are removed afterward.
 
 ## Observed results
 
-| Boundary                  | Observed evidence                                                                                                                                                 |
-| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Headless execution        | The SDK runs in a Node child process without presenting a TUI or requiring a Pi CLI installation.                                                                 |
-| Full coding tools         | Pi writes and edits a file, reads it successfully, and executes a shell command that copies it. File contents and tool result events are checked.                 |
-| Output streaming          | Text delta events arrive through the SDK subscription.                                                                                                            |
-| Continuation              | A second prompt in the same in-memory session includes the preceding conversation and settles separately.                                                         |
-| Steering during inference | A queued instruction is absent from the already-issued request and appears in the next model request. Accepting it is distinct from delivering it.                |
-| Steering during a tool    | A real shell command waits at a controlled barrier. Steering does not end the command; after release, it completes and the next request contains the instruction. |
-| Quota-like failure        | A scripted HTTP 429 produces one request and an assistant `error` outcome with retries disabled. The `prompt()` promise resolves despite the failure.             |
-| Cancellation              | Aborting a session during `bash` terminates the observed `sleep` descendant, produces a tool error event, and reaches `agent_settled`.                            |
-| Explicit defaults         | Every model request uses the explicitly configured model despite conflicting isolated settings; the settings file remains unchanged.                              |
+| Boundary                  | Observed evidence                                                                                                                                                                                   |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Headless execution        | The SDK runs in a Node child process without presenting a TUI or requiring a Pi CLI installation.                                                                                                   |
+| Full coding tools         | Pi writes and edits a file, reads it successfully, and executes a shell command that copies it. File contents and tool result events are checked.                                                   |
+| Output streaming          | Text delta events arrive through the SDK subscription.                                                                                                                                              |
+| Continuation              | A second prompt in the same in-memory session includes the preceding conversation and settles separately.                                                                                           |
+| Steering during inference | A queued instruction is absent from the already-issued request and appears in the next model request. Accepting it is distinct from delivering it.                                                  |
+| Steering during a tool    | A real shell command waits at a controlled barrier. Steering does not end the command; after release, it completes and the next request contains the instruction.                                   |
+| Quota-like failure        | A scripted HTTP 429 produces one request and an assistant `error` outcome with retries disabled. The `prompt()` promise resolves despite the failure.                                               |
+| Cancellation              | Aborting a session during `bash` terminates the observed `sleep` descendant, produces a tool error event, and reaches `agent_settled`.                                                              |
+| Command timeout           | The real Pi Bash tool passes its timeout to Relay's supervised runner; a scripted one-second timeout is reported as a tool failure, the run settles, and its descendant exits.                      |
+| Invocation timeout        | A broker timeout during a live Bash call records exactly one `timed_out` outcome/event with streamed partial text and verified Pi identity; the command descendant exits.                           |
+| Worker and host loss      | Killing the Pi worker during Bash fails the invocation while preserving streamed partial text and identity; killing a separate host process during Bash closes the worker and its shell descendant. |
+| Explicit defaults         | Every model request uses the explicitly configured model despite conflicting isolated settings; the settings file remains unchanged.                                                                |
 
 These observations support proceeding with the Pi adapter. They do not establish
-model competence, performance, OS sandbox enforcement, crash recovery, arbitrary
-process-tree cleanup, cross-account isolation, or support on other platforms.
+model competence, performance, OS sandbox enforcement, arbitrary process-tree
+cleanup, cross-account isolation, or support outside the POSIX macOS fixture
+environment used for the lifecycle tests.
 
 ## Private worker implementation
 
@@ -60,9 +64,15 @@ Relay replaces only Pi's BashOperations execution seam so its headless worker
 can register a process group with the host before a command executes. The
 worker-host protocol is bounded; the worker drains command output while the
 host drains protocol output, tracks each registered group, cleans it on normal
-completion, cancellation, or malformed worker output, and retains the best
-observed partial text. The runner also receives Pi's command timeout, which
-still needs a dedicated qualification case. Pi retries are disabled. A
+completion, cancellation, timeout, abrupt worker loss, or malformed worker
+output, and retains the best observed partial text. The gated runner also treats
+worker control-channel EOF as parent loss and terminates its registered process
+group. Real-SDK fixtures qualify command timeout as a failed tool event, while
+a broker-level fixture verifies one `timed_out` outcome after invocation timeout
+with partial evidence and no live command descendant. A separate host-process
+fixture verifies worker and descendant exit after abrupt host loss. These are
+bounded POSIX process fixtures, not general cross-platform process-tree or
+OS-sandbox guarantees. Pi retries are disabled. A
 fixture-backed HTTP 429 produces one model
 request and a failed outcome. Large tool output follows Pi's truncation
 behavior and preserves its tail. These tests use a scripted endpoint and do
@@ -113,8 +123,8 @@ session across worker processes.
 2. Qualify local endpoint/model configuration and expose a ready route only
    after the live Ollama and LM Studio paths pass their qualification suites.
 3. Qualify production policy enforcement, resource and credential isolation,
-   parent-loss behavior, and supported platforms; process supervision alone is
-   not an OS sandbox.
+   broader parent-loss and cleanup behavior, and supported platforms; process
+   supervision alone is not an OS sandbox.
 4. Add qualified dialogue and persistent continuation behavior. In-memory
    sessions end with the worker and cannot be resumed.
 
