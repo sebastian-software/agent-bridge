@@ -2,3 +2,6 @@
 
 # mdtheme checks the generated README byte for byte.
 /README.md
+
+# Release Please owns this manifest and rewrites it as compact JSON.
+/.release-please-manifest.json
