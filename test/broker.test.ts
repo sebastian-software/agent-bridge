@@ -348,6 +348,8 @@ class MutableContinuationAdapter implements Adapter {
   readonly id = "mutable-continuation";
   effortSupported = true;
   policySupported = true;
+  failContinuation = false;
+  pauseContinuation = false;
 
   async discover(): Promise<readonly RouteDescriptor[]> {
     return [
@@ -389,7 +391,24 @@ class MutableContinuationAdapter implements Adapter {
     };
   }
 
-  async run(): Promise<AdapterRunResult> {
+  async run(context: AdapterRunContext): Promise<AdapterRunResult> {
+    if (context.continuationHandle !== undefined && this.pauseContinuation) {
+      await new Promise<void>((_resolve, reject) => {
+        const abort = (): void => {
+          context.signal.removeEventListener("abort", abort);
+          reject(new DOMException("The continued run was interrupted.", "AbortError"));
+        };
+        context.signal.addEventListener("abort", abort, { once: true });
+        if (context.signal.aborted) abort();
+      });
+    }
+    if (context.continuationHandle !== undefined && this.failContinuation) {
+      throw new BridgeError({
+        code: "harness_failed",
+        message: "The continued native session did not settle.",
+        retryable: false,
+      });
+    }
     return {
       content: [{ type: "text", text: "complete" }],
       artifacts: [],
@@ -610,6 +629,48 @@ test("continuation creates an idempotent linked invocation with an immutable pre
       { type: "text", text: "echo this" },
       { type: "text", text: "continue the same task" },
     ]);
+    assert.deepEqual((await broker.result(original.invocationId)).outcome, predecessorOutcome);
+  } finally {
+    await broker.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("failed continuation drops the inherited handle and leaves the predecessor unchanged", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-relay-continue-failed-"));
+  const adapter = new MutableContinuationAdapter();
+  adapter.failContinuation = true;
+  const broker = new Broker(paths(root), { registry: new AdapterRegistry([adapter]) });
+  await broker.initialize();
+  try {
+    const original = await broker.start(
+      request(root, "mutable-continuation", {
+        selector: {
+          provider: "harness-relay",
+          model: "mutable-continuation",
+          via: "mutable-continuation",
+          effort: "high",
+          requiredCapabilities: ["core.input.text"],
+        },
+      }),
+    );
+    const predecessor = await waitForTerminal(broker, original.invocationId);
+    const predecessorOutcome = predecessor.outcome;
+    const continued = (await broker.execute("invocation.continue", {
+      invocationId: original.invocationId,
+      input: [{ type: "text", text: "continue the task" }],
+      idempotencyKey: "failed-continuation-1",
+    })) as { invocationId: string };
+    const failed = await waitForTerminal(broker, continued.invocationId);
+    assert.equal(stateOf(failed), "failed");
+    await assert.rejects(
+      broker.execute("invocation.continue", {
+        invocationId: continued.invocationId,
+        input: [{ type: "text", text: "continue after the failure" }],
+        idempotencyKey: "failed-continuation-2",
+      }),
+      (error: unknown) => error instanceof BridgeError && error.code === "continuation_unavailable",
+    );
     assert.deepEqual((await broker.result(original.invocationId)).outcome, predecessorOutcome);
   } finally {
     await broker.close();
@@ -1370,6 +1431,70 @@ test("restart reconciliation marks a persisted active snapshot interrupted", asy
   try {
     const inspected = await restarted.inspect(started.invocationId);
     assert.equal(stateOf(inspected), "interrupted");
+  } finally {
+    await restarted.close();
+    await rm(liveRoot, { recursive: true, force: true });
+    await rm(restartRoot, { recursive: true, force: true });
+  }
+});
+
+test("restart recovery clears an inherited child handle without changing its predecessor", async () => {
+  const liveRoot = await mkdtemp(join(tmpdir(), "harness-relay-live-child-"));
+  const restartRoot = await mkdtemp(join(tmpdir(), "harness-relay-restart-child-"));
+  const adapter = new MutableContinuationAdapter();
+  const liveBroker = new Broker(paths(liveRoot), { registry: new AdapterRegistry([adapter]) });
+  await liveBroker.initialize();
+  let originalId: string | undefined;
+  let continuedId: string | undefined;
+  let predecessorOutcome: unknown;
+  try {
+    const original = await liveBroker.start(
+      request(liveRoot, "mutable-continuation", {
+        selector: {
+          provider: "harness-relay",
+          model: "mutable-continuation",
+          via: "mutable-continuation",
+          effort: "high",
+          requiredCapabilities: ["core.input.text"],
+        },
+      }),
+    );
+    originalId = original.invocationId;
+    const predecessor = await waitForTerminal(liveBroker, originalId);
+    predecessorOutcome = predecessor.outcome;
+    adapter.pauseContinuation = true;
+    const continued = (await liveBroker.execute("invocation.continue", {
+      invocationId: originalId,
+      input: [{ type: "text", text: "resume then restart" }],
+      idempotencyKey: "restart-child-1",
+    })) as { invocationId: string };
+    continuedId = continued.invocationId;
+    await waitForState(liveBroker, continued.invocationId, "running");
+    await cp(paths(liveRoot).stateDirectory, paths(restartRoot).stateDirectory, {
+      recursive: true,
+    });
+  } finally {
+    await liveBroker.close();
+  }
+
+  assert.ok(originalId);
+  assert.ok(continuedId);
+  const restartedAdapter = new MutableContinuationAdapter();
+  const restarted = new Broker(paths(restartRoot), {
+    registry: new AdapterRegistry([restartedAdapter]),
+  });
+  await restarted.initialize();
+  try {
+    assert.equal(stateOf(await restarted.inspect(continuedId)), "interrupted");
+    await assert.rejects(
+      restarted.execute("invocation.continue", {
+        invocationId: continuedId,
+        input: [{ type: "text", text: "continue interrupted child" }],
+        idempotencyKey: "restart-child-2",
+      }),
+      (error: unknown) => error instanceof BridgeError && error.code === "continuation_unavailable",
+    );
+    assert.deepEqual((await restarted.result(originalId)).outcome, predecessorOutcome);
   } finally {
     await restarted.close();
     await rm(liveRoot, { recursive: true, force: true });

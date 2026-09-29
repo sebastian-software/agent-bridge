@@ -128,6 +128,13 @@ function eventCursor(sequence: number): string {
   return `v1:${sequence}`;
 }
 
+function withoutContinuationHandle<T extends { readonly continuationHandle?: unknown }>(
+  record: T,
+): Omit<T, "continuationHandle"> {
+  const { continuationHandle: _discardedHandle, ...remaining } = record;
+  return remaining;
+}
+
 function eventAfterCursor(
   events: readonly InvocationEvent[],
   cursor: string | undefined,
@@ -353,12 +360,18 @@ export class Broker {
             message: "The broker restarted while this invocation was active.",
           },
         });
-        this.#records.set(invocationId, {
+        const recoveredRecord: StoredInvocationRecord = {
           ...withEvent,
           state: "interrupted",
           updatedAt: completedAt,
           outcome,
-        });
+        };
+        this.#records.set(
+          invocationId,
+          current.continuedFrom === undefined
+            ? recoveredRecord
+            : withoutContinuationHandle(recoveredRecord),
+        );
       }
       return { value: undefined, changed: true };
     });
@@ -377,6 +390,7 @@ export class Broker {
     this.#adapterReady.clear();
     this.#inputDeliveryRuns.clear();
     this.#inputDeliveryControllers.clear();
+    await this.#registry.dispose();
   }
 
   async execute(operation: string, params: unknown): Promise<unknown> {
@@ -2163,15 +2177,24 @@ export class Broker {
           diagnostics: observed.diagnostics,
         },
       });
-      this.#records.set(invocationId, {
+      const completedRecord: StoredInvocationRecord = {
         ...withEvent,
         state: status,
         updatedAt: completedAt,
-        ...(result.continuationHandle === undefined
-          ? {}
-          : { continuationHandle: result.continuationHandle }),
         outcome,
-      });
+      };
+      if (result.continuationHandle !== undefined) {
+        this.#records.set(invocationId, {
+          ...completedRecord,
+          continuationHandle: result.continuationHandle,
+        });
+      } else if (withEvent.continuedFrom !== undefined) {
+        // A continued invocation needs its own settled native checkpoint. Do
+        // not let the predecessor's handle survive a failed or cancelled run.
+        this.#records.set(invocationId, withoutContinuationHandle(completedRecord));
+      } else {
+        this.#records.set(invocationId, completedRecord);
+      }
       for (const [workspace, owner] of this.#workspaceLocks) {
         if (owner === invocationId) {
           this.#workspaceLocks.delete(workspace);

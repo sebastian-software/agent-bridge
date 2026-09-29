@@ -30,6 +30,26 @@ export type PiWorkerStart = {
   };
   readonly prompt: string;
   readonly tools: readonly PiToolName[];
+  readonly session?: PiWorkerSessionRequest;
+};
+
+export type PiWorkerSessionRequest =
+  | {
+      readonly mode: "branch";
+      readonly sourceDirectory: string;
+      readonly directory: string;
+      readonly sessionFile: string;
+      readonly expectedSessionId: string;
+      readonly expectedCwd: string;
+      readonly terminalLeafId: string;
+    }
+  | { readonly mode: "create"; readonly directory: string };
+
+export type PiWorkerSessionSnapshot = {
+  readonly sessionFile: string;
+  readonly sessionId: string;
+  readonly cwd: string;
+  readonly terminalLeafId: string;
 };
 
 export type PiWorkerControl =
@@ -53,6 +73,7 @@ export type PiWorkerOutput =
     }
   | { readonly type: "event"; readonly event: AdapterEvent }
   | { readonly type: "identity"; readonly identity: ObservedIdentity }
+  | { readonly type: "session"; readonly session: PiWorkerSessionSnapshot }
   | {
       readonly type: "terminal";
       readonly settled: true;
@@ -190,6 +211,50 @@ function usage(value: unknown): value is Usage {
   );
 }
 
+function sessionRequest(value: unknown): value is PiWorkerSessionRequest {
+  const record = object(value);
+  if (
+    record === undefined ||
+    !string(record.directory) ||
+    record.directory.includes("\0") ||
+    !isAbsolute(record.directory)
+  ) {
+    return false;
+  }
+  if (record.mode === "create") {
+    return true;
+  }
+  return (
+    record.mode === "branch" &&
+    string(record.sourceDirectory) &&
+    !record.sourceDirectory.includes("\0") &&
+    isAbsolute(record.sourceDirectory) &&
+    string(record.sessionFile) &&
+    !record.sessionFile.includes("\0") &&
+    isAbsolute(record.sessionFile) &&
+    nonEmptyString(record.expectedSessionId) &&
+    string(record.expectedCwd) &&
+    !record.expectedCwd.includes("\0") &&
+    isAbsolute(record.expectedCwd) &&
+    nonEmptyString(record.terminalLeafId)
+  );
+}
+
+function sessionSnapshot(value: unknown): value is PiWorkerSessionSnapshot {
+  const record = object(value);
+  return (
+    record !== undefined &&
+    string(record.sessionFile) &&
+    !record.sessionFile.includes("\0") &&
+    isAbsolute(record.sessionFile) &&
+    nonEmptyString(record.sessionId) &&
+    string(record.cwd) &&
+    !record.cwd.includes("\0") &&
+    isAbsolute(record.cwd) &&
+    nonEmptyString(record.terminalLeafId)
+  );
+}
+
 function adapterEvent(value: unknown): value is AdapterEvent {
   const record = object(value);
   if (
@@ -252,6 +317,7 @@ export function parsePiWorkerStart(value: unknown): PiWorkerStart {
   const model = object(record?.model);
   const modelFiles = object(record?.modelFiles);
   const tools = record?.tools;
+  const session = record?.session;
   const levels: readonly string[] = PI_THINKING_LEVELS;
   if (
     record?.type !== "start" ||
@@ -275,7 +341,8 @@ export function parsePiWorkerStart(value: unknown): PiWorkerStart {
     !isAbsolute(modelFiles.modelsStorePath) ||
     !string(record.prompt) ||
     !Array.isArray(tools) ||
-    !tools.every((tool) => PI_TOOL_NAMES.includes(tool as PiToolName))
+    !tools.every((tool) => PI_TOOL_NAMES.includes(tool as PiToolName)) ||
+    (session !== undefined && !sessionRequest(session))
   ) {
     throw new Error("Pi worker received an invalid start message.");
   }
@@ -296,6 +363,7 @@ export function parsePiWorkerStart(value: unknown): PiWorkerStart {
     },
     prompt: record.prompt,
     tools: tools as PiToolName[],
+    ...(session === undefined ? {} : { session }),
   };
 }
 
@@ -318,6 +386,9 @@ export function parsePiWorkerOutput(value: unknown): PiWorkerOutput {
   }
   if (record.type === "identity" && observedIdentity(record.identity)) {
     return { type: "identity", identity: record.identity };
+  }
+  if (record.type === "session" && sessionSnapshot(record.session)) {
+    return { type: "session", session: record.session };
   }
   if (
     ["tool_process_started", "tool_process_finished", "tool_process_reaped"].includes(

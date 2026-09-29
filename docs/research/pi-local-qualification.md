@@ -93,9 +93,20 @@ CLI, and Claude/Codex discovery are smoke-tested from a packed installation
 with optional dependencies omitted. Without Pi installed, Pi execution reports
 that it is unavailable instead of preventing the rest of Relay from starting.
 
-The private worker is one-shot and uses an in-memory Pi session. It does not
-advertise steering, continuation, or questions, and it does not resume a
-session across worker processes.
+Each invocation still starts a fresh one-shot worker. The private adapter now
+persists Pi sessions and can branch a settled session into a new native session
+file; scripted SDK fixtures cover continuation and reject changed checkpoint
+identity before making another model request. This does not qualify a local
+model route, so the adapter remains absent from the default registry and does
+not advertise steering, continuation, or questions.
+
+Opaque continuation handles and their route, account, policy, working-directory,
+and model-configuration bindings live only in the broker process. Handles expire
+after 24 hours. Native session files stay under a private temporary root; store
+activity removes expired directories, and orderly adapter disposal removes the
+whole root. A handle from a previous process is unavailable and Relay rejects it
+rather than reopening the file without its original binding. An unclean process
+exit can leave temporary files for the operating system to clean up.
 
 ## Integration consequences
 
@@ -123,10 +134,12 @@ session across worker processes.
 2. Qualify local endpoint/model configuration and expose a ready route only
    after the live Ollama and LM Studio paths pass their qualification suites.
 3. Qualify production policy enforcement, resource and credential isolation,
-   broader parent-loss and cleanup behavior, and supported platforms; process
-   supervision alone is not an OS sandbox.
-4. Add qualified dialogue and persistent continuation behavior. In-memory
-   sessions end with the worker and cannot be resumed.
+   parent-loss behavior, and supported platforms; process supervision alone is
+   not an OS sandbox.
+4. Qualify persistent continuation against actual local inference and verify
+   orderly cleanup and crash behavior for private native session files. The
+   scripted SDK fixture does not establish local-model compatibility or crash
+   recovery.
 
 On the observed machine, Ollama responds at `127.0.0.1:11434`, but `/api/tags`
 contains no models. Nothing listens at the conventional LM Studio port
