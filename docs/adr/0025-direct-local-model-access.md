@@ -39,9 +39,10 @@ caller-owned recovery contract. Model/provider errors must be mapped from the
 observed outcome, not from whether `prompt()` resolves.
 
 The initial [qualification](../research/pi-local-qualification.md) uses
-`@earendil-works/pi-coding-agent` 0.87.1 in an isolated development package.
-It is not yet a production dependency or a registered Relay route. Actual
-Ollama and LM Studio execution, policy enforcement, worker lifecycle, and
-normalized communication/outcome mapping remain release gates. Node >=22.19.0
-is required by this Pi version, stricter than Relay's current >=22 declaration;
-production packaging must account for that before exposing the route.
+`@earendil-works/pi-coding-agent` 0.87.1, now pinned as an optional worker
+dependency. Pi is still absent from the default route registry, and no local
+route has been live-qualified. Actual Ollama and LM Studio execution, production
+policy enforcement, resource and credential isolation, broader worker lifecycle
+qualification, and normalized communication/outcome mapping remain release
+gates. Node >=22.19.0 is required by this Pi version, stricter than Relay's
+current >=22 declaration; the private worker checks this before execution.

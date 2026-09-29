@@ -8,8 +8,14 @@ import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import type { AdapterEvent, AdapterRunContext, AdapterRunResult } from "../src/adapters/types.js";
+import type {
+  Adapter,
+  AdapterEvent,
+  AdapterRunContext,
+  AdapterRunResult,
+} from "../src/adapters/types.js";
 import type { ResolvedRoute, StartInvocationRequest } from "../src/contract.js";
+import type { BrokerPaths } from "../src/paths.js";
 
 import {
   MAX_PI_WORKER_EVENT_BYTES,
@@ -20,6 +26,8 @@ import {
 import { supervisePiWorker } from "../src/adapters/pi-supervisor.js";
 import { supportsPiNodeVersion, WorkerOutput } from "../src/adapters/pi-worker.js";
 import { PiAdapter } from "../src/adapters/pi.js";
+import { AdapterRegistry } from "../src/adapters/registry.js";
+import { Broker } from "../src/broker.js";
 import { BridgeError } from "../src/errors.js";
 
 type FixtureRequest = {
@@ -144,17 +152,29 @@ function textReply(text: string): FixtureReply {
   };
 }
 
-function bashReply(command: string): FixtureReply {
+function bashReply(
+  command: string,
+  options: { readonly content?: string; readonly timeoutSeconds?: number } = {},
+): FixtureReply {
   return (response) => {
     stream(
       response,
       {
+        ...(options.content === undefined ? {} : { content: options.content }),
         tool_calls: [
           {
             index: 0,
             id: "call-supervised-bash",
             type: "function",
-            function: { name: "bash", arguments: JSON.stringify({ command }) },
+            function: {
+              name: "bash",
+              arguments: JSON.stringify({
+                command,
+                ...(options.timeoutSeconds === undefined
+                  ? {}
+                  : { timeout: options.timeoutSeconds }),
+              }),
+            },
           },
         ],
       },
@@ -253,6 +273,18 @@ async function waitForFile(path: string, description: string): Promise<void> {
     await delay(20);
   }
   assert.fail(`Timed out waiting for ${description}.`);
+}
+
+async function readPidFile(path: string): Promise<number | undefined> {
+  try {
+    const value = Number(await readFile(path, "utf8"));
+    return Number.isSafeInteger(value) && value > 0 ? value : undefined;
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  }
 }
 
 test("Pi worker protocol rejects process group IDs that could signal unrelated processes", () => {
@@ -710,6 +742,474 @@ test("cancelling a live Pi Bash call rejects with identity partials and kills de
       } catch {
         // The supervisor normally kills this child before the run settles.
       }
+    }
+    await fixture.close();
+  }
+});
+
+test("broker invocation timeout records one timed_out outcome with Pi partial evidence and no descendants", async () => {
+  const fixture = await startFixture();
+  const workingDirectory = join(fixture.root, "work");
+  const pidFile = join(workingDirectory, "invocation-timeout-child.pid");
+  const runnerPidFile = join(workingDirectory, "invocation-timeout-runner.pid");
+  const partialText = "partial-before-invocation-timeout";
+  fixture.setReplies([
+    bashReply(
+      `(sleep 60) &\nprintf '%s\\n' "$!" > invocation-timeout-child.pid\nprintf '%s\\n' "$PPID" > invocation-timeout-runner.pid\nprintf before-invocation-timeout\nsleep 60`,
+      { content: partialText },
+    ),
+  ]);
+
+  const piAdapter = new PiAdapter({
+    model: { provider: "fixture", id: "fixture-model", thinkingLevel: "off" },
+    modelFiles: fixture.modelFiles,
+    tools: ["read", "write", "edit", "bash"],
+  });
+  const descriptor = {
+    routeId: "fixture:fixture-model",
+    provider: "fixture",
+    model: "fixture-model",
+    efforts: ["low", "medium", "high"],
+    via: "pi",
+    adapter: "pi",
+    harnessVersion: "0.87.1",
+    authenticationMode: "none",
+    capabilities: ["core.input.text", "core.output.text"],
+    interactionStrategies: ["unattended"],
+    assurance: "none",
+    runtimeIdentityEvidence: "verified",
+    readiness: "ready",
+    qualification: [
+      {
+        qualificationId: "pi-worker-lifecycle-fixture",
+        testedAt: "2026-09-29T00:00:00.000Z",
+        claim: "Scripted Pi worker lifecycle fixture.",
+      },
+    ],
+    diagnostics: [],
+  } as const;
+  const adapter: Adapter = {
+    id: "pi",
+    async discover() {
+      return [descriptor];
+    },
+    resolvePolicy(request, route) {
+      return piAdapter.resolvePolicy(request, route);
+    },
+    async run(context) {
+      return piAdapter.run(context);
+    },
+  };
+  const brokerRoot = join(fixture.root, "broker");
+  const brokerPaths: BrokerPaths = {
+    runtimeDirectory: join(brokerRoot, "run"),
+    stateDirectory: join(brokerRoot, "state"),
+    socketPath: join(brokerRoot, "run", "broker.sock"),
+    stateFile: join(brokerRoot, "state", "state.json"),
+  };
+  const broker = new Broker(brokerPaths, {
+    registry: new AdapterRegistry([adapter], {
+      catalogPath: join(fixture.root, "catalog.json"),
+      connectionsPath: join(fixture.root, "connections.json"),
+    }),
+  });
+  let descendantPid: number | undefined;
+  let runnerGroupId: number | undefined;
+  try {
+    await broker.initialize();
+    const started = await broker.start({
+      selector: {
+        provider: "fixture",
+        model: "fixture-model",
+        via: "pi",
+        requiredCapabilities: ["core.input.text", "core.output.text"],
+      },
+      input: [{ type: "text", text: "Start a long command and report its output." }],
+      workingDirectory,
+      interactionStrategy: "unattended",
+      requestedPolicy: {
+        minimumAssurance: "none",
+        filesystem: "inherit",
+        commands: "allow",
+        network: "allow",
+      },
+      timeoutMs: 8000,
+    });
+    await waitForFile(pidFile, "a descendant of the invocation-timed-out Bash command");
+    descendantPid = Number(await readFile(pidFile, "utf8"));
+    runnerGroupId = await readPidFile(runnerPidFile);
+    assert.ok(Number.isSafeInteger(descendantPid) && descendantPid > 0);
+    assert.ok(runnerGroupId !== undefined && runnerGroupId > 1);
+
+    const terminal = await broker.wait(started.invocationId, 15_000);
+    assert.equal(terminal.waited, true);
+    assert.equal(terminal.state, "timed_out");
+    const outcome = terminal.outcome as {
+      readonly status?: string;
+      readonly content?: unknown;
+      readonly error?: { readonly code?: string };
+      readonly observedIdentity?: {
+        readonly harnessVersion?: { readonly evidence?: string };
+        readonly nativeSessionId?: { readonly evidence?: string };
+      };
+    };
+    assert.equal(outcome.status, "timed_out");
+    assert.equal(outcome.error?.code, "timed_out");
+    assert.ok(JSON.stringify(outcome.content).includes(partialText));
+    assert.equal(outcome.observedIdentity?.harnessVersion?.evidence, "verified");
+    assert.equal(outcome.observedIdentity?.nativeSessionId?.evidence, "reported");
+
+    const events = (await broker.events({ invocationId: started.invocationId })).events;
+    const terminalEvents = events.filter(
+      (event) =>
+        event.category === "lifecycle" &&
+        ["cancelled", "failed", "interrupted", "succeeded", "timed_out"].includes(
+          String(event.data?.state),
+        ),
+    );
+    assert.equal(terminalEvents.length, 1, "the broker must persist exactly one terminal event");
+    assert.equal(terminalEvents[0]?.data?.state, "timed_out");
+    assert.ok(
+      events.some(
+        (event) =>
+          event.category === "output" &&
+          event.content?.some((part) => part.type === "text" && part.text.includes(partialText)),
+      ),
+      "the streamed partial text should remain visible in invocation events",
+    );
+    await waitForProcessExit(descendantPid);
+    assert.equal(fixture.requests.length, 1, "an invocation timeout must not retry the provider");
+    assert.deepEqual(fixture.errors, []);
+  } finally {
+    await broker.close();
+    descendantPid ??= await readPidFile(pidFile);
+    runnerGroupId ??= await readPidFile(runnerPidFile);
+    if (runnerGroupId !== undefined && runnerGroupId > 1) {
+      try {
+        process.kill(-runnerGroupId, "SIGKILL");
+      } catch {
+        // Pi's lifecycle supervision should already have killed the helper group.
+      }
+    }
+    if (descendantPid !== undefined) {
+      try {
+        process.kill(descendantPid, "SIGKILL");
+      } catch {
+        // Pi's lifecycle supervision should already have killed the descendant.
+      }
+    }
+    await fixture.close();
+  }
+});
+
+test("Pi command timeout becomes a tool failure, settles the invocation, and kills descendants", async () => {
+  const fixture = await startFixture();
+  const workingDirectory = join(fixture.root, "work");
+  const pidFile = join(workingDirectory, "timeout-child.pid");
+  const runnerPidFile = join(workingDirectory, "timeout-runner.pid");
+  fixture.setReplies([
+    bashReply(
+      `(sleep 60) &\nprintf '%s\\n' "$!" > timeout-child.pid\nprintf '%s\\n' "$PPID" > timeout-runner.pid\nprintf before-timeout\nsleep 60`,
+      { timeoutSeconds: 1 },
+    ),
+    (response, request) => {
+      const toolMessages = (request.messages ?? []).filter((message) => message.role === "tool");
+      assert.ok(
+        toolMessages.some((message) =>
+          String(message.content).includes("Command timed out after 1 seconds"),
+        ),
+        "Pi's native Bash tool should report the configured timeout as a tool failure",
+      );
+      textReply("The timed-out command was cleaned up.")(response, request);
+    },
+  ]);
+  const { context, events, partials } = runContext(workingDirectory);
+  const adapter = new PiAdapter({
+    model: { provider: "fixture", id: "fixture-model", thinkingLevel: "off" },
+    modelFiles: fixture.modelFiles,
+    tools: ["read", "write", "edit", "bash"],
+  });
+  let descendantPid: number | undefined;
+  let runnerGroupId: number | undefined;
+  try {
+    const result = await adapter.run(context);
+    descendantPid = Number(await readFile(pidFile, "utf8"));
+    runnerGroupId = await readPidFile(runnerPidFile);
+    assert.ok(Number.isSafeInteger(descendantPid) && descendantPid > 0);
+    assert.ok(runnerGroupId !== undefined && runnerGroupId > 1);
+    await waitForProcessExit(descendantPid);
+    assert.equal(fixture.requests.length, 2, "the worker must not retry the model request");
+    assert.deepEqual(fixture.errors, []);
+    assert.deepEqual(result.content, [
+      { type: "text", text: "The timed-out command was cleaned up." },
+    ]);
+    assert.ok(
+      events.some(
+        (event) => event.category === "diagnostic" && event.data?.phase === "tool_failed",
+      ),
+      "the timeout should be normalized as a failed tool event, not a successful command",
+    );
+    assert.ok(
+      partials.some((partial) =>
+        partial.content?.some(
+          (part) =>
+            part.type === "text" && part.text.includes("The timed-out command was cleaned up."),
+        ),
+      ),
+      "the settled assistant result should be reported as partial evidence",
+    );
+  } finally {
+    descendantPid ??= await readPidFile(pidFile);
+    runnerGroupId ??= await readPidFile(runnerPidFile);
+    if (runnerGroupId !== undefined && runnerGroupId > 1) {
+      try {
+        process.kill(-runnerGroupId, "SIGKILL");
+      } catch {
+        // The supervisor normally reaps the helper group before returning.
+      }
+    }
+    if (descendantPid !== undefined) {
+      try {
+        process.kill(descendantPid, "SIGKILL");
+      } catch {
+        // The supervisor should already have killed this descendant.
+      }
+    }
+    await fixture.close();
+  }
+});
+
+test("an abrupt Pi worker crash fails once, preserves streamed partial text, and kills tool descendants", async () => {
+  const fixture = await startFixture();
+  const workingDirectory = join(fixture.root, "work");
+  const pidFile = join(workingDirectory, "crash-child.pid");
+  const workerPidFile = join(workingDirectory, "crash-worker.pid");
+  const runnerPidFile = join(workingDirectory, "crash-runner.pid");
+  const expectedHostPidFile = join(workingDirectory, "expected-host.pid");
+  await writeFile(expectedHostPidFile, String(process.pid));
+  fixture.setReplies([
+    bashReply(
+      [
+        "(sleep 60) &",
+        "printf '%s\\n' \"$!\" > crash-child.pid",
+        "printf '%s\\n' \"$PPID\" > crash-runner.pid",
+        "worker_pid=$(ps -o ppid= -p \"$PPID\" | tr -d ' ')",
+        "case \"$worker_pid\" in ''|*[!0-9]*) exit 92 ;; esac",
+        '[ "$worker_pid" -gt 1 ] || exit 92',
+        "host_pid=$(ps -o ppid= -p \"$worker_pid\" | tr -d ' ')",
+        `expected_host_pid=$(cat '${expectedHostPidFile}')`,
+        '[ "$host_pid" = "$expected_host_pid" ] || exit 93',
+        "printf '%s\\n' \"$worker_pid\" > crash-worker.pid",
+        "printf before-worker-crash",
+        'kill -KILL "$worker_pid"',
+        "sleep 60",
+      ].join("\n"),
+      { content: "partial-before-worker-crash" },
+    ),
+  ]);
+  const { context, events, partials } = runContext(workingDirectory);
+  const adapter = new PiAdapter({
+    model: { provider: "fixture", id: "fixture-model", thinkingLevel: "off" },
+    modelFiles: fixture.modelFiles,
+    tools: ["read", "write", "edit", "bash"],
+  });
+  let descendantPid: number | undefined;
+  let workerPid: number | undefined;
+  let runnerGroupId: number | undefined;
+  try {
+    await assert.rejects(
+      adapter.run(context),
+      (error: unknown) => error instanceof BridgeError && error.code === "harness_failed",
+    );
+    descendantPid = Number(await readFile(pidFile, "utf8"));
+    workerPid = Number(await readFile(workerPidFile, "utf8"));
+    runnerGroupId = await readPidFile(runnerPidFile);
+    assert.ok(Number.isSafeInteger(descendantPid) && descendantPid > 0);
+    assert.ok(Number.isSafeInteger(workerPid) && workerPid > 1);
+    assert.ok(runnerGroupId !== undefined && runnerGroupId > 1);
+    await Promise.all([waitForProcessExit(descendantPid), waitForProcessExit(workerPid)]);
+    assert.equal(fixture.requests.length, 1, "the crashed worker must not retry the model request");
+    assert.deepEqual(fixture.errors, []);
+    assert.ok(
+      events.some((event) =>
+        event.content?.some(
+          (part) => part.type === "text" && part.text.includes("partial-before-worker-crash"),
+        ),
+      ),
+      "text observed before the worker crash should remain streamed",
+    );
+    assert.ok(
+      partials.some(
+        (partial) =>
+          partial.observedIdentity?.harnessVersion.evidence === "verified" &&
+          partial.content?.some(
+            (part) => part.type === "text" && part.text.includes("partial-before-worker-crash"),
+          ),
+      ),
+      "the failed terminal path should retain both observed identity and partial text",
+    );
+  } finally {
+    descendantPid ??= await readPidFile(pidFile);
+    workerPid ??= await readPidFile(workerPidFile);
+    runnerGroupId ??= await readPidFile(runnerPidFile);
+    if (runnerGroupId !== undefined && runnerGroupId > 1) {
+      try {
+        process.kill(-runnerGroupId, "SIGKILL");
+      } catch {
+        // The supervisor normally reaps the helper group before rejecting.
+      }
+    }
+    for (const pid of [descendantPid, workerPid]) {
+      if (pid !== undefined && pid > 1) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          // The worker supervisor should already have reaped both processes.
+        }
+      }
+    }
+    await fixture.close();
+  }
+});
+
+test("host-parent loss closes Pi worker and its tool descendants", async () => {
+  const fixture = await startFixture();
+  const workingDirectory = join(fixture.root, "work");
+  const hostPidFile = join(fixture.root, "host.pid");
+  const workerPidFile = join(workingDirectory, "parent-loss-worker.pid");
+  const childPidFile = join(workingDirectory, "parent-loss-child.pid");
+  const runnerPidFile = join(workingDirectory, "parent-loss-runner.pid");
+  const hostScript = join(fixture.root, "parent-loss-host.mjs");
+  const adapterPath = pathToFileURL(
+    fileURLToPath(new URL("../src/adapters/pi.js", import.meta.url)),
+  ).href;
+  const configuration = {
+    model: { provider: "fixture", id: "fixture-model", thinkingLevel: "off" },
+    modelFiles: fixture.modelFiles,
+    tools: ["read", "write", "edit", "bash"],
+  };
+  const request = {
+    selector: {
+      provider: "fixture",
+      model: "fixture-model",
+      via: "pi",
+      requiredCapabilities: ["core.input.text", "core.output.text"],
+    },
+    input: [{ type: "text", text: "Start the long command." }],
+    workingDirectory,
+    interactionStrategy: "unattended",
+    requestedPolicy: {
+      minimumAssurance: "none",
+      filesystem: "inherit",
+      commands: "allow",
+      network: "allow",
+    },
+  };
+  const route = {
+    routeId: "fixture:fixture-model",
+    adapter: "pi",
+    harnessVersion: "0.87.1",
+    authenticationMode: "none",
+    provider: "fixture",
+    model: "fixture-model",
+    via: "pi",
+    capabilities: [],
+    qualification: [],
+  };
+  await writeFile(
+    hostScript,
+    [
+      'import { writeFile } from "node:fs/promises";',
+      `import { PiAdapter } from ${JSON.stringify(adapterPath)};`,
+      `await writeFile(${JSON.stringify(hostPidFile)}, String(process.pid));`,
+      `const adapter = new PiAdapter(${JSON.stringify(configuration)});`,
+      `const context = { invocationId: "parent-loss-test", request: ${JSON.stringify(request)}, route: ${JSON.stringify(route)}, signal: new AbortController().signal, emit: async () => {}, reportPartial: () => {}, terminationGraceMs: 1000 };`,
+      "await adapter.run(context);",
+    ].join("\n"),
+  );
+  fixture.setReplies([
+    bashReply(
+      [
+        "(sleep 60) &",
+        "printf '%s\\n' \"$!\" > parent-loss-child.pid",
+        "printf '%s\\n' \"$PPID\" > parent-loss-runner.pid",
+        "worker_pid=$(ps -o ppid= -p \"$PPID\" | tr -d ' ')",
+        "case \"$worker_pid\" in ''|*[!0-9]*) exit 92 ;; esac",
+        '[ "$worker_pid" -gt 1 ] || exit 92',
+        "host_pid=$(ps -o ppid= -p \"$worker_pid\" | tr -d ' ')",
+        `expected_host_pid=$(cat '${hostPidFile}')`,
+        '[ "$host_pid" = "$expected_host_pid" ] || exit 93',
+        "printf '%s\\n' \"$worker_pid\" > parent-loss-worker.pid",
+        "sleep 60",
+      ].join("\n"),
+    ),
+  ]);
+  let host: ChildProcess | undefined;
+  let hostClosed: ReturnType<typeof childClosed> | undefined;
+  let workerPid: number | undefined;
+  let descendantPid: number | undefined;
+  let runnerGroupId: number | undefined;
+  try {
+    host = spawn(process.execPath, [hostScript], {
+      cwd: fixture.root,
+      env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: fixture.root, TMPDIR: fixture.root },
+      stdio: "ignore",
+    });
+    hostClosed = childClosed(host);
+    assert.ok(host.pid && host.pid > 1);
+    await Promise.all([
+      waitForFile(hostPidFile, "the isolated host process identity"),
+      waitForFile(childPidFile, "the long-running command descendant"),
+      waitForFile(workerPidFile, "the supervised Pi worker identity"),
+    ]);
+    descendantPid = Number(await readFile(childPidFile, "utf8"));
+    workerPid = Number(await readFile(workerPidFile, "utf8"));
+    runnerGroupId = await readPidFile(runnerPidFile);
+    assert.equal(Number(await readFile(hostPidFile, "utf8")), host.pid);
+    assert.ok(Number.isSafeInteger(descendantPid) && descendantPid > 0);
+    assert.ok(Number.isSafeInteger(workerPid) && workerPid > 1 && workerPid !== host.pid);
+    assert.ok(runnerGroupId !== undefined && runnerGroupId > 1);
+
+    host.kill("SIGKILL");
+    const hostExit = await Promise.race([
+      hostClosed,
+      delay(5000).then(() => {
+        throw new Error("The isolated host did not close after being killed.");
+      }),
+    ]);
+    assert.equal(hostExit.signal, "SIGKILL");
+    await Promise.all([waitForProcessExit(workerPid), waitForProcessExit(descendantPid)]);
+    assert.equal(fixture.requests.length, 1);
+    assert.deepEqual(fixture.errors, []);
+  } finally {
+    descendantPid ??= await readPidFile(childPidFile);
+    workerPid ??= await readPidFile(workerPidFile);
+    runnerGroupId ??= await readPidFile(runnerPidFile);
+    if (host?.pid !== undefined) {
+      try {
+        host.kill("SIGKILL");
+      } catch {
+        // The isolated host may already have exited.
+      }
+    }
+    if (runnerGroupId !== undefined && runnerGroupId > 1) {
+      try {
+        process.kill(-runnerGroupId, "SIGKILL");
+      } catch {
+        // The helper group may already have exited after receiving control EOF.
+      }
+    }
+    for (const pid of [workerPid, descendantPid]) {
+      if (pid !== undefined && pid > 1) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          // The EOF handlers should already have cleaned these processes.
+        }
+      }
+    }
+    if (hostClosed !== undefined) {
+      await Promise.race([hostClosed, delay(2000)]);
     }
     await fixture.close();
   }
