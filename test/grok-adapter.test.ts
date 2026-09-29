@@ -52,6 +52,12 @@ for await (const line of input) {
       }
     }
   } else if (message.method === "session/prompt") {
+    if (scenario === "half-close-after-prompt") {
+      writeFileSync(join(cwd, "input-state"), String(process.pid));
+      process.stdin.destroy();
+      setInterval(() => {}, 1000);
+      continue;
+    }
     if (scenario === "hang-with-child") {
       const child = spawn(process.execPath, ["-e", "process.on('SIGINT', () => {}); setInterval(() => {}, 1000)"], { stdio: "ignore" });
       writeFileSync(join(cwd, "descendant.pid"), String(child.pid));
@@ -489,5 +495,47 @@ test("Grok settles a backpressured prompt when stdin is cancelled or closed", as
         await removeFixture(fixture.root);
       }
     });
+  }
+});
+
+test("Grok does not infer completion from a peer stdin half-close after an accepted write", async () => {
+  const fixture = await createFixture("half-close-after-prompt");
+  const controller = new AbortController();
+  try {
+    const adapter = adapterFor(fixture);
+    const { context } = createContext(fixture.root, fixture.executable, {
+      signal: controller.signal,
+      terminationGraceMs: 100,
+      promptText: "small prompt",
+    });
+    const startedAt = Date.now();
+    const invocation = adapter.run(context);
+    await waitForFile(join(fixture.root, "input-state"));
+    const fixturePid = Number(await readFile(join(fixture.root, "input-state"), "utf8"));
+    const outcome = await Promise.race([
+      invocation.then(
+        () => ({ state: "resolved" as const }),
+        (error: unknown) => ({ state: "rejected" as const, error }),
+      ),
+      delay(250).then(() => ({ state: "pending" as const })),
+    ]);
+    assert.equal(
+      outcome.state,
+      "pending",
+      "the parent Writable does not expose a remote read-end close after an accepted write",
+    );
+    controller.abort();
+    await assert.rejects(
+      invocation,
+      (error: unknown) => error instanceof Error && error.name === "AbortError",
+    );
+    assert.ok(
+      Date.now() - startedAt < 2500,
+      "caller cancellation should settle and clean up promptly",
+    );
+    await assertPidExited(fixturePid);
+  } finally {
+    controller.abort();
+    await removeFixture(fixture.root);
   }
 });

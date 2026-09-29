@@ -635,6 +635,7 @@ export class GrokAdapter implements Adapter {
     let writeChain: Promise<void> = Promise.resolve();
     let processClosed = false;
     let stdoutEnded = false;
+    let relayClosingStdin = false;
 
     const rejectPending = (error: Error): void => {
       for (const request of pending.values()) {
@@ -998,6 +999,11 @@ export class GrokAdapter implements Adapter {
     child.stdin?.on("error", (error) => {
       failTransport(error);
     });
+    child.stdin?.on("close", () => {
+      if (!relayClosingStdin && !processClosed && pending.size > 0) {
+        failTransport(nativeFailure("Grok ACP closed stdin before replying to a request."));
+      }
+    });
     child.once("error", (error) => {
       childError = error;
       failTransport(nativeFailure("The Grok ACP process could not be started."));
@@ -1151,6 +1157,7 @@ export class GrokAdapter implements Adapter {
       await request("session/close", { sessionId: state.sessionId }, 1500).catch(() => {});
     }
     if (child.stdin !== null && !child.stdin.writableEnded) {
+      relayClosingStdin = true;
       child.stdin.end();
     }
     context.signal.removeEventListener("abort", onAbort);

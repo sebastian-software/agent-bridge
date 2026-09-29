@@ -147,7 +147,11 @@ the invocation. Native tool execution, effects, permission prompts, sandbox
 enforcement, and continuation are not qualified. The descriptor therefore
 claims no assurance or filesystem/command/network policy support. Cancellation
 fixtures exercise process-group teardown, but a live Grok descendant lifecycle
-has not been qualified.
+has not been qualified. A fixture also confirms that after an accepted prompt
+write, a native process can close its stdin read end without the parent
+Writable emitting `close` or `error` while the process stays alive. Such runs
+settle through the caller's timeout or cancellation signal; the adapter does
+not impose a default prompt deadline.
 
 Named Grok contexts use `GROK_HOME` for version probing and invocation, and the
 adapter removes inherited Grok and xAI authentication/model override variables
