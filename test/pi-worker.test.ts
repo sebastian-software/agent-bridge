@@ -17,6 +17,7 @@ import type {
 import type { ResolvedRoute, StartInvocationRequest } from "../src/contract.js";
 import type { BrokerPaths } from "../src/paths.js";
 
+import { PiContinuationStore } from "../src/adapters/pi-continuation.js";
 import {
   MAX_PI_WORKER_EVENT_BYTES,
   parsePiWorkerControl,
@@ -397,11 +398,14 @@ test("Pi worker drains fast shell output, cleans inherited-pipe descendants, and
     },
   ]);
   const { context, events } = runContext(join(fixture.root, "work"));
-  const adapter = new PiAdapter({
-    model: { provider: "fixture", id: "fixture-model", thinkingLevel: "off" },
-    modelFiles: fixture.modelFiles,
-    tools: ["read", "write", "edit", "bash", "grep", "find", "ls"],
-  });
+  const adapter = new PiAdapter(
+    {
+      model: { provider: "fixture", id: "fixture-model", thinkingLevel: "off" },
+      modelFiles: fixture.modelFiles,
+      tools: ["read", "write", "edit", "bash", "grep", "find", "ls"],
+    },
+    { continuationStore: new PiContinuationStore({ baseDirectory: fixture.root }) },
+  );
   let descendantPid: number | undefined;
   try {
     const result = await adapter.run(context);
@@ -445,6 +449,7 @@ test("Pi worker drains fast shell output, cleans inherited-pipe descendants, and
         // The supervisor normally reaps this before returning.
       }
     }
+    await adapter.dispose();
     await fixture.close();
   }
 });
@@ -468,11 +473,14 @@ test("Pi's Bash output truncation is bounded and keeps the complete stream tail"
     },
   ]);
   const { context } = runContext(join(fixture.root, "work"));
-  const adapter = new PiAdapter({
-    model: { provider: "fixture", id: "fixture-model", thinkingLevel: "off" },
-    modelFiles: fixture.modelFiles,
-    tools: ["read", "write", "edit", "bash", "grep", "find", "ls"],
-  });
+  const adapter = new PiAdapter(
+    {
+      model: { provider: "fixture", id: "fixture-model", thinkingLevel: "off" },
+      modelFiles: fixture.modelFiles,
+      tools: ["read", "write", "edit", "bash", "grep", "find", "ls"],
+    },
+    { continuationStore: new PiContinuationStore({ baseDirectory: fixture.root }) },
+  );
   try {
     const result = await adapter.run(context);
     assert.deepEqual(fixture.errors, []);
@@ -489,6 +497,7 @@ test("Pi's Bash output truncation is bounded and keeps the complete stream tail"
     );
     assert.deepEqual(result.content, [{ type: "text", text: "Large output drained." }]);
   } finally {
+    await adapter.dispose();
     await fixture.close();
   }
 });
@@ -698,11 +707,14 @@ test("cancelling a live Pi Bash call rejects with identity partials and kills de
     ),
   ]);
   const { context, events, partials, controller } = runContext(workingDirectory);
-  const adapter = new PiAdapter({
-    model: { provider: "fixture", id: "fixture-model", thinkingLevel: "off" },
-    modelFiles: fixture.modelFiles,
-    tools: ["read", "write", "edit", "bash"],
-  });
+  const adapter = new PiAdapter(
+    {
+      model: { provider: "fixture", id: "fixture-model", thinkingLevel: "off" },
+      modelFiles: fixture.modelFiles,
+      tools: ["read", "write", "edit", "bash"],
+    },
+    { continuationStore: new PiContinuationStore({ baseDirectory: fixture.root }) },
+  );
   let descendantPid: number | undefined;
   const completion = adapter.run(context).then(
     (value) => ({ ok: true as const, value }),
@@ -743,6 +755,8 @@ test("cancelling a live Pi Bash call rejects with identity partials and kills de
         // The supervisor normally kills this child before the run settles.
       }
     }
+    await completion;
+    await adapter.dispose();
     await fixture.close();
   }
 });
@@ -1224,11 +1238,14 @@ test("a provider HTTP 429 fails once without retry and retains observed identity
         .end(JSON.stringify({ error: { message: "fixture rate limit" } })),
   ]);
   const { context, partials } = runContext(join(fixture.root, "work"));
-  const adapter = new PiAdapter({
-    model: { provider: "fixture", id: "fixture-model", thinkingLevel: "off" },
-    modelFiles: fixture.modelFiles,
-    tools: ["read"],
-  });
+  const adapter = new PiAdapter(
+    {
+      model: { provider: "fixture", id: "fixture-model", thinkingLevel: "off" },
+      modelFiles: fixture.modelFiles,
+      tools: ["read"],
+    },
+    { continuationStore: new PiContinuationStore({ baseDirectory: fixture.root }) },
+  );
   try {
     await assert.rejects(
       adapter.run(context),
@@ -1240,6 +1257,7 @@ test("a provider HTTP 429 fails once without retry and retains observed identity
       partials.some((partial) => partial.observedIdentity?.harnessVersion.evidence === "verified"),
     );
   } finally {
+    await adapter.dispose();
     await fixture.close();
   }
 });
@@ -1384,36 +1402,47 @@ test("Pi SDK stays optional, version checks are explicit, and failed worker spaw
 
   const missingDirectory = join(root, "does-not-exist");
   const { context } = runContext(missingDirectory);
-  const adapter = new PiAdapter({
-    model: { provider: "fixture", id: "fixture-model", thinkingLevel: "off" },
-    modelFiles: start.modelFiles,
-    tools: ["read"],
-  });
-  await assert.rejects(
-    adapter.run(context),
-    (error: unknown) => error instanceof BridgeError && error.code === "harness_failed",
+  const adapter = new PiAdapter(
+    {
+      model: { provider: "fixture", id: "fixture-model", thinkingLevel: "off" },
+      modelFiles: start.modelFiles,
+      tools: ["read"],
+    },
+    { continuationStore: new PiContinuationStore({ baseDirectory: root }) },
   );
+  const readOnlyAdapter = new PiAdapter(
+    {
+      model: { provider: "fixture", id: "fixture-model", thinkingLevel: "off" },
+      modelFiles: start.modelFiles,
+      tools: ["read", "write", "bash"],
+    },
+    { continuationStore: new PiContinuationStore({ baseDirectory: root }) },
+  );
+  try {
+    await assert.rejects(
+      adapter.run(context),
+      (error: unknown) => error instanceof BridgeError && error.code === "harness_failed",
+    );
 
-  const policyContext = runContext(root).context;
-  const readOnlyAdapter = new PiAdapter({
-    model: { provider: "fixture", id: "fixture-model", thinkingLevel: "off" },
-    modelFiles: start.modelFiles,
-    tools: ["read", "write", "bash"],
-  });
-  await assert.rejects(
-    readOnlyAdapter.run({
-      ...policyContext,
-      request: {
-        ...policyContext.request,
-        requestedPolicy: { ...policyContext.request.requestedPolicy, filesystem: "read-only" },
-      },
-    }),
-    (error: unknown) => error instanceof BridgeError && error.code === "unsupported_capability",
-  );
-  assert.deepEqual(
-    await adapter.discover(),
-    [],
-    "the unqualified internal runtime stays undiscovered",
-  );
-  await rm(root, { recursive: true, force: true });
+    const policyContext = runContext(root).context;
+    await assert.rejects(
+      readOnlyAdapter.run({
+        ...policyContext,
+        request: {
+          ...policyContext.request,
+          requestedPolicy: { ...policyContext.request.requestedPolicy, filesystem: "read-only" },
+        },
+      }),
+      (error: unknown) => error instanceof BridgeError && error.code === "unsupported_capability",
+    );
+    assert.deepEqual(
+      await adapter.discover(),
+      [],
+      "the unqualified internal runtime stays undiscovered",
+    );
+  } finally {
+    await adapter.dispose();
+    await readOnlyAdapter.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
 });

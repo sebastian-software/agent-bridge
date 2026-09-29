@@ -17,6 +17,8 @@ import {
   type PiToolName,
   type PiWorkerControl,
   type PiWorkerOutput,
+  type PiWorkerSessionRequest,
+  type PiWorkerSessionSnapshot,
   type PiWorkerStart,
   readBoundedLines,
 } from "./pi-protocol.js";
@@ -29,6 +31,16 @@ export type PiRuntimeConfiguration = {
   readonly model: PiWorkerStart["model"];
   readonly modelFiles: PiWorkerStart["modelFiles"];
   readonly tools: readonly PiToolName[];
+};
+
+export type PiWorkerSessionRun = {
+  readonly result: AdapterRunResult;
+  readonly session: PiWorkerSessionSnapshot;
+};
+
+type PiWorkerInternalRun = {
+  readonly result: AdapterRunResult;
+  readonly session?: PiWorkerSessionSnapshot;
 };
 
 type RegisteredGroup = {
@@ -190,12 +202,43 @@ export async function runPiWorker(
   );
 }
 
+export async function runPiWorkerSession(
+  context: AdapterRunContext,
+  configuration: PiRuntimeConfiguration,
+  session: PiWorkerSessionRequest,
+): Promise<PiWorkerSessionRun> {
+  const run = await supervisePiWorkerInternal(
+    context,
+    configuration,
+    fileURLToPath(new URL("pi-worker.js", import.meta.url)),
+    session,
+  );
+  if (run.session === undefined) {
+    throw new BridgeError({
+      code: "continuation_unavailable",
+      message: "The Pi worker did not return a settled persistent session checkpoint.",
+      retryable: false,
+    });
+  }
+  return { result: run.result, session: run.session };
+}
+
 /** Internal process seam used by deterministic supervisor failure tests. */
 export async function supervisePiWorker(
   context: AdapterRunContext,
   configuration: PiRuntimeConfiguration,
   workerPath: string,
 ): Promise<AdapterRunResult> {
+  const run = await supervisePiWorkerInternal(context, configuration, workerPath);
+  return run.result;
+}
+
+async function supervisePiWorkerInternal(
+  context: AdapterRunContext,
+  configuration: PiRuntimeConfiguration,
+  workerPath: string,
+  sessionRequest?: PiWorkerSessionRequest,
+): Promise<PiWorkerInternalRun> {
   if (process.platform === "win32") {
     throw new BridgeError({
       code: "unsupported_capability",
@@ -215,6 +258,7 @@ export async function supervisePiWorker(
     modelFiles: configuration.modelFiles,
     prompt: promptFor(context),
     tools: [...configuration.tools],
+    ...(sessionRequest === undefined ? {} : { session: sessionRequest }),
   };
   const encodedStart = `${JSON.stringify(start)}\n`;
   if (Buffer.byteLength(encodedStart, "utf8") > MAX_PI_WORKER_MESSAGE_BYTES) {
@@ -286,6 +330,7 @@ export async function supervisePiWorker(
   let observed = initialIdentity(configuration);
   let nextContentIndex = 0;
   let terminal: Extract<PiWorkerOutput, { type: "terminal" }> | undefined;
+  let sessionCheckpoint: PiWorkerSessionSnapshot | undefined;
   let protocolError: Error | undefined;
   let cancelTimer: NodeJS.Timeout | undefined;
   let cancellationWrite: Promise<void> | undefined;
@@ -354,6 +399,13 @@ export async function supervisePiWorker(
       const output = parsePiWorkerLine(line);
       if (terminal !== undefined) {
         throw new Error("Pi worker emitted a message after its terminal result.");
+      }
+      if (output.type === "session") {
+        if (sessionRequest === undefined || sessionCheckpoint !== undefined) {
+          throw new Error("Pi worker emitted an unexpected or duplicate session checkpoint.");
+        }
+        sessionCheckpoint = output.session;
+        continue;
       }
       if (output.type === "tool_process_started") {
         if (groups.has(output.requestId) || output.processGroupId === workerGroupId) {
@@ -471,6 +523,17 @@ export async function supervisePiWorker(
       throw new Error("Pi worker exited with supervised shell processes still registered.");
     }
     if (terminal.status === "failed") {
+      if (
+        sessionRequest !== undefined &&
+        (terminal.failure?.code === "continuation_unavailable" ||
+          terminal.failure?.code === "continuation_route_changed")
+      ) {
+        throw new BridgeError({
+          code: terminal.failure.code,
+          message: terminal.failure.message,
+          retryable: false,
+        });
+      }
       throw new BridgeError({
         code: "harness_failed",
         message: terminal.failure?.message ?? "Pi reported an unsuccessful run.",
@@ -487,7 +550,37 @@ export async function supervisePiWorker(
       ...(terminal.usage === undefined ? {} : { usage: terminal.usage }),
     };
     context.reportPartial?.(result);
-    return result;
+    if (sessionRequest !== undefined) {
+      if (sessionCheckpoint === undefined) {
+        throw new BridgeError({
+          code: "continuation_unavailable",
+          message: "The Pi worker did not return a settled persistent session checkpoint.",
+          retryable: false,
+        });
+      }
+      if (sessionRequest.mode === "branch") {
+        if (sessionCheckpoint.cwd !== sessionRequest.expectedCwd) {
+          throw new BridgeError({
+            code: "continuation_route_changed",
+            message: "Pi returned a session checkpoint for a different working directory.",
+            retryable: false,
+          });
+        }
+        if (
+          sessionCheckpoint.sessionId === sessionRequest.expectedSessionId ||
+          sessionCheckpoint.sessionFile === sessionRequest.sessionFile ||
+          sessionCheckpoint.terminalLeafId === sessionRequest.terminalLeafId
+        ) {
+          throw new BridgeError({
+            code: "continuation_unavailable",
+            message: "Pi did not create an independent settled branch of the prior session.",
+            retryable: false,
+          });
+        }
+      }
+      return { result, session: sessionCheckpoint };
+    }
+    return { result };
   } catch (error) {
     protocolError = error instanceof Error ? error : new Error(String(error));
     if (child.stdin !== null && !child.stdin.destroyed) {

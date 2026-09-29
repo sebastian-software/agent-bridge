@@ -1,17 +1,24 @@
 import type { JsonValue, RouteDescriptor } from "../contract.js";
+import type { PiWorkerSessionRequest } from "./pi-protocol.js";
 import type { Adapter, AdapterRunContext, AdapterRunResult, PolicyResolution } from "./types.js";
 
 import { BridgeError } from "../errors.js";
-import { type PiRuntimeConfiguration, runPiWorker } from "./pi-supervisor.js";
+import { piContinuationBinding, PiContinuationStore } from "./pi-continuation.js";
+import { type PiRuntimeConfiguration, runPiWorkerSession } from "./pi-supervisor.js";
 
 const MUTATING_TOOLS = new Set(["write", "edit", "bash"]);
 
 export class PiAdapter implements Adapter {
   readonly id = "pi";
   readonly #configuration: PiRuntimeConfiguration;
+  readonly #continuations: PiContinuationStore;
 
-  constructor(configuration: PiRuntimeConfiguration) {
+  constructor(
+    configuration: PiRuntimeConfiguration,
+    options?: { readonly continuationStore?: PiContinuationStore },
+  ) {
     this.#configuration = configuration;
+    this.#continuations = options?.continuationStore ?? new PiContinuationStore();
   }
 
   // Runtime discovery is intentionally empty until local endpoint/model
@@ -85,6 +92,70 @@ export class PiAdapter implements Adapter {
         details: { unsupported: [...policy.unsupported] },
       });
     }
-    return runPiWorker(context, this.#configuration);
+    const isContinuation = context.continuationHandle !== undefined;
+    const binding = await piContinuationBinding(context, this.#configuration, {
+      requireWorkingDirectory: isContinuation,
+    });
+    if (context.continuationHandle !== undefined) {
+      const retained = await this.#continuations.resume(context.continuationHandle, binding);
+      const directory = await this.#continuations.createSessionDirectory();
+      try {
+        const sessionRequest: PiWorkerSessionRequest = {
+          mode: "branch",
+          sourceDirectory: retained.directory,
+          directory,
+          sessionFile: retained.snapshot.sessionFile,
+          expectedSessionId: retained.snapshot.sessionId,
+          expectedCwd: retained.snapshot.cwd,
+          terminalLeafId: retained.snapshot.terminalLeafId,
+        };
+        const run = await runPiWorkerSession(context, this.#configuration, sessionRequest);
+        const nextBinding = await piContinuationBinding(context, this.#configuration, {
+          requireWorkingDirectory: true,
+        });
+        if (nextBinding !== binding) {
+          throw new BridgeError({
+            code: "continuation_route_changed",
+            message:
+              "The Pi route, account, policy, or model configuration changed during continuation.",
+            retryable: false,
+          });
+        }
+        return {
+          ...run.result,
+          continuationHandle: await this.#continuations.retain(directory, run.session, binding),
+        };
+      } catch (error) {
+        await this.#continuations.discardSessionDirectory(directory);
+        throw error;
+      }
+    }
+
+    const directory = await this.#continuations.createSessionDirectory();
+    try {
+      const run = await runPiWorkerSession(context, this.#configuration, {
+        mode: "create",
+        directory,
+      });
+      const nextBinding = await piContinuationBinding(context, this.#configuration);
+      if (nextBinding !== binding) {
+        throw new BridgeError({
+          code: "harness_failed",
+          message: "The Pi model configuration changed during the invocation.",
+          retryable: false,
+        });
+      }
+      return {
+        ...run.result,
+        continuationHandle: await this.#continuations.retain(directory, run.session, binding),
+      };
+    } catch (error) {
+      await this.#continuations.discardSessionDirectory(directory);
+      throw error;
+    }
+  }
+
+  async dispose(): Promise<void> {
+    await this.#continuations.dispose();
   }
 }

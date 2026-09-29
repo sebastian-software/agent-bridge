@@ -101,6 +101,8 @@ export type Adapter = {
   ) => Promise<readonly RouteDescriptor[]>;
   readonly runConnection?: (context: AdapterConnectionRunContext) => Promise<AdapterRunResult>;
   readonly sendInput?: (context: AdapterSendInputContext) => Promise<AdapterInputResult>;
+  /** Release adapter-owned files and handles after the broker has stopped active runs. */
+  readonly dispose?: () => Promise<void>;
   readonly resolvePolicy?: (
     request: StartInvocationRequest,
     route: RouteDescriptor,

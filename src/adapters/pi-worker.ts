@@ -1,7 +1,10 @@
+import type { SessionManager as PiSessionManager } from "@earendil-works/pi-coding-agent";
+
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { dirname, join } from "node:path";
+import { lstat, readFile, realpath } from "node:fs/promises";
+import { dirname, isAbsolute, join, relative, sep } from "node:path";
 
 import type { ObservedIdentity, Usage, WorkspaceEffect } from "../contract.js";
 import type { AdapterEvent } from "./types.js";
@@ -16,6 +19,8 @@ import {
   type PiToolRunnerStart,
   type PiWorkerControl,
   type PiWorkerOutput,
+  type PiWorkerSessionRequest,
+  type PiWorkerSessionSnapshot,
   type PiWorkerStart,
   readBoundedLines,
 } from "./pi-protocol.js";
@@ -25,6 +30,28 @@ const MAX_QUEUED_OUTPUT_BYTES = 34 * 1024 * 1024;
 const MAX_TOOL_OUTPUT_BYTES = 16 * 1024 * 1024;
 const MAX_ASSISTANT_OUTPUT_BYTES = 16 * 1024 * 1024;
 const MAX_TOOL_TIMEOUT_MS = 2_147_483_647;
+
+type PiSdk = {
+  readonly SessionManager: {
+    readonly open: (
+      path: string,
+      sessionDirectory?: string,
+      cwdOverride?: string,
+    ) => PiSessionManager;
+    readonly create: (cwd: string, sessionDirectory?: string) => PiSessionManager;
+    readonly inMemory: (cwd?: string) => PiSessionManager;
+  };
+};
+
+class PiSessionCheckpointError extends Error {
+  readonly code: "continuation_route_changed" | "continuation_unavailable";
+
+  constructor(code: "continuation_route_changed" | "continuation_unavailable", message: string) {
+    super(message);
+    this.name = "PiSessionCheckpointError";
+    this.code = code;
+  }
+}
 
 type RunnerResult = {
   readonly type: "result";
@@ -72,6 +99,9 @@ export function supportsPiNodeVersion(version: string): boolean {
 }
 
 function failureCode(error: unknown): string {
+  if (error instanceof PiSessionCheckpointError) {
+    return error.code;
+  }
   if (error instanceof Error && error.message.includes("Pi assistant output exceeded")) {
     return "pi_output_limit";
   }
@@ -83,6 +113,142 @@ function failureCode(error: unknown): string {
     return "pi_sdk_unavailable";
   }
   return "pi_worker_failed";
+}
+
+function sessionPathWithin(directory: string, file: string): boolean {
+  const path = relative(directory, file);
+  return path !== "" && path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path);
+}
+
+async function branchSession(
+  pi: PiSdk,
+  request: Extract<PiWorkerSessionRequest, { readonly mode: "branch" }>,
+): Promise<PiSessionManager> {
+  let directory: string;
+  let sessionFile: string;
+  let content: string;
+  try {
+    const [
+      resolvedDirectory,
+      resolvedDestination,
+      resolvedFile,
+      directoryInfo,
+      fileInfo,
+      fileContent,
+    ] = await Promise.all([
+      realpath(request.sourceDirectory),
+      realpath(request.directory),
+      realpath(request.sessionFile),
+      lstat(request.directory),
+      lstat(request.sessionFile),
+      readFile(request.sessionFile, "utf8"),
+    ]);
+    directory = resolvedDirectory;
+    sessionFile = resolvedFile;
+    content = fileContent;
+    if (
+      resolvedDestination === directory ||
+      !directoryInfo.isDirectory() ||
+      directoryInfo.isSymbolicLink() ||
+      !fileInfo.isFile() ||
+      fileInfo.isSymbolicLink() ||
+      !sessionPathWithin(directory, sessionFile)
+    ) {
+      throw new Error("invalid session file");
+    }
+  } catch {
+    throw new PiSessionCheckpointError(
+      "continuation_unavailable",
+      "The retained Pi session file is missing or invalid.",
+    );
+  }
+
+  let header: unknown;
+  try {
+    header = JSON.parse(content.split(/\r?\n/u, 1)[0] ?? "") as unknown;
+  } catch {
+    throw new PiSessionCheckpointError(
+      "continuation_unavailable",
+      "The retained Pi session file is missing or invalid.",
+    );
+  }
+  if (
+    typeof header !== "object" ||
+    header === null ||
+    Array.isArray(header) ||
+    !("type" in header) ||
+    header.type !== "session" ||
+    !("id" in header) ||
+    header.id !== request.expectedSessionId ||
+    !("cwd" in header) ||
+    header.cwd !== request.expectedCwd
+  ) {
+    throw new PiSessionCheckpointError(
+      "continuation_route_changed",
+      "The retained Pi session identity or working directory changed.",
+    );
+  }
+
+  let manager: PiSessionManager;
+  try {
+    manager = pi.SessionManager.open(sessionFile, request.directory);
+  } catch {
+    throw new PiSessionCheckpointError(
+      "continuation_unavailable",
+      "The retained Pi session file could not be opened.",
+    );
+  }
+  if (
+    manager.getSessionId() !== request.expectedSessionId ||
+    manager.getCwd() !== request.expectedCwd ||
+    manager.getLeafId() !== request.terminalLeafId
+  ) {
+    throw new PiSessionCheckpointError(
+      "continuation_route_changed",
+      "The retained Pi session no longer matches its settled terminal checkpoint.",
+    );
+  }
+  const previousFile = manager.getSessionFile();
+  let branchedFile: string | undefined;
+  try {
+    branchedFile = manager.createBranchedSession(request.terminalLeafId);
+  } catch {
+    throw new PiSessionCheckpointError(
+      "continuation_unavailable",
+      "Pi could not create an independent branch of the retained session.",
+    );
+  }
+  if (
+    previousFile === undefined ||
+    branchedFile === undefined ||
+    branchedFile === previousFile ||
+    manager.getSessionId() === request.expectedSessionId ||
+    manager.getCwd() !== request.expectedCwd
+  ) {
+    throw new PiSessionCheckpointError(
+      "continuation_unavailable",
+      "Pi could not create an independent branch of the retained session.",
+    );
+  }
+  return manager;
+}
+
+async function createSessionManager(pi: PiSdk, start: PiWorkerStart): Promise<PiSessionManager> {
+  const request = start.session;
+  if (request === undefined) {
+    return pi.SessionManager.inMemory(start.workingDirectory);
+  }
+  if (request.mode === "create") {
+    try {
+      return pi.SessionManager.create(start.workingDirectory, request.directory);
+    } catch {
+      throw new PiSessionCheckpointError(
+        "continuation_unavailable",
+        "Pi could not create a persistent native session.",
+      );
+    }
+  }
+  return branchSession(pi, request);
 }
 
 function setExitCode(code: number): void {
@@ -104,7 +270,11 @@ function observedIdentity(
     nativeSessionId:
       sessionId === undefined
         ? { evidence: "unverified" }
-        : { value: sessionId, evidence: "reported", source: "pi-in-memory-session" },
+        : {
+            value: sessionId,
+            evidence: "reported",
+            source: start.session === undefined ? "pi-in-memory-session" : "pi-session-manager",
+          },
   };
 }
 
@@ -865,7 +1035,7 @@ async function runPiWorker(): Promise<void> {
       thinkingLevel: workerStart.model.thinkingLevel,
       resourceLoader,
       settingsManager,
-      sessionManager: pi.SessionManager.inMemory(workerStart.workingDirectory),
+      sessionManager: await createSessionManager(pi, workerStart),
       tools: [...workerStart.tools],
       customTools,
     });
@@ -979,6 +1149,39 @@ async function runPiWorker(): Promise<void> {
         lastAssistant?.errorMessage ??
           `Pi session settled with ${lastAssistant?.stopReason ?? "no assistant completion"}.`,
       );
+    }
+    if (workerStart.session !== undefined) {
+      const manager = created.session.sessionManager;
+      const sessionFile = manager.getSessionFile();
+      const terminalLeafId = manager.getLeafId();
+      if (sessionFile === undefined || terminalLeafId === null) {
+        throw new PiSessionCheckpointError(
+          "continuation_unavailable",
+          "Pi did not settle a persistent session checkpoint.",
+        );
+      }
+      try {
+        const fileInfo = await lstat(sessionFile);
+        if (
+          !fileInfo.isFile() ||
+          fileInfo.isSymbolicLink() ||
+          (await readFile(sessionFile)).length === 0
+        ) {
+          throw new Error("empty session checkpoint");
+        }
+      } catch {
+        throw new PiSessionCheckpointError(
+          "continuation_unavailable",
+          "Pi did not settle a persistent session checkpoint.",
+        );
+      }
+      const checkpoint: PiWorkerSessionSnapshot = {
+        sessionFile,
+        sessionId: manager.getSessionId(),
+        cwd: manager.getCwd(),
+        terminalLeafId,
+      };
+      await output.enqueue({ type: "session", session: checkpoint });
     }
     terminalWritten = true;
     const usage = usageFromMessages(assistantMessages);

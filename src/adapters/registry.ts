@@ -100,6 +100,14 @@ export class AdapterRegistry {
     return this.#connectionsPath;
   }
 
+  async dispose(): Promise<void> {
+    await Promise.all(
+      [...this.#adapters.values()].flatMap((adapter) =>
+        adapter.dispose === undefined ? [] : [adapter.dispose()],
+      ),
+    );
+  }
+
   async discover(options: DiscoveryOptions = {}): Promise<readonly RouteDescriptor[]> {
     const connections = await loadUserConnections(this.#connectionsPath);
     return (await this.#discoverSnapshot(connections, options)).routes;
