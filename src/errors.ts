@@ -1,6 +1,7 @@
 export type BridgeErrorCode =
   | "auth_required"
   | "broker_unavailable"
+  | "connection_conflict"
   | "continuation_expired"
   | "continuation_route_changed"
   | "continuation_unavailable"

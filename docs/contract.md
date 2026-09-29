@@ -9,23 +9,30 @@ route descriptors. The JSON files in
 
 ## Operations
 
-| Operation                    | Purpose                                                      | Next affordances                         |
-| ---------------------------- | ------------------------------------------------------------ | ---------------------------------------- |
-| `system.describe`            | Describe versions, operations, and settings                  | —                                        |
-| `system.status`              | Inspect broker readiness, counts, and environment names      | `broker stop`                            |
-| `system.shutdown`            | Stop the broker, optionally forcing active work to interrupt | —                                        |
-| `route.discover`             | Discover qualified and authenticated routes                  | `invocation.start`                       |
-| `invocation.start`           | Resolve one route and enqueue one invocation                 | `invocation.events`, `invocation.cancel` |
-| `invocation.list`            | List lightweight retained summaries and optional tombstones  | `invocation.inspect`                     |
-| `invocation.inspect` / `get` | Read state, policy, route, and event cursor                  | `invocation.events`, `invocation.cancel` |
-| `invocation.events`          | Read events after a cursor, with bounded long polling        | repeat with `nextCursor`                 |
-| `invocation.wait`            | Wait for terminal state with a maximum 30-second poll        | `invocation.result`                      |
-| `invocation.result`          | Read the immutable terminal outcome                          | —                                        |
-| `invocation.cancel`          | Request cancellation of active work                          | `invocation.events`                      |
-| `invocation.respond`         | Allow or deny a pending permission request                   | `invocation.events`                      |
-| `invocation.answer`          | Answer a pending free-form delegate question                 | `invocation.events`                      |
-| `invocation.send`            | Queue additional input for an active native session          | `invocation.events`                      |
-| `invocation.continue`        | Start a linked invocation from a retained native session     | `invocation.events`, `invocation.cancel` |
+| Operation                    | Purpose                                                           | Next affordances                         |
+| ---------------------------- | ----------------------------------------------------------------- | ---------------------------------------- |
+| `system.describe`            | Describe versions, operations, and settings                       | —                                        |
+| `system.status`              | Inspect broker readiness, counts, and environment names           | `broker stop`                            |
+| `system.shutdown`            | Stop the broker, optionally forcing active work to interrupt      | —                                        |
+| `route.discover`             | Discover qualified and authenticated routes                       | `invocation.start`                       |
+| `connection.discover`        | Refresh default and named routes with safe registration summaries | `connection.inspect`                     |
+| `connection.list`            | List registered native contexts without private references        | `connection.inspect`                     |
+| `connection.inspect`         | Refresh route readiness evidence for one registration             | `invocation.start`                       |
+| `connection.register`        | Register an existing native context                               | `connection.inspect`                     |
+| `connection.prepare`         | Prepare a private context and return user-owned login steps       | `connection.inspect`                     |
+| `connection.update`          | Update a registration using its expected revision                 | `connection.inspect`                     |
+| `connection.remove`          | Remove only the registration using its expected revision          | —                                        |
+| `invocation.start`           | Resolve one route and enqueue one invocation                      | `invocation.events`, `invocation.cancel` |
+| `invocation.list`            | List lightweight retained summaries and optional tombstones       | `invocation.inspect`                     |
+| `invocation.inspect` / `get` | Read state, policy, route, and event cursor                       | `invocation.events`, `invocation.cancel` |
+| `invocation.events`          | Read events after a cursor, with bounded long polling             | repeat with `nextCursor`                 |
+| `invocation.wait`            | Wait for terminal state with a maximum 30-second poll             | `invocation.result`                      |
+| `invocation.result`          | Read the immutable terminal outcome                               | —                                        |
+| `invocation.cancel`          | Request cancellation of active work                               | `invocation.events`                      |
+| `invocation.respond`         | Allow or deny a pending permission request                        | `invocation.events`                      |
+| `invocation.answer`          | Answer a pending free-form delegate question                      | `invocation.events`                      |
+| `invocation.send`            | Queue additional input for an active native session               | `invocation.events`                      |
+| `invocation.continue`        | Start a linked invocation from a retained native session          | `invocation.events`, `invocation.cancel` |
 
 An invocation request contains a model-first `selector`, one or more typed
 `input` content parts, an absolute `workingDirectory`, an interaction strategy,
@@ -37,6 +44,19 @@ when named connections are registered. Discovery accepts the same
 registration snapshot used for resolution. The native context reference stays
 inside the broker and qualified adapter. Route resolution never silently
 substitutes the requested model, effort, harness, or connection.
+
+Connection management operations share the same broker API across IPC, the
+typed client, CLI, and MCP. `connection.discover` includes default and named
+route observations plus redacted registration summaries; `connection.list`
+returns only summaries. `connection.inspect` refreshes readiness for one
+registration. Readiness is route evidence, not proof of account identity.
+`connection.register` accepts an existing readable native context and is
+idempotent when the stable ID and settings are unchanged. `connection.prepare`
+creates an empty private context directory and returns its path and structured
+`executable`/`args`/`env` login instructions in that explicit setup response;
+Relay does not start the native login or copy credentials. Updates and removals
+require the current registration revision. Removing a registration does not
+delete its native context or credentials.
 
 ## State machine
 
@@ -143,9 +163,13 @@ Named native connections are stored user-globally in
 `connections.json` beside the Relay user configuration file (under
 `XDG_CONFIG_HOME`, or `~/.config` by default). The file stores adapter
 references and optional purpose text, never copied credentials. Registration
-updates are validated before an atomic file replacement. A running invocation
-keeps the connection revision it resolved, so a later update or removal cannot
-retarget it.
+updates use a bounded cross-process lock and atomic file replacement. Direct
+store writes use a snapshot-token compare-and-swap; stale updates return
+retryable `connection_conflict` errors. A lock left by a terminated writer is
+not removed automatically. The bounded timeout reports the owner PID when
+available and asks the caller to verify that no writer is active before manual
+recovery. A running invocation keeps the connection revision it resolved, so
+a later update or removal cannot retarget it.
 
 The default state layout is a private directory containing a manifest,
 per-invocation metadata, append-only events, outcomes, and tombstones. Native
@@ -164,7 +188,8 @@ Every IPC failure has `code`, `message`, `retryable`, and optional diagnostic
 `details`. The CLI maps errors to stable codes: `0` success, `1` execution or
 internal failure, `2` invalid request, `3` broker unavailable, `4` invocation
 not found/evicted/not terminal, `5` route unavailable or ambiguous, and `6`
-invocation conflict. `run` additionally maps terminal `cancelled`, `timed_out`,
+invocation or connection conflict. `connection_conflict` covers a stale
+snapshot, revision, or active registration lock. `run` additionally maps terminal `cancelled`, `timed_out`,
 and `interrupted` outcomes to non-zero statuses.
 
 Callers may retry errors marked `retryable` after observing their details.

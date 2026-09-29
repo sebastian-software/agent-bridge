@@ -323,6 +323,48 @@ export type InvocationListResult = {
   readonly tombstones: readonly InvocationTombstone[];
 };
 
+export type ConnectionSummary = {
+  readonly id: string;
+  readonly harness: string;
+  readonly revision: string;
+  readonly purpose?: string;
+};
+
+export type ConnectionReadiness = "ready" | "unavailable" | "unqualified";
+
+export type ConnectionInspection = {
+  readonly connection: ConnectionSummary;
+  readonly readiness: ConnectionReadiness;
+  readonly userActionRequired: boolean;
+  readonly routes: readonly RouteDescriptor[];
+  readonly nextSteps: readonly string[];
+};
+
+export type ConnectionDiscoverResult = {
+  readonly connections: readonly ConnectionSummary[];
+  readonly routes: readonly RouteDescriptor[];
+  readonly nextSteps: readonly string[];
+};
+
+export type ConnectionPrepareResult = {
+  readonly setup: {
+    readonly contextPath: string;
+    readonly login: {
+      readonly executable: string;
+      readonly args: readonly string[];
+      readonly env: Readonly<Record<string, string>>;
+    };
+  };
+} & ConnectionInspection;
+
+export type ConnectionUpdateParams = {
+  readonly id: string;
+  readonly expectedRevision: string;
+  readonly nativeContextRef?: string;
+  readonly purpose?: string;
+  readonly clearPurpose?: boolean;
+};
+
 export type OperationRequest = {
   readonly protocolVersion: typeof IPC_PROTOCOL_VERSION;
   readonly id: string;
@@ -370,6 +412,17 @@ function stringValue(value: unknown, field: string, options?: { nonEmpty?: boole
 
 function optionalString(value: unknown, field: string): string | undefined {
   return value === undefined ? undefined : stringValue(value, field, { nonEmpty: true });
+}
+
+function exactKeys(
+  source: Readonly<UnknownRecord>,
+  allowed: readonly string[],
+  field: string,
+): void {
+  const unexpected = Object.keys(source).find((key) => !allowed.includes(key));
+  if (unexpected !== undefined) {
+    invalid(`${field} contains unsupported field ${unexpected}.`);
+  }
 }
 
 function stringArray(value: unknown, field: string): readonly string[] {
@@ -629,6 +682,95 @@ export function parseRouteDiscoverParams(value: unknown): {
   return {
     refresh: source.refresh ?? false,
     ...(connectionId === undefined ? {} : { connectionId }),
+  };
+}
+
+export function parseConnectionDiscoverParams(value: unknown): { readonly refresh: boolean } {
+  const source = record(value, "params");
+  exactKeys(source, ["refresh"], "params");
+  if (source.refresh !== undefined && typeof source.refresh !== "boolean") {
+    invalid("params.refresh must be a boolean.");
+  }
+  return { refresh: source.refresh ?? false };
+}
+
+export function parseConnectionIdParams(value: unknown): { readonly id: string } {
+  const source = record(value, "params");
+  exactKeys(source, ["id"], "params");
+  return { id: stringValue(source.id, "params.id", { nonEmpty: true }) };
+}
+
+export function parseConnectionRegisterParams(value: unknown): {
+  readonly id: string;
+  readonly harness: string;
+  readonly nativeContextRef: string;
+  readonly purpose?: string;
+} {
+  const source = record(value, "params");
+  exactKeys(source, ["id", "harness", "nativeContextRef", "purpose"], "params");
+  const purpose = optionalString(source.purpose, "params.purpose");
+  return {
+    id: stringValue(source.id, "params.id", { nonEmpty: true }),
+    harness: stringValue(source.harness, "params.harness", { nonEmpty: true }),
+    nativeContextRef: stringValue(source.nativeContextRef, "params.nativeContextRef", {
+      nonEmpty: true,
+    }),
+    ...(purpose === undefined ? {} : { purpose }),
+  };
+}
+
+export function parseConnectionPrepareParams(value: unknown): {
+  readonly id: string;
+  readonly harness: string;
+  readonly purpose?: string;
+} {
+  const source = record(value, "params");
+  exactKeys(source, ["id", "harness", "purpose"], "params");
+  const purpose = optionalString(source.purpose, "params.purpose");
+  return {
+    id: stringValue(source.id, "params.id", { nonEmpty: true }),
+    harness: stringValue(source.harness, "params.harness", { nonEmpty: true }),
+    ...(purpose === undefined ? {} : { purpose }),
+  };
+}
+
+export function parseConnectionUpdateParams(value: unknown): ConnectionUpdateParams {
+  const source = record(value, "params");
+  exactKeys(
+    source,
+    ["id", "expectedRevision", "nativeContextRef", "purpose", "clearPurpose"],
+    "params",
+  );
+  if (source.clearPurpose !== undefined && typeof source.clearPurpose !== "boolean") {
+    invalid("params.clearPurpose must be a boolean.");
+  }
+  if (source.clearPurpose === true && source.purpose !== undefined) {
+    invalid("params.purpose cannot be combined with clearPurpose=true.");
+  }
+  const nativeContextRef = optionalString(source.nativeContextRef, "params.nativeContextRef");
+  const purpose = optionalString(source.purpose, "params.purpose");
+  return {
+    id: stringValue(source.id, "params.id", { nonEmpty: true }),
+    expectedRevision: stringValue(source.expectedRevision, "params.expectedRevision", {
+      nonEmpty: true,
+    }),
+    ...(nativeContextRef === undefined ? {} : { nativeContextRef }),
+    ...(purpose === undefined ? {} : { purpose }),
+    ...(source.clearPurpose === true ? { clearPurpose: true } : {}),
+  };
+}
+
+export function parseConnectionRemoveParams(value: unknown): {
+  readonly id: string;
+  readonly expectedRevision: string;
+} {
+  const source = record(value, "params");
+  exactKeys(source, ["id", "expectedRevision"], "params");
+  return {
+    id: stringValue(source.id, "params.id", { nonEmpty: true }),
+    expectedRevision: stringValue(source.expectedRevision, "params.expectedRevision", {
+      nonEmpty: true,
+    }),
   };
 }
 

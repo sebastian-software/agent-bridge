@@ -1,6 +1,7 @@
-import { randomUUID } from "node:crypto";
-import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdir, open, readFile, rename, rm, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 
 import { BridgeError } from "./errors.js";
 import { defaultCatalogPath } from "./model-catalog.js";
@@ -8,6 +9,19 @@ import { defaultCatalogPath } from "./model-catalog.js";
 const CONNECTION_FILE_VERSION = 1 as const;
 const CONNECTION_ID_PATTERN = /^[A-Z0-9][\w.-]{0,63}$/i;
 const REVISION_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const CONNECTION_LOCK_WAIT_MS = 5000;
+const CONNECTION_LOCK_POLL_MS = 25;
+
+export type UserConnectionsSnapshot = {
+  readonly connections: readonly HarnessConnection[];
+  /** Opaque content token for compare-and-swap writes; `missing` represents no file. */
+  readonly revision: string;
+};
+
+export type UserConnectionsMutation<T> = {
+  readonly connections: readonly HarnessConnection[];
+  readonly result: T;
+};
 
 export type HarnessConnectionInput = {
   readonly id: string;
@@ -182,12 +196,18 @@ export function adapterConnectionContext(connection: HarnessConnection): Adapter
 export async function loadUserConnections(
   path = defaultConnectionsPath(),
 ): Promise<readonly HarnessConnection[]> {
+  return (await loadUserConnectionsSnapshot(path)).connections;
+}
+
+export async function loadUserConnectionsSnapshot(
+  path = defaultConnectionsPath(),
+): Promise<UserConnectionsSnapshot> {
   let text: string;
   try {
     text = await readFile(path, "utf8");
   } catch (error) {
     if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
-      return [];
+      return { connections: [], revision: "missing" };
     }
     throw new BridgeError(
       {
@@ -211,17 +231,65 @@ export async function loadUserConnections(
       { cause: error },
     );
   }
-  return parseConnectionFile(decoded, `connections file ${path}`);
+  return {
+    connections: parseConnectionFile(decoded, `connections file ${path}`),
+    revision: snapshotRevision(text),
+  };
 }
 
 export async function writeUserConnections(
   connections: readonly HarnessConnection[],
-  path = defaultConnectionsPath(),
-): Promise<void> {
+  options: { readonly expectedRevision: string; readonly path?: string },
+): Promise<UserConnectionsSnapshot> {
   const normalized = parseConnectionFile(
     { version: CONNECTION_FILE_VERSION, connections },
     "connections",
   );
+  const path = options.path ?? defaultConnectionsPath();
+  return withConnectionLock(path, async () => {
+    const current = await loadUserConnectionsSnapshot(path);
+    if (current.revision !== options.expectedRevision) {
+      throw new BridgeError({
+        code: "connection_conflict",
+        message: "The connection registrations changed since they were read. Refresh and retry.",
+        retryable: true,
+        details: { expectedRevision: options.expectedRevision, actualRevision: current.revision },
+      });
+    }
+    await writeConnectionsAtomically(normalized, path);
+    return loadUserConnectionsSnapshot(path);
+  });
+}
+
+/** Serialize read/modify/write work across processes and preserve updates from every writer. */
+export async function mutateUserConnections<T>(
+  mutate: (
+    current: readonly HarnessConnection[],
+  ) => Promise<UserConnectionsMutation<T>> | UserConnectionsMutation<T>,
+  path = defaultConnectionsPath(),
+): Promise<{ readonly result: T; readonly snapshot: UserConnectionsSnapshot }> {
+  return withConnectionLock(path, async () => {
+    const current = await loadUserConnectionsSnapshot(path);
+    const mutation = await mutate(current.connections);
+    const normalized = parseConnectionFile(
+      { version: CONNECTION_FILE_VERSION, connections: mutation.connections },
+      "connections",
+    );
+    if (JSON.stringify(normalized) !== JSON.stringify(current.connections)) {
+      await writeConnectionsAtomically(normalized, path);
+    }
+    return { result: mutation.result, snapshot: await loadUserConnectionsSnapshot(path) };
+  });
+}
+
+function snapshotRevision(text: string): string {
+  return `sha256:${createHash("sha256").update(text, "utf8").digest("hex")}`;
+}
+
+async function writeConnectionsAtomically(
+  normalized: readonly HarnessConnection[],
+  path: string,
+): Promise<void> {
   const directory = dirname(path);
   const temporaryPath = `${path}.${randomUUID()}.tmp`;
   let file: Awaited<ReturnType<typeof open>> | undefined;
@@ -250,4 +318,97 @@ export async function writeUserConnections(
       { cause: error },
     );
   }
+}
+
+type ConnectionLockOwner = { readonly pid: number; readonly token: string };
+
+async function withConnectionLock<T>(path: string, action: () => Promise<T>): Promise<T> {
+  const lockPath = `${path}.lock`;
+  const directory = dirname(path);
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  const token = randomUUID();
+  const startedAt = Date.now();
+  let lock: Awaited<ReturnType<typeof open>> | undefined;
+  while (lock === undefined) {
+    try {
+      lock = await open(lockPath, "wx", 0o600);
+      await lock.writeFile(JSON.stringify({ pid: process.pid, token }), "utf8");
+      await lock.sync();
+    } catch (error) {
+      if (lock !== undefined) {
+        await lock.close().catch(() => {});
+        lock = undefined;
+        await rm(lockPath, { force: true }).catch(() => {});
+      }
+      if (!isAlreadyExists(error)) {
+        throw new BridgeError(
+          {
+            code: "invalid_request",
+            message: "The connection registration lock could not be acquired.",
+            retryable: false,
+          },
+          { cause: error },
+        );
+      }
+      if (Date.now() - startedAt >= CONNECTION_LOCK_WAIT_MS) {
+        throw new BridgeError({
+          code: "connection_conflict",
+          message: await lockTimeoutMessage(lockPath),
+          retryable: true,
+        });
+      }
+      await delay(CONNECTION_LOCK_POLL_MS);
+    }
+  }
+
+  const ownedStat = await lock.stat();
+  try {
+    return await action();
+  } finally {
+    await lock.close().catch(() => {});
+    try {
+      const currentStat = await stat(lockPath);
+      const owner = await readLockOwner(lockPath);
+      if (
+        currentStat.dev === ownedStat.dev &&
+        currentStat.ino === ownedStat.ino &&
+        owner?.token === token
+      ) {
+        await rm(lockPath, { force: true });
+      }
+    } catch {
+      // Preserve the mutation result; a leftover lock produces a bounded actionable timeout.
+    }
+  }
+}
+
+function isAlreadyExists(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST";
+}
+
+async function readLockOwner(lockPath: string): Promise<ConnectionLockOwner | undefined> {
+  try {
+    const source = JSON.parse(await readFile(lockPath, "utf8")) as unknown;
+    if (
+      typeof source === "object" &&
+      source !== null &&
+      "pid" in source &&
+      typeof source.pid === "number" &&
+      Number.isSafeInteger(source.pid) &&
+      "token" in source &&
+      typeof source.token === "string"
+    ) {
+      return { pid: source.pid, token: source.token };
+    }
+  } catch {
+    // A lock holder may still be writing its small owner record.
+  }
+  return undefined;
+}
+
+async function lockTimeoutMessage(lockPath: string): Promise<string> {
+  const owner = await readLockOwner(lockPath);
+  return owner === undefined
+    ? "Timed out waiting for connection registrations to be updated. Retry after the active writer finishes; if it crashed, verify no writer owns the lock before removing the lock file."
+    : `Timed out waiting for connection registrations to be updated (lock owner PID ${owner.pid}). Retry after that writer finishes; if it crashed, verify the PID is no longer active before removing the lock file.`;
 }

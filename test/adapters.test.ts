@@ -20,7 +20,11 @@ import { parseVersion, satisfiesVersionRange } from "../src/adapters/discovery.j
 import { FakeProcessAdapter } from "../src/adapters/fake-process.js";
 import { type CommandSpec, ContentAccumulator, ProcessAdapter } from "../src/adapters/process.js";
 import { AdapterRegistry } from "../src/adapters/registry.js";
-import { createHarnessConnection, writeUserConnections } from "../src/connections.js";
+import {
+  createHarnessConnection,
+  loadUserConnectionsSnapshot,
+  writeUserConnections,
+} from "../src/connections.js";
 
 const route = (adapter: string, executable: string): ResolvedRoute => ({
   routeId: `${adapter}:test`,
@@ -471,7 +475,11 @@ test("Codex named contexts use native login, reject profiles, and redact overlap
       nativeContextRef: gammaHome,
       purpose: "review",
     });
-    await writeUserConnections([alpha, beta, gamma], connectionsPath);
+    const connectionSnapshot = await loadUserConnectionsSnapshot(connectionsPath);
+    await writeUserConnections([alpha, beta, gamma], {
+      path: connectionsPath,
+      expectedRevision: connectionSnapshot.revision,
+    });
 
     const defaultRoutes = await adapter.discover();
     assert.ok(defaultRoutes.every((candidate) => candidate.readiness === "ready"));

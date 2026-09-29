@@ -24,8 +24,8 @@ pnpm add --global harness-relay
 npx harness-relay routes
 ```
 
-Caller-side delegation, second-opinion, and multi-model review skills are
-available for Codex and Claude Code. See the [skills installation and
+Caller-side delegation, second-opinion, multi-model review, and native-context
+setup skills are available for Codex and Claude Code. See the [skills installation and
 discovery guide](docs/skills.md) for the version-pinned public setup.
 
 ## First delegation

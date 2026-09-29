@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { pathToFileURL } from "node:url";
 
 import type {
   Adapter,
@@ -11,19 +14,29 @@ import type {
   AdapterRunResult,
 } from "../src/adapters/types.js";
 import type { AdapterConnectionContext, HarnessConnection } from "../src/connections.js";
-import type { ObservedIdentity, RouteDescriptor, StartInvocationRequest } from "../src/contract.js";
+import type {
+  ConnectionPrepareResult,
+  ObservedIdentity,
+  RouteDescriptor,
+  StartInvocationRequest,
+} from "../src/contract.js";
 import type { BrokerPaths } from "../src/paths.js";
 
 import { AdapterRegistry } from "../src/adapters/registry.js";
 import { Broker } from "../src/broker.js";
+import { createClient } from "../src/client.js";
 import {
   createHarnessConnection,
   loadUserConnections,
+  loadUserConnectionsSnapshot,
+  mutateUserConnections,
   summarizeConnection,
   updateHarnessConnection,
   writeUserConnections,
 } from "../src/connections.js";
 import { BridgeError } from "../src/errors.js";
+import { BrokerServer } from "../src/ipc.js";
+import { McpServer } from "../src/mcp.js";
 
 function deferred(): { readonly promise: Promise<void>; readonly resolve: () => void } {
   let settle: (() => void) | undefined;
@@ -187,6 +200,28 @@ class DiscoveryOnlyAdapter implements Adapter {
   }
 }
 
+class NativeContextFixtureAdapter implements Adapter {
+  readonly id = "codex";
+
+  async discover(): Promise<readonly RouteDescriptor[]> {
+    return [descriptor(this.id)];
+  }
+
+  async discoverConnection(
+    connection: AdapterConnectionContext,
+  ): Promise<readonly RouteDescriptor[]> {
+    return [{ ...descriptor(this.id), diagnostics: [connection.nativeContextRef] }];
+  }
+
+  async run(_context: AdapterRunContext): Promise<AdapterRunResult> {
+    return fixtureResult();
+  }
+
+  async runConnection(_context: AdapterConnectionRunContext): Promise<AdapterRunResult> {
+    return fixtureResult();
+  }
+}
+
 async function waitForTerminal(
   broker: Broker,
   invocationId: string,
@@ -215,8 +250,80 @@ async function makeConnection(
     nativeContextRef,
     purpose: "analysis",
   });
-  await writeUserConnections([connection], path);
+  await replaceConnections([connection], path);
   return connection;
+}
+
+async function replaceConnections(
+  connections: readonly HarnessConnection[],
+  path: string,
+): Promise<void> {
+  const snapshot = await loadUserConnectionsSnapshot(path);
+  await writeUserConnections(connections, { path, expectedRevision: snapshot.revision });
+}
+
+async function spawnConnectionWriter(path: string, id: string): Promise<void> {
+  const moduleUrl = pathToFileURL(join(process.cwd(), "dist/src/connections.js")).href;
+  const source = [
+    `const { createHarnessConnection, mutateUserConnections } = await import(${JSON.stringify(moduleUrl)});`,
+    "const [path, id] = process.argv.slice(1);",
+    'const connection = createHarnessConnection({ id, harness: "connection-fixture", nativeContextRef: "/private/" + id });',
+    "await mutateUserConnections(async (current) => {",
+    "  await new Promise((resolve) => setTimeout(resolve, 200));",
+    "  return { connections: [...current, connection], result: id };",
+    "}, path);",
+  ].join("\n");
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(process.execPath, ["--input-type=module", "-e", source, path, id], {
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    let stderr = "";
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.once("error", reject);
+    child.once("close", (code) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error(`Connection writer exited with ${String(code)}: ${stderr}`));
+      }
+    });
+  });
+}
+
+async function spawnAbandonedConnectionLock(path: string): Promise<number> {
+  const source = [
+    'const fs = require("node:fs");',
+    "const lock = process.argv[1];",
+    'fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, token: "abandoned" }), { flag: "wx", mode: 0o600 });',
+    "process.stdout.write(String(process.pid));",
+  ].join("\n");
+  return new Promise<number>((resolve, reject) => {
+    const child = spawn(process.execPath, ["-e", source, path], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.once("error", reject);
+    child.once("close", (code) => {
+      const pid = Number(stdout);
+      if (code === 0 && Number.isSafeInteger(pid)) {
+        resolve(pid);
+      } else {
+        reject(new Error(`Abandoned lock writer exited with ${String(code)}: ${stderr}`));
+      }
+    });
+  });
 }
 
 test("connection storage validates before atomically replacing the user file", async () => {
@@ -225,10 +332,14 @@ test("connection storage validates before atomically replacing the user file", a
   try {
     const connection = await makeConnection(path);
     assert.deepEqual(await loadUserConnections(path), [connection]);
+    const snapshot = await loadUserConnectionsSnapshot(path);
     const before = await readFile(path, "utf8");
 
     await assert.rejects(
-      writeUserConnections([connection, connection], path),
+      writeUserConnections([connection, connection], {
+        path,
+        expectedRevision: snapshot.revision,
+      }),
       (error: unknown) => error instanceof BridgeError && error.code === "invalid_request",
     );
     assert.equal(await readFile(path, "utf8"), before);
@@ -240,7 +351,7 @@ test("connection storage validates before atomically replacing the user file", a
       purpose: "implementation",
     });
     assert.notEqual(updated.revision, connection.revision);
-    await writeUserConnections([updated], path);
+    await writeUserConnections([updated], { path, expectedRevision: snapshot.revision });
     assert.deepEqual(await loadUserConnections(path), [updated]);
     assert.deepEqual(summarizeConnection(updated), {
       id: updated.id,
@@ -255,6 +366,296 @@ test("connection storage validates before atomically replacing the user file", a
       ).includes(updated.nativeContextRef),
     );
   } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("direct connection writes reject stale snapshots instead of replacing newer registrations", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-relay-connections-cas-"));
+  const path = join(root, "connections.json");
+  try {
+    const stale = await loadUserConnectionsSnapshot(path);
+    const first = createHarnessConnection({
+      id: "first",
+      harness: "connection-fixture",
+      nativeContextRef: "/private/first",
+    });
+    const second = createHarnessConnection({
+      id: "second",
+      harness: "connection-fixture",
+      nativeContextRef: "/private/second",
+    });
+    const latest = await writeUserConnections([first], {
+      path,
+      expectedRevision: stale.revision,
+    });
+    await assert.rejects(
+      writeUserConnections([second], { path, expectedRevision: stale.revision }),
+      (error: unknown) =>
+        error instanceof BridgeError && error.code === "connection_conflict" && error.retryable,
+    );
+    assert.deepEqual((await loadUserConnectionsSnapshot(path)).connections, [first]);
+    assert.notEqual(latest.revision, stale.revision);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("concurrent child-process mutations preserve both registrations", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-relay-connections-processes-"));
+  const path = join(root, "connections.json");
+  try {
+    await Promise.all([
+      spawnConnectionWriter(path, "writer-one"),
+      spawnConnectionWriter(path, "writer-two"),
+    ]);
+    const connections = await loadUserConnections(path);
+    assert.deepEqual(connections.map(({ id }) => id).sort(), ["writer-one", "writer-two"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("an abandoned writer lock fails within the bound and preserves existing registrations", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-relay-connections-abandoned-lock-"));
+  const path = join(root, "connections.json");
+  try {
+    await replaceConnections(
+      [
+        createHarnessConnection({
+          id: "preserved",
+          harness: "connection-fixture",
+          nativeContextRef: "/private/preserved",
+        }),
+      ],
+      path,
+    );
+    const before = await readFile(path, "utf8");
+    const pid = await spawnAbandonedConnectionLock(`${path}.lock`);
+    const startedAt = Date.now();
+    await assert.rejects(
+      mutateUserConnections((current) => ({ connections: [], result: current.length }), path),
+      (error: unknown) =>
+        error instanceof BridgeError &&
+        error.code === "connection_conflict" &&
+        error.retryable &&
+        error.message.includes(String(pid)),
+    );
+    assert.ok(Date.now() - startedAt < 7500, "lock wait exceeded the documented bound");
+    assert.equal(await readFile(path, "utf8"), before);
+    assert.ok((await readFile(`${path}.lock`, "utf8")).includes(String(pid)));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("identical registration mutations are idempotent and keep their snapshot revision", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-relay-connections-idempotent-"));
+  const path = join(root, "connections.json");
+  const connection = createHarnessConnection({
+    id: "repeatable",
+    harness: "connection-fixture",
+    nativeContextRef: "/private/repeatable",
+  });
+  try {
+    const registerIfMissing = async () =>
+      mutateUserConnections(
+        (current) => ({
+          connections: current.some(({ id }) => id === connection.id)
+            ? current
+            : [...current, connection],
+          result: connection,
+        }),
+        path,
+      );
+    const first = await registerIfMissing();
+    const second = await registerIfMissing();
+    assert.equal(second.snapshot.revision, first.snapshot.revision);
+    assert.deepEqual(second.snapshot.connections, [connection]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("broker, typed client, and MCP share safe connection management semantics", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-relay-connections-operations-"));
+  const configDirectory = join(root, "config");
+  const connectionsPath = join(configDirectory, "connections.json");
+  const contextOne = join(root, "native-one");
+  const contextTwo = join(root, "native-two");
+  await mkdir(contextOne, { mode: 0o700 });
+  await mkdir(contextTwo, { mode: 0o700 });
+  const adapter = new NativeContextFixtureAdapter();
+  const brokerPathsValue = {
+    ...brokerPaths(root),
+    socketPath: join(tmpdir(), `hrc-${randomUUID()}.sock`),
+  };
+  const broker = new Broker(brokerPathsValue, {
+    registry: new AdapterRegistry([adapter], {
+      catalogPath: join(configDirectory, "catalog.json"),
+      connectionsPath,
+    }),
+  });
+  await broker.initialize();
+  const brokerServer = new BrokerServer(
+    broker,
+    brokerPathsValue.socketPath,
+    brokerPathsValue.runtimeDirectory,
+  );
+  await brokerServer.start();
+  const client = createClient({ socketPath: brokerPathsValue.socketPath, autostart: false });
+  const mcp = new McpServer(async (operation, params) => broker.execute(operation, params));
+  try {
+    const discovery = await client.discoverConnections({ refresh: true });
+    assert.deepEqual(discovery.connections, []);
+    assert.ok(discovery.routes.some((route) => route.connectionId === undefined));
+    assert.ok(!JSON.stringify(discovery).includes(contextOne));
+
+    await assert.rejects(
+      client.prepareConnection({ id: "../escape", harness: "codex" }),
+      (error: unknown) => error instanceof BridgeError && error.code === "invalid_request",
+    );
+    await assert.rejects(
+      lstat(join(configDirectory, "native-contexts")),
+      (error: unknown) =>
+        typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT",
+    );
+
+    const registered = await client.registerConnection({
+      id: "analysis",
+      harness: "codex",
+      nativeContextRef: contextOne,
+      purpose: "analysis",
+    });
+    assert.equal(registered.readiness, "ready");
+    assert.ok(!JSON.stringify(registered).includes(contextOne));
+    const repeated = await client.registerConnection({
+      id: "analysis",
+      harness: "codex",
+      nativeContextRef: contextOne,
+      purpose: "analysis",
+    });
+    assert.equal(repeated.connection.revision, registered.connection.revision);
+
+    const list = await client.connections();
+    assert.deepEqual(
+      list.connections.map(({ id }) => id),
+      ["analysis"],
+    );
+    assert.ok(!JSON.stringify(list).includes(contextOne));
+    const inspection = await client.inspectConnection("analysis");
+    assert.equal(inspection.readiness, "ready");
+    assert.equal(inspection.userActionRequired, false);
+    assert.ok(!JSON.stringify(inspection).includes(contextOne));
+
+    await assert.rejects(
+      client.registerConnection({
+        id: "duplicate",
+        harness: "codex",
+        nativeContextRef: contextOne,
+      }),
+      (error: unknown) => error instanceof BridgeError && error.code === "connection_conflict",
+    );
+    const second = await client.registerConnection({
+      id: "implementation",
+      harness: "codex",
+      nativeContextRef: contextTwo,
+      purpose: "implementation",
+    });
+    await assert.rejects(
+      client.updateConnection({
+        id: "implementation",
+        expectedRevision: second.connection.revision,
+        nativeContextRef: contextOne,
+      }),
+      (error: unknown) => error instanceof BridgeError && error.code === "connection_conflict",
+    );
+
+    const updated = await client.updateConnection({
+      id: "analysis",
+      expectedRevision: registered.connection.revision,
+      purpose: "review",
+    });
+    assert.equal(updated.connection.purpose, "review");
+    assert.notEqual(updated.connection.revision, registered.connection.revision);
+    await assert.rejects(
+      client.removeConnection({ id: "analysis", expectedRevision: registered.connection.revision }),
+      (error: unknown) => error instanceof BridgeError && error.code === "connection_conflict",
+    );
+
+    const listed = JSON.parse(
+      (await mcp.handle(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/list",
+        }),
+      )) ?? "null",
+    ) as { result?: { tools?: ReadonlyArray<{ name: string }> } };
+    const tools = listed.result?.tools ?? [];
+    for (const name of [
+      "harness_relay_connection_discover",
+      "harness_relay_connection_list",
+      "harness_relay_connection_inspect",
+      "harness_relay_connection_register",
+      "harness_relay_connection_prepare",
+      "harness_relay_connection_update",
+      "harness_relay_connection_remove",
+    ]) {
+      assert.ok(
+        tools.some((tool) => tool.name === name),
+        `Missing MCP tool ${name}`,
+      );
+    }
+    const mcpPrepared = JSON.parse(
+      (await mcp.handle(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: 2,
+          method: "tools/call",
+          params: {
+            name: "harness_relay_connection_prepare",
+            arguments: { id: "prepared", harness: "codex", purpose: "analysis" },
+          },
+        }),
+      )) ?? "null",
+    ) as {
+      result?: { structuredContent?: ConnectionPrepareResult };
+    };
+    const prepared = mcpPrepared.result?.structuredContent;
+    assert.ok(prepared);
+    assert.equal(prepared.setup.login.executable, "codex");
+    assert.deepEqual(prepared.setup.login.args, ["login"]);
+    assert.equal(prepared.setup.login.env.CODEX_HOME, prepared.setup.contextPath);
+    assert.ok(!JSON.stringify(prepared.connection).includes(prepared.setup.contextPath));
+    const repeatedPrepare = await client.prepareConnection({
+      id: "prepared",
+      harness: "codex",
+      purpose: "analysis",
+    });
+    assert.equal(repeatedPrepare.connection.revision, prepared.connection.revision);
+    assert.equal(repeatedPrepare.setup.contextPath, prepared.setup.contextPath);
+
+    const refreshed = await client.discoverConnections({ refresh: true });
+    assert.ok(refreshed.routes.some((route) => route.connectionId === undefined));
+    assert.ok(refreshed.routes.some((route) => route.connectionId === "prepared"));
+    assert.ok(!JSON.stringify(refreshed).includes(prepared.setup.contextPath));
+
+    const removed = await client.removeConnection({
+      id: updated.connection.id,
+      expectedRevision: updated.connection.revision,
+    });
+    assert.equal(removed.removed, true);
+    await lstat(contextOne);
+    await lstat(contextTwo);
+    const afterRemove = await client.connections();
+    assert.deepEqual(afterRemove.connections.map(({ id }) => id).sort(), [
+      "implementation",
+      "prepared",
+    ]);
+  } finally {
+    await brokerServer.stop();
+    await broker.close();
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -300,7 +701,7 @@ test("connection routing keeps the default context and exposes no native referen
       const details = JSON.stringify(error.details);
       return details.includes(connection.id) && !details.includes(connection.nativeContextRef);
     });
-    await writeUserConnections([], connectionsPath);
+    await replaceConnections([], connectionsPath);
     await assert.rejects(
       registry.resolve(request(root, connection.id)),
       (error: unknown) => error instanceof BridgeError && error.code === "route_unavailable",
@@ -355,7 +756,7 @@ test("an invocation keeps its resolved connection snapshot after registration ch
       nativeContextRef: "/private/native/context-replaced",
       purpose: "implementation",
     });
-    await writeUserConnections([updated], connectionsPath);
+    await replaceConnections([updated], connectionsPath);
     adapter.releaseDiscovery();
     const started = await starting;
     await adapter.runStarted.promise;
@@ -369,7 +770,7 @@ test("an invocation keeps its resolved connection snapshot after registration ch
     );
     const metadata = await readFile(metadataPath, "utf8");
     assert.ok(!metadata.includes(connection.nativeContextRef));
-    await writeUserConnections([], connectionsPath);
+    await replaceConnections([], connectionsPath);
 
     adapter.releaseRun();
     const terminal = await waitForTerminal(broker, started.invocationId);
@@ -437,7 +838,7 @@ test("continuation reuses only the original connection revision and rejects repl
       nativeContextRef: "/private/native/context-replacement",
       purpose: "implementation",
     });
-    await writeUserConnections([replacement], connectionsPath);
+    await replaceConnections([replacement], connectionsPath);
     await assert.rejects(
       broker.execute("invocation.continue", {
         invocationId: started.invocationId,
@@ -447,7 +848,7 @@ test("continuation reuses only the original connection revision and rejects repl
       (error: unknown) =>
         error instanceof BridgeError && error.code === "continuation_route_changed",
     );
-    await writeUserConnections([], connectionsPath);
+    await replaceConnections([], connectionsPath);
     await assert.rejects(
       broker.execute("invocation.continue", {
         invocationId: started.invocationId,

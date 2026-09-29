@@ -10,6 +10,13 @@ command that needs a broker starts the user-owned daemon automatically.
 | ---------------------------------------- | ------------------------------------------------------------------------------------------ |
 | `describe`                               | Contract, operation, broker, and retention metadata                                        |
 | `routes [--connection <id>] [--refresh]` | Qualified route discovery across default and named connections; optional connection filter |
+| `connections discover`                   | Refresh default/named routes and list redacted registrations                               |
+| `connections list`                       | List connection IDs, harnesses, purpose labels, and revisions                              |
+| `connections inspect <id>`               | Refresh readiness evidence for one registration                                            |
+| `connections register`                   | Register an existing native context                                                        |
+| `connections prepare`                    | Create a private native context and return structured user-login instructions              |
+| `connections update <id>`                | Update a registration with an expected revision                                            |
+| `connections remove <id>`                | Remove a registration without deleting native files                                        |
 | `start`                                  | Start one asynchronous invocation and print its ID                                         |
 | `run`                                    | Start, follow, and return one invocation result                                            |
 | `list`                                   | List retained invocation summaries                                                         |
@@ -49,6 +56,44 @@ Other start options are `--effort`, `--via`, `--connection`, repeatable `--capab
 JSON mode, followed by the complete outcome. It exits zero only for
 `succeeded`; SIGINT requests cancellation before returning. The equivalent
 programmatic convenience is `createClient().run(request)`.
+
+## Managing native connections
+
+Use the same operations from the CLI, MCP, or typed client. Omit
+`--connection` on `start`/`run` to preserve the native default login. A
+connection label and route readiness do not establish which account is
+authenticated.
+
+```sh
+harness-relay connections discover --refresh --json
+harness-relay connections list --json
+harness-relay connections register --id analysis --harness codex \
+  --native-context "$HOME/.codex" --purpose analysis --json
+harness-relay connections inspect analysis --json
+harness-relay start --provider openai --model gpt-5.5 --via codex \
+  --connection analysis --cwd "$PWD" --text "Review this change" --json
+```
+
+To prepare a separate context, run:
+
+```sh
+harness-relay connections prepare --id implementation --harness codex --json
+```
+
+(or use `claude`). The explicit prepare
+response contains `setup.contextPath` and a structured native login instruction
+with `executable`, `args`, and `env`. Relay creates the empty private
+directory, but does not launch authentication; run the native login yourself
+with the returned environment, then inspect the connection. The setup response
+is the only routine connection view that includes this private path. Do not
+paste credentials into Relay.
+
+Updates and removals require the revision returned by list/inspect. A stale
+revision returns `connection_conflict`; list again before retrying. Removal
+deletes only the registration, leaving native context files and credentials in
+place. Store writes serialize across processes with a bounded lock wait; if a
+writer exits while holding a lock, Relay reports the owner PID and does not
+guess whether it is safe to remove the lock.
 
 `answer <id> --request-id <request> --text <answer>` responds to a general
 delegate question. Permission requests remain allow/deny-only through

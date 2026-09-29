@@ -1,6 +1,6 @@
 # ADR-0024: Keep multiple harness accounts user-scoped without automatic fallback
 
-- **Status:** Accepted design for the next increment; not yet implemented
+- **Status:** Accepted; initial implementation shipped, real multi-account qualification pending
 - **Date:** 2026-09-28
 
 The next increment supports multiple selectable harness connections, configured
@@ -31,5 +31,15 @@ must qualify the native override mechanism before claiming support.
 Assisted setup supports both registering existing native contexts and preparing
 separate contexts for additional accounts. The user authenticates through the
 native harness; Relay does not copy credentials or perform a global account
-switch. The configuration management interface remains to be specified. This
-decision does not change the currently published request schema.
+switch.
+
+The initial management surface includes discover, list, inspect, register,
+prepare, update, and remove operations through the broker, CLI, MCP, and typed
+client. Additive connection fields and operations remain under schema and
+operations version `1.0`. Registrations are written atomically with a bounded
+cross-process lock and expected-revision checks. Prepared contexts are empty
+private directories; the user completes authentication through the native
+harness. The implementation does not copy credentials or change the default
+login. Fixture and source-isolation tests cover the management behavior, while
+qualification with two real authenticated accounts remains open and is not
+claimed here.
