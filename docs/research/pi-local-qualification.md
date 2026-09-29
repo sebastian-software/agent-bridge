@@ -2,12 +2,15 @@
 
 Date: 2026-09-29. Decision: [ADR-0025](../adr/0025-direct-local-model-access.md).
 
-Pi is the selected full agent runtime for the planned local-model routes.
-This initial spike validates the installed SDK and its built-in tools against
-a controlled local OpenAI-compatible streaming endpoint. It does not qualify
-an Ollama or LM Studio route for production.
+The internal Pi 0.87.1 worker now satisfies the worker/runtime portion of #149:
+it reuses Pi's full coding-agent SDK in a Relay-supervised process and has
+scripted-SDK coverage for lifecycle, policy boundaries, configuration, and
+private session continuation. The adapter remains absent from the default
+registry and discovers no routes. This evidence does not qualify an Ollama or
+LM Studio route; those are tracked in #150 and #151. Active dialogue and live
+continuation qualification remain in #153.
 
-## Reproduce
+## Reproduce the standalone SDK probe
 
 The standalone [qualification package](../../scripts/pi-qualification/README.md)
 pins `@earendil-works/pi-coding-agent` to 0.87.1 with its own lockfile.
@@ -22,6 +25,12 @@ The observed run used Node 24.21.0 and pnpm 11.24.0. Pi requires Node >=22.19.0.
 The package is separate from Relay's dependencies, default test suite, build,
 and published files. It does not register a new adapter or change the wire
 contract. The probe uses POSIX shell commands and has only been run on macOS.
+
+The probe is deliberately retained as an opt-in SDK-upgrade and direct-steering
+compatibility check. Relay's worker tests cover the supervised adapter
+boundary; this probe still exercises Pi's native steering during inference and
+tool execution, which the private adapter does not expose. Run it explicitly
+when changing the probe or upgrading the pinned Pi release.
 
 The runner starts a child process with an isolated temporary home and a minimal
 environment, before importing Pi. It injects a resource loader without plugins,
@@ -48,10 +57,11 @@ uses no provider account. Temporary files are removed afterward.
 | Worker and host loss      | Killing the Pi worker during Bash fails the invocation while preserving streamed partial text and identity; killing a separate host process during Bash closes the worker and its shell descendant. |
 | Explicit defaults         | Every model request uses the explicitly configured model despite conflicting isolated settings; the settings file remains unchanged.                                                                |
 
-These observations support proceeding with the Pi adapter. They do not establish
-model competence, performance, OS sandbox enforcement, arbitrary process-tree
-cleanup, cross-account isolation, or support outside the POSIX macOS fixture
-environment used for the lifecycle tests.
+The standalone probe itself has only been run on macOS. The production worker
+suite runs in CI on Linux and macOS with Node 22.x and 24.x; the worker requires
+Node >=22.19.0 and rejects Windows because it depends on supervised POSIX
+process groups. These bounded fixtures do not establish model competence,
+performance, general process-tree cleanup, or OS sandbox enforcement.
 
 ## Private worker implementation
 
@@ -82,9 +92,9 @@ The worker explicitly passes empty system-prompt overrides to Pi's resource
 loader, which prevents project and global `SYSTEM.md` and `APPEND_SYSTEM.md`
 files from being discovered; Pi still supplies its built-in coding-agent
 prompt. Extensions, skills, prompt templates, themes, and project context files
-are disabled. Requested policies the worker cannot enforce are rejected. This
-process supervision is not an OS sandbox and does not support `workspace-write`
-or `network=deny` enforcement.
+are disabled. The worker reports `assurance=none` and `sandbox=none`, and rejects
+policy requests it cannot enforce, including `workspace-write` and `network=deny`.
+Process supervision does not provide filesystem or network sandbox enforcement.
 
 The worker rejects Pi's leading `!` shell-command configuration values in
 `auth.json` API-key credentials, `models.json` provider API keys and headers,
@@ -121,38 +131,24 @@ whole root. A handle from a previous process is unavailable and Relay rejects it
 rather than reopening the file without its original binding. An unclean process
 exit can leave temporary files for the operating system to clean up.
 
-## Integration consequences
+## Remaining qualifications
 
-- Evaluate assistant stop reasons and errors before producing Relay's terminal
-  outcome. A resolved `prompt()` must not become unconditional success.
-- Use the actual settled boundary and preserve partial events. Relay still needs
-  an explicit adapter contract for cancellation and queued-message delivery.
-- Keep retry and model/account fallback under the caller's control. This probe
-  disables Pi retries; it does not implement recovery in Relay.
-- Use the full coding-agent SDK. Lower-level Pi packages do not supply the
-  complete coding harness required by the decision.
-- Preserve explicit configuration and resource loading. Default SDK discovery
-  is not evidence that a selected Relay connection is isolated.
-- A managed process helps own runtime lifecycle; it is not an OS sandbox.
-  Permission hooks and Relay's requested policy still need qualified mapping.
-- Account for Pi's Node minimum before shipping. The SDK distribution includes
-  UI-related dependencies even when it presents no UI; there is no measured
-  startup or memory advantage over the alternatives.
+The worker acceptance for #149 is complete within the tested platform and
+assurance limits above. The following work is separate; the scripted endpoint
+and private adapter do not imply that a local model route is ready:
 
-## Remaining release gates
-
-1. Exercise actual local inference independently through Ollama and LM Studio:
-   discovery, explicit model selection, streamed tool calls, model limitations,
-   server failure, and cancellation. The fixture cannot establish compatibility.
-2. Qualify local endpoint/model configuration and expose a ready route only
-   after the live Ollama and LM Studio paths pass their qualification suites.
-3. Qualify production policy enforcement, resource and credential isolation,
-   parent-loss behavior, and supported platforms; process supervision alone is
-   not an OS sandbox.
-4. Qualify persistent continuation against actual local inference and verify
-   orderly cleanup and crash behavior for private native session files. The
-   scripted SDK fixture does not establish local-model compatibility or crash
-   recovery.
+- [#150](https://github.com/sebastian-software/harness-relay/issues/150) covers
+  Ollama endpoint/model discovery and explicit routing, then live local
+  inference, tool use, streaming, server failure, cancellation, and model
+  limitations.
+- [#151](https://github.com/sebastian-software/harness-relay/issues/151) covers
+  LM Studio independently. An OpenAI-compatible API or loopback address alone
+  does not establish local inference.
+- [#153](https://github.com/sebastian-software/harness-relay/issues/153) covers
+  dialogue capabilities across Pi and the other supported harnesses. Scripted
+  tests already cover retained-session continuation and binding; active
+  steering, correlated questions and answers, progress, dialogue races, and
+  continuation with live local inference remain unqualified.
 
 On the observed machine, Ollama responds at `127.0.0.1:11434`, but `/api/tags`
 contains no models. Nothing listens at the conventional LM Studio port
