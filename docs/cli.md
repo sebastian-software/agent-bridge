@@ -47,7 +47,7 @@ harness-relay run --provider anthropic --model opus --interaction deny \
   "Summarize this workspace"
 ```
 
-Other start options are `--effort`, `--via`, `--connection`, repeatable `--capability`,
+Other start options are `--effort`, `--via`, `--connection`, `--runtime`, repeatable `--capability`,
 `--timeout-ms`, `--interaction`, `--minimum-assurance`,
 `--filesystem`, `--commands`, `--network`, repeatable `--add-dir`,
 `--evidence`, `--idempotency-key`, and `--correlation-id`.
@@ -56,6 +56,20 @@ Other start options are `--effort`, `--via`, `--connection`, repeatable `--capab
 JSON mode, followed by the complete outcome. It exits zero only for
 `succeeded`; SIGINT requests cancellation before returning. The equivalent
 programmatic convenience is `createClient().run(request)`.
+
+## Selecting a local model
+
+Configure user-global `localRuntimes` in `config.json`, then run
+`harness-relay routes --refresh --json`. A local route uses `--via pi` and
+`--runtime <profile-id>`; copy its exact `--provider` and `--model` values from
+discovery. A model vendor may be `unknown`; the inference server is not the
+provider. The runtime selector disambiguates servers exposing the same model.
+No match or multiple matches produce an explicit error without fallback.
+
+Ollama models with reported local tool support can execute through the embedded
+Pi worker. LM Studio currently provides discovery and diagnostics; its local
+execution remains unqualified. See [local model setup](local-models.md) for
+configuration, prerequisites, policy limits, and a complete command.
 
 ## Managing native connections
 

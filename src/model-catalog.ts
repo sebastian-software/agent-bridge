@@ -169,9 +169,15 @@ function userEvidence(
   adapterId: string,
   modelId: string,
   nativeModel: string,
+  runtimeId?: string,
+  runtimeRevision?: string,
 ): QualificationEvidence {
+  const runtimeSuffix =
+    runtimeId === undefined
+      ? ""
+      : `:runtime:${runtimeId}${runtimeRevision === undefined ? "" : `@${runtimeRevision}`}`;
   return {
-    qualificationId: `user-declared:${adapterId}:${modelId}`,
+    qualificationId: `user-declared:${adapterId}${runtimeSuffix}:${modelId}`,
     testedAt: new Date().toISOString(),
     claim: `User-declared model ${modelId} maps to native model ${nativeModel}; runtime support is not independently qualified.`,
   };
@@ -188,9 +194,13 @@ function routeWithModel(
     route.connectionId === undefined || route.connectionRevision === undefined
       ? ""
       : `:connection:${route.connectionId}@${route.connectionRevision}`;
+  const routeId =
+    route.runtimeId === undefined
+      ? `${route.adapter}:${model}${connectionSuffix}`
+      : `${route.routeId}:alias:${encodeURIComponent(model)}`;
   return {
     ...route,
-    routeId: `${route.adapter}:${model}${connectionSuffix}`,
+    routeId,
     model,
     canonicalModel,
     ...(catalog?.nativeModel === undefined ? {} : { nativeModel: catalog.nativeModel }),
@@ -201,7 +211,13 @@ function routeWithModel(
       : { interactionStrategies: catalog.interactionStrategies }),
     qualification: [
       ...route.qualification,
-      userEvidence(adapterId, model, catalog?.nativeModel ?? canonicalModel),
+      userEvidence(
+        adapterId,
+        model,
+        catalog?.nativeModel ?? canonicalModel,
+        route.runtimeId,
+        route.runtimeRevision,
+      ),
     ],
   };
 }
@@ -213,19 +229,30 @@ export function applyUserModelCatalog(
   const result = [...routes];
   for (const [adapterId, adapterCatalog] of Object.entries(catalog.adapters ?? {})) {
     const adapterRoutes = routes.filter((route) => route.adapter === adapterId);
-    const groups = new Map<string | undefined, RouteDescriptor[]>();
+    const groups = new Map<string, RouteDescriptor[]>();
     for (const route of adapterRoutes) {
-      const group = groups.get(route.connectionId) ?? [];
+      const groupKey = JSON.stringify([
+        route.connectionId,
+        route.runtimeId,
+        route.runtimeRevision,
+        route.inferenceServer,
+      ]);
+      const group = groups.get(groupKey) ?? [];
       group.push(route);
-      groups.set(route.connectionId, group);
+      groups.set(groupKey, group);
     }
 
-    for (const [connectionId, group] of groups) {
+    for (const group of groups.values()) {
+      const connectionId = group[0]?.connectionId;
+      const runtimeId = group[0]?.runtimeId;
+      const runtimeRevision = group[0]?.runtimeRevision;
       const hasModel = (modelId: string): boolean =>
         result.some(
           (route) =>
             route.adapter === adapterId &&
             route.connectionId === connectionId &&
+            route.runtimeId === runtimeId &&
+            route.runtimeRevision === runtimeRevision &&
             route.model === modelId,
         );
       for (const [alias, target] of Object.entries(adapterCatalog.aliases ?? {})) {
@@ -245,7 +272,7 @@ export function applyUserModelCatalog(
         }
       }
       const template = group[0];
-      if (template === undefined) {
+      if (template === undefined || template.runtimeId !== undefined) {
         continue;
       }
       for (const [modelId, definition] of Object.entries(adapterCatalog.models ?? {})) {

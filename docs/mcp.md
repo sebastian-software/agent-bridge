@@ -33,7 +33,9 @@ args = ["mcp", "serve"]
    credentials. Only the explicit prepare result includes the new context path.
 4. Call `harness_relay_invocation_start` with an absolute working directory,
    the smallest required policy, and optional `selector.connectionId`. Omitting
-   the selector preserves the harness's normal native login.
+   the connection selector preserves the harness's normal native login. For
+   local models, use `selector.via: "pi"` and `selector.runtimeId` with the exact
+   provider/model values returned by discovery.
 5. Follow progress with `harness_relay_invocation_events` using the returned
    cursors. Answer pending permission requests with
    `harness_relay_invocation_respond`; answer general delegate questions with
@@ -67,3 +69,9 @@ The repository also carries an integration test that starts `harness-relay mcp
 serve` as a child process and drives it with the official MCP SDK client over
 stdio. It covers initialization, tool discovery, schema-backed calls, visible
 bridge errors, and a complete fake invocation lifecycle.
+
+Local model profiles are user-global configuration, separate from native
+account registrations. MCP uses the same `selector.runtimeId` as the typed
+client and CLI's `--runtime`; it does not install models or start inference
+servers. See [local model setup](local-models.md) for Ollama execution and the
+current LM Studio discovery limitation.

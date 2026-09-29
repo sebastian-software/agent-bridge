@@ -45,6 +45,17 @@ registration snapshot used for resolution. The native context reference stays
 inside the broker and qualified adapter. Route resolution never silently
 substitutes the requested model, effort, harness, or connection.
 
+Optional `selector.runtimeId` selects one configured local model server. It is
+independent of the native account selector. Local routes keep `provider` as the
+model vendor (`unknown` when unestablished), `via`/`adapter` as `pi`, and
+`inferenceServer` as `ollama` or `lm-studio`. `modelVendorEvidence` qualifies the
+vendor claim. `runtimeId`, `runtimeRevision`, and any `modelDigest` or
+`runtimeInstanceId` remain in the resolved route and persisted invocation
+metadata. Discovery and preflight bind the exact model snapshot; a stale route
+fails instead of silently adopting refreshed metadata. Catalog aliases may
+name an existing local model but cannot synthesize an executable local route.
+See [local model setup](local-models.md) for readiness and assurance limits.
+
 Connection management operations share the same broker API across IPC, the
 typed client, CLI, and MCP. `connection.discover` includes default and named
 route observations plus redacted registration summaries; `connection.list`
@@ -121,9 +132,13 @@ text-only native steering through `AgentSession.steer(text)` and returns its
 delivery ACK only after the SDK accepts the message into its queue. Pinned-SDK
 integration tests cover FIFO delivery across a running shell command and the
 following model requests. This does not establish model consumption or qualify
-a live local inference route. The private adapter does not make Pi available
-through the default route registry; other native adapters remain unsupported
-until individually qualified.
+a live local model. Configured local Pi routes expose the supported worker
+capabilities through the default registry. Only ready Ollama routes advertise
+text-only `steering`; a combined wrapper/SDK fixture covers early input,
+profile removal during an active run, the native SDK acknowledgement, and the
+following model requests. This does not establish model consumption or live
+model competence. The current Claude and Codex adapters do not implement
+native steering. See [local model setup](local-models.md).
 
 `invocation.continue` is a separate operation that creates a new invocation
 linked by `continuedFrom`; it never changes the predecessor's terminal outcome.
@@ -134,12 +149,10 @@ continuing, the broker freshly resolves the original request and rejects a
 changed or ambiguous route, requested effort/strategy, account revision, or
 effective policy. Missing or expired native handles and routes without the
 continuation capability fail explicitly; the broker does not restart without
-the retained session or fall back to a different route. The fake fixture
-exercises linked continuation. Pi's pinned SDK worker also covers persisted
-session branching in scripted integration tests; this does not qualify live
-local inference or make the private adapter available through the default
-route registry. Other native adapters remain unsupported until individually
-qualified.
+the retained session or fall back to a different route. Ready local Pi routes
+advertise native continuation; the current Claude and Codex adapters do not.
+Scripted Pi SDK fixtures verify the retained-session boundary; live local-model
+qualification remains separate.
 
 ## Outcomes
 

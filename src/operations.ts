@@ -230,6 +230,7 @@ export const OPERATION_DEFINITIONS: readonly OperationDefinition[] = [
             effort: { type: "string", minLength: 1 },
             via: { type: "string", minLength: 1 },
             connectionId: { type: "string", minLength: 1 },
+            runtimeId: { type: "string", minLength: 1 },
             requiredCapabilities: { type: "array", items: { type: "string", minLength: 1 } },
             minimumObservedEvidence: {
               enum: ["unverified", "inferred", "reported", "verified"],

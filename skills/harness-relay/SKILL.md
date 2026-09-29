@@ -35,7 +35,13 @@ constraints, interprets the result, and makes the final decision.
    assurance, and other user preferences. When those choices are absent,
    select an appropriate qualified route and effort for the task. An explicit
    route that is unavailable or ambiguous is a visible resolution failure;
-   never silently substitute another model, effort, or harness.
+   never silently substitute another model, effort, or harness. For local
+   routes, preserve the discovered `runtimeId` (`--runtime` in the CLI) to
+   identify the inference server, and copy the exact provider/model values.
+   The model vendor may be `unknown`; Ollama and LM Studio are inference
+   servers, while Pi is the harness. Local inference does not imply offline
+   tools or sandboxed filesystem access. A route reporting `assurance: none`
+   cannot satisfy a task requiring enforced isolation.
 
 4. Start the bounded invocation using the CLI's documented `run` flow (or
    `start`, `events`, and `result` when progress must be handled separately).

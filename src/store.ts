@@ -153,6 +153,26 @@ function parseResolvedRoute(value: unknown, field: string): ResolvedRoute {
     source.connectionRevision,
     `${field}.connectionRevision`,
   );
+  const runtimeId = optionalString(source.runtimeId, `${field}.runtimeId`);
+  const runtimeRevision = optionalString(source.runtimeRevision, `${field}.runtimeRevision`);
+  const inferenceServer =
+    source.inferenceServer === undefined
+      ? undefined
+      : literal(source.inferenceServer, `${field}.inferenceServer`, [
+          "lm-studio",
+          "ollama",
+        ] as const);
+  const modelDigest = optionalString(source.modelDigest, `${field}.modelDigest`);
+  const runtimeInstanceId = optionalString(source.runtimeInstanceId, `${field}.runtimeInstanceId`);
+  const modelVendorEvidence =
+    source.modelVendorEvidence === undefined
+      ? undefined
+      : literal<EvidenceStatus>(source.modelVendorEvidence, `${field}.modelVendorEvidence`, [
+          "unverified",
+          "inferred",
+          "reported",
+          "verified",
+        ]);
   return {
     routeId: requiredString(source.routeId, `${field}.routeId`),
     ...(executable === undefined ? {} : { executable }),
@@ -167,6 +187,12 @@ function parseResolvedRoute(value: unknown, field: string): ResolvedRoute {
     via: requiredString(source.via, `${field}.via`),
     ...(connectionId === undefined ? {} : { connectionId }),
     ...(connectionRevision === undefined ? {} : { connectionRevision }),
+    ...(runtimeId === undefined ? {} : { runtimeId }),
+    ...(runtimeRevision === undefined ? {} : { runtimeRevision }),
+    ...(inferenceServer === undefined ? {} : { inferenceServer }),
+    ...(modelDigest === undefined ? {} : { modelDigest }),
+    ...(runtimeInstanceId === undefined ? {} : { runtimeInstanceId }),
+    ...(modelVendorEvidence === undefined ? {} : { modelVendorEvidence }),
     capabilities: stringList(source.capabilities, `${field}.capabilities`),
     qualification: parseQualification(source.qualification, `${field}.qualification`),
   };
