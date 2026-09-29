@@ -26,9 +26,11 @@ running command; cancellation remains a separate operation. Broker acceptance
 and observed native delivery are separate evidence, and neither implies that
 the model has acted on the instruction. This delivery policy was clarified on
 2026-09-28. The broker operations were implemented on 2026-09-29 with
-deterministic fake-harness coverage. Native adapters remain unqualified for
-steering and continuation until their native behavior is tested and advertised
-individually.
+deterministic fake-harness coverage. The Pi 0.87.1 worker's native text
+steering and persisted-session continuation now have scripted integration
+coverage against the pinned SDK. This qualifies the worker boundary, not model
+consumption or a live local inference route. Other native adapters remain
+unqualified until their native behavior is tested and advertised individually.
 
 After an invocation reaches a terminal state, its outcome is immutable.
 `invocation.continue` creates a new invocation with a new identity, links it to

@@ -1,5 +1,6 @@
 import type {
   ModelRuntime,
+  AgentSession as PiAgentSession,
   SessionManager as PiSessionManager,
 } from "@earendil-works/pi-coding-agent";
 
@@ -20,6 +21,9 @@ import {
   type PiRuntimeConfigurationFailureCode,
 } from "./pi-config-guard.js";
 import {
+  MAX_PI_PENDING_STEERING_BYTES,
+  MAX_PI_PENDING_STEERING_INPUTS,
+  MAX_PI_STEERING_INPUT_BYTES,
   MAX_PI_TEXT_FRAME_BYTES,
   MAX_PI_WORKER_EVENT_BYTES,
   MAX_PI_WORKER_MESSAGE_BYTES,
@@ -1039,20 +1043,53 @@ async function runPiWorker(): Promise<void> {
   const input = readBoundedLines(process.stdin, MAX_PI_WORKER_MESSAGE_BYTES);
   const pending = new Map<string, PendingAck>();
   let start: PiWorkerStart | undefined;
-  let session: { abort: () => Promise<void> } | undefined;
+  let session: Pick<PiAgentSession, "abort" | "isStreaming" | "steer"> | undefined;
   let settled = false;
   let cancellationRequested = false;
   let controlClosed = false;
   let terminalWritten = false;
+  let settlingSent = false;
   let eventFailure: Error | undefined;
   let sdkVerified = false;
   let assertAuthHealthy: (() => void) | undefined;
   let streamedAssistantBytes = 0;
   let identity: ObservedIdentity | undefined;
+  let steeringPendingBytes = 0;
+  let finishRequested = false;
+  let controlTaskStarted = false;
+  let steeringReady = false;
+  let steeringChain = Promise.resolve();
+  const steeringInputs = new Map<string, number>();
+  const steeringReadyGate = deferred();
+  const finishGate = deferred();
+  void steeringReadyGate.promise.catch(() => {});
+  void finishGate.promise.catch(() => {});
   let resolveSettled: (() => void) | undefined;
   const settledPromise = new Promise<void>((resolvePromise) => {
     resolveSettled = resolvePromise;
   });
+  const acknowledgeSteering = async (
+    inputId: string,
+    accepted: boolean,
+    message?: string,
+  ): Promise<void> => {
+    await output.enqueue({
+      type: "steer_ack",
+      inputId,
+      accepted,
+      ...(message === undefined ? {} : { message: message.slice(0, 256) }),
+    });
+  };
+  const waitForHostFinish = async (): Promise<void> => {
+    if (!settlingSent) {
+      settlingSent = true;
+      await output.enqueue({ type: "settling" });
+    }
+    if (controlTaskStarted && !controlClosed) {
+      await finishGate.promise;
+      await steeringChain;
+    }
+  };
   const assistantMessages: unknown[] = [];
   const toolArguments = new Map<string, { readonly name: string; readonly args: unknown }>();
 
@@ -1064,6 +1101,11 @@ async function runPiWorker(): Promise<void> {
   };
   const abortSession = (): void => {
     cancellationRequested = true;
+    if (!steeringReady) {
+      steeringReadyGate.reject(
+        new Error("Pi stopped before its native steering boundary was ready."),
+      );
+    }
     void session?.abort().catch(() => {});
   };
   output.setFailureHandler((error) => {
@@ -1111,6 +1153,52 @@ async function runPiWorker(): Promise<void> {
           abortSession();
           continue;
         }
+        if (control.type === "finish") {
+          if (finishRequested) {
+            throw new Error("Pi worker received a duplicate finish control.");
+          }
+          finishRequested = true;
+          void steeringChain.then(finishGate.resolve, finishGate.reject);
+          continue;
+        }
+        if (control.type === "steer") {
+          const bytes = Buffer.byteLength(control.text, "utf8");
+          if (
+            finishRequested ||
+            steeringInputs.has(control.inputId) ||
+            steeringInputs.size >= MAX_PI_PENDING_STEERING_INPUTS ||
+            steeringPendingBytes + bytes > MAX_PI_PENDING_STEERING_BYTES ||
+            bytes > MAX_PI_STEERING_INPUT_BYTES
+          ) {
+            throw new Error("Pi worker received an invalid or over-capacity steering control.");
+          }
+          const wasActive = !settled && !cancellationRequested && !controlClosed;
+          steeringInputs.set(control.inputId, bytes);
+          steeringPendingBytes += bytes;
+          const next = steeringChain.then(async () => {
+            let accepted = false;
+            let message: string | undefined;
+            try {
+              await steeringReadyGate.promise;
+              if (!wasActive || cancellationRequested || controlClosed) {
+                throw new Error("Pi was no longer running when the input reached the SDK.");
+              }
+              if (!session?.isStreaming) {
+                throw new Error("Pi had no active turn for native steering.");
+              }
+              await session.steer(control.text);
+              accepted = true;
+            } catch (error) {
+              message = error instanceof Error ? error.message : String(error);
+            } finally {
+              steeringInputs.delete(control.inputId);
+              steeringPendingBytes -= bytes;
+            }
+            await acknowledgeSteering(control.inputId, accepted, message);
+          });
+          steeringChain = next;
+          continue;
+        }
         if (control.type === "start") {
           throw new Error("Pi worker received a second start message.");
         }
@@ -1124,12 +1212,22 @@ async function runPiWorker(): Promise<void> {
       }
       controlClosed = true;
       rejectPending(new Error("Pi worker control channel closed."));
+      if (!finishRequested) {
+        const failure = new Error("Pi worker control channel closed before the finish handshake.");
+        eventFailure = failure;
+        finishGate.reject(failure);
+      }
       if (!settled) {
         abortSession();
       }
     })();
+    controlTaskStarted = true;
     void controlTask.catch((error: unknown) => {
-      eventFailure = error instanceof Error ? error : new Error(String(error));
+      const failure = error instanceof Error ? error : new Error(String(error));
+      eventFailure = failure;
+      controlClosed = true;
+      rejectPending(failure);
+      finishGate.reject(failure);
       abortSession();
     });
 
@@ -1234,8 +1332,18 @@ async function runPiWorker(): Promise<void> {
     }
 
     created.session.subscribe((event) => {
+      if (event.type === "agent_start") {
+        steeringReady = true;
+        steeringReadyGate.resolve();
+        return;
+      }
       if (event.type === "agent_settled") {
         settled = true;
+        if (!steeringReady) {
+          steeringReadyGate.reject(
+            new Error("Pi settled before its native steering boundary became ready."),
+          );
+        }
         resolveSettled?.();
         return;
       }
@@ -1318,8 +1426,10 @@ async function runPiWorker(): Promise<void> {
         data: { phase: "session_started", protocolVersion: PI_WORKER_PROTOCOL_VERSION },
       },
     });
-    await created.session.prompt(workerStart.prompt, { expandPromptTemplates: false });
+    const promptRun = created.session.prompt(workerStart.prompt, { expandPromptTemplates: false });
+    await promptRun;
     await settledPromise;
+    await steeringChain;
     await output.drain();
     guardedAuth.assertHealthy();
     if (eventFailure !== undefined) {
@@ -1370,6 +1480,8 @@ async function runPiWorker(): Promise<void> {
       };
       await output.enqueue({ type: "session", session: checkpoint });
     }
+    await waitForHostFinish();
+    await output.drain();
     terminalWritten = true;
     const usage = usageFromMessages(assistantMessages);
     await writeTerminal(output, workerStart, "succeeded", undefined, {
@@ -1378,6 +1490,9 @@ async function runPiWorker(): Promise<void> {
       stopReason: lastAssistant.stopReason,
     });
   } catch (error) {
+    if (!steeringReady) {
+      steeringReadyGate.reject(error instanceof Error ? error : new Error(String(error)));
+    }
     if (!terminalWritten) {
       let failure = error;
       try {
@@ -1385,9 +1500,19 @@ async function runPiWorker(): Promise<void> {
       } catch (error) {
         failure = error;
       }
-      const message = failure instanceof Error ? failure.message : String(failure);
       try {
+        try {
+          await waitForHostFinish();
+        } catch (error) {
+          failure = eventFailure ?? error;
+        }
+        try {
+          await steeringChain;
+        } catch (error) {
+          failure = eventFailure ?? error;
+        }
         await output.drain();
+        const message = failure instanceof Error ? failure.message : String(failure);
         const lastMessage = assistantMessages.at(-1);
         const usage = usageFromMessages(assistantMessages);
         await writeTerminal(

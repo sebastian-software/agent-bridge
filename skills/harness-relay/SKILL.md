@@ -64,3 +64,44 @@ constraints, interprets the result, and makes the final decision.
    missing results, and validation performed. Say which delegation contributed
    to the result. The caller or user decides what to keep, revise, retry, or
    discard.
+
+## Communicating with the delegate
+
+Discover capabilities on the exact CLI or MCP server before using dialogue
+operations. A harness supporting them natively is not enough: the selected
+Relay route must advertise the capability. Keep the initial invocation ID.
+
+For a route advertising `steering`, send a bounded additional instruction with
+an invocation-scoped idempotency key:
+
+```sh
+harness-relay send <invocation-id> \
+  --idempotency-key add-regression-case-1 \
+  --text "Also cover the empty-input case." --json
+```
+
+Use the same executable prefix validated during bootstrap. Follow invocation
+events after sending. `input_accepted` means the broker recorded the request;
+`input_delivered` means the native session acknowledged its boundary. Neither
+proves that the model followed the instruction. A pending, failed, or expired
+delivery must remain visible. Reuse the same key and identical content when
+retrying the send; a different key creates another instruction. Sending does
+not interrupt a running tool. Use explicit cancellation to stop the invocation.
+
+After completion, use `continue` only when the route advertises `continuation`
+and a retained native session is available:
+
+```sh
+harness-relay continue <invocation-id> \
+  --idempotency-key review-completed-change-1 \
+  --text "Review the change you just made and report remaining risks." --json
+```
+
+Track the returned new invocation ID and its own outcome. A missing, expired,
+or changed native session is an explicit failure; do not silently replace it
+with a new conversation. The caller decides whether to start fresh.
+
+Answer a correlated general question through `invocation.answer`, using the
+request ID from its `input_required` event. Permission requests use
+`invocation.respond` with `allow` or `deny`. Do not infer question requests from
+ordinary assistant prose or treat permission approval as a general answer.

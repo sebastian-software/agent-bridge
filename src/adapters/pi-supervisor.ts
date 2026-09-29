@@ -6,6 +6,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 
 import type { ContentPart, ObservedIdentity, Usage, WorkspaceEffect } from "../contract.js";
+import type { PiSteeringPort } from "./pi-steering.js";
 import type { AdapterRunContext, AdapterRunResult } from "./types.js";
 
 import { BridgeError } from "../errors.js";
@@ -206,12 +207,14 @@ export async function runPiWorkerSession(
   context: AdapterRunContext,
   configuration: PiRuntimeConfiguration,
   session: PiWorkerSessionRequest,
+  steeringPort?: PiSteeringPort,
 ): Promise<PiWorkerSessionRun> {
   const run = await supervisePiWorkerInternal(
     context,
     configuration,
     fileURLToPath(new URL("pi-worker.js", import.meta.url)),
     session,
+    steeringPort,
   );
   if (run.session === undefined) {
     throw new BridgeError({
@@ -238,6 +241,7 @@ async function supervisePiWorkerInternal(
   configuration: PiRuntimeConfiguration,
   workerPath: string,
   sessionRequest?: PiWorkerSessionRequest,
+  steeringPort?: PiSteeringPort,
 ): Promise<PiWorkerInternalRun> {
   if (process.platform === "win32") {
     throw new BridgeError({
@@ -336,6 +340,7 @@ async function supervisePiWorkerInternal(
   let cancellationWrite: Promise<void> | undefined;
   const terminationGraceMs = Math.max(0, context.terminationGraceMs ?? 2000);
   const onAbort = (): void => {
+    steeringPort?.close(abortError());
     cancellationWrite ??= sendControl(child, { type: "cancel" }).catch(() => {});
     cancelTimer ??= setTimeout(() => {
       for (const group of groups.values()) {
@@ -376,9 +381,13 @@ async function supervisePiWorkerInternal(
     Symbol.asyncIterator
   ]();
   let nextOutputLine = outputLines.next();
+  let settlingSeen = false;
 
   try {
     await sendControl(child, start);
+    steeringPort?.setSender(async (message) =>
+      sendControl(child, { type: "steer", inputId: message.inputId, text: message.text }),
+    );
     context.signal.addEventListener("abort", onAbort, { once: true });
     if (context.signal.aborted) {
       onAbort();
@@ -399,6 +408,21 @@ async function supervisePiWorkerInternal(
       const output = parsePiWorkerLine(line);
       if (terminal !== undefined) {
         throw new Error("Pi worker emitted a message after its terminal result.");
+      }
+      if (output.type === "settling") {
+        if (settlingSeen) {
+          throw new Error("Pi worker emitted a duplicate settling boundary.");
+        }
+        settlingSeen = true;
+        await steeringPort?.seal();
+        await sendControl(child, { type: "finish" });
+        continue;
+      }
+      if (output.type === "steer_ack") {
+        if (!steeringPort?.acknowledge(output.inputId, output.accepted, output.message)) {
+          throw new Error("Pi worker acknowledged an unknown or unsent steering input.");
+        }
+        continue;
       }
       if (output.type === "session") {
         if (sessionRequest === undefined || sessionCheckpoint !== undefined) {
@@ -487,6 +511,16 @@ async function supervisePiWorkerInternal(
         continue;
       }
       if (output.type === "terminal") {
+        if (steeringPort !== undefined && !settlingSeen) {
+          throw new Error("Pi worker settled without closing its steering boundary.");
+        }
+        steeringPort?.close(
+          output.status === "failed"
+            ? new Error(
+                output.failure?.message ?? "The Pi invocation failed before input delivery.",
+              )
+            : new Error("The Pi invocation settled before input delivery."),
+        );
         if (groups.size > 0) {
           throw new Error("Pi worker settled while supervised shell groups were still active.");
         }
@@ -583,6 +617,7 @@ async function supervisePiWorkerInternal(
     return { result };
   } catch (error) {
     protocolError = error instanceof Error ? error : new Error(String(error));
+    steeringPort?.close(context.signal.aborted ? abortError() : protocolError);
     if (child.stdin !== null && !child.stdin.destroyed) {
       child.stdin.end();
     }
@@ -637,6 +672,7 @@ async function supervisePiWorkerInternal(
     );
   } finally {
     context.signal.removeEventListener("abort", onAbort);
+    steeringPort?.close();
     if (cancelTimer !== undefined) {
       clearTimeout(cancelTimer);
     }

@@ -12,6 +12,9 @@ protocol that cannot be represented as one supervised process. Implement
 
 ## Dialogue capabilities
 
+See [native dialogue support](native-dialogue.md) for the capability matrix,
+caller examples, and the distinction between delivery and model consumption.
+
 `invocation.respond` is reserved for permission requests and accepts only
 `allow` or `deny`. An adapter that asks a general question emits an
 `input_required` request with `kind: "question"` and waits through
