@@ -131,6 +131,33 @@ No real second-account invocation or identity observation has been qualified;
 that remains an opt-in runtime qualification task. Machine-managed policy and
 real-account behavior are outside the fixture evidence.
 
+## Grok Build
+
+The Grok adapter is currently a version-pinned, fixture-tested ACP v1 path for
+Grok Build 1.0.44. Discovery intentionally reports every Grok route as
+unavailable: there is no qualified passive operation for native authentication
+status or account-specific model access, and discovery does not run `grok
+models` or start authentication. The listed model IDs are candidates, not a
+claim that the selected account can use them. A missing or different CLI version
+is unqualified.
+
+The adapter requests text-only ACP operation and advertises no client
+filesystem or terminal methods. Any reverse ACP request for those methods fails
+the invocation. Native tool execution, effects, permission prompts, sandbox
+enforcement, and continuation are not qualified. The descriptor therefore
+claims no assurance or filesystem/command/network policy support. Cancellation
+fixtures exercise process-group teardown, but a live Grok descendant lifecycle
+has not been qualified.
+
+Named Grok contexts use `GROK_HOME` for version probing and invocation, and the
+adapter removes inherited Grok and xAI authentication/model override variables
+before launching the child. It rejects config entries for external auth
+commands, per-model credentials or headers, and non-xAI endpoints. These are
+fixture-tested context-selection and isolation rules; they do not prove which
+account Grok authenticated or which model its service ran. Native readiness
+remains unavailable until a read-only authentication and model-access probe is
+qualified.
+
 ## Normalization rules
 
 Map native messages to the smallest useful bridge category:

@@ -29,6 +29,7 @@ import { inspectNativeContextDirectory, redactNativeContextData } from "./enviro
 import { FakeProcessAdapter } from "./fake-process.js";
 import { FakeAdapter } from "./fake.js";
 import { LocalPiAdapter } from "./local-pi.js";
+import { GrokAdapter } from "./grok.js";
 
 const ASSURANCE_RANK: Readonly<Record<Assurance, number>> = {
   none: 0,
@@ -85,6 +86,7 @@ export class AdapterRegistry {
           new ClaudeAdapter(),
           new CodexAdapter(),
           new LocalPiAdapter({ configPath: this.#catalogPath }),
+          new GrokAdapter(),
         ]
       ).map((adapter) => [adapter.id, adapter]),
     );

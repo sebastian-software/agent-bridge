@@ -576,7 +576,9 @@ export class Broker {
         ? { executable: "codex", args: ["login"], env: { CODEX_HOME: "" } }
         : validatedInput.harness === "claude"
           ? { executable: "claude", args: [], env: { CLAUDE_CONFIG_DIR: "" } }
-          : undefined;
+          : validatedInput.harness === "grok"
+            ? { executable: "grok", args: ["login"], env: { GROK_HOME: "" } }
+            : undefined;
     if (login === undefined) {
       throw new BridgeError({
         code: "route_unavailable",
@@ -637,7 +639,12 @@ export class Broker {
       ...(validatedInput.purpose === undefined ? {} : { purpose: validatedInput.purpose }),
       nativeContextRef: contextPath,
     });
-    const environmentKey = validatedInput.harness === "codex" ? "CODEX_HOME" : "CLAUDE_CONFIG_DIR";
+    const environmentKey =
+      validatedInput.harness === "codex"
+        ? "CODEX_HOME"
+        : validatedInput.harness === "claude"
+          ? "CLAUDE_CONFIG_DIR"
+          : "GROK_HOME";
     return {
       ...inspection,
       setup: {
