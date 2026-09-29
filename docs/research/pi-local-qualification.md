@@ -86,6 +86,19 @@ are disabled. Requested policies the worker cannot enforce are rejected. This
 process supervision is not an OS sandbox and does not support `workspace-write`
 or `network=deny` enforcement.
 
+The worker rejects Pi's leading `!` shell-command configuration values in
+`auth.json` API-key credentials, `models.json` provider API keys and headers,
+model-definition and model-override headers, and cached model headers. It checks
+the exact `ModelConfig` snapshot loaded by the pinned SDK before the first
+request. For auth, it keeps Pi's native `AuthStorage` parser and resolver and
+wraps the SDK's file backend: current content and proposed writes are checked
+while Pi's native file lock is held on every read or write. This also rejects a
+command value introduced into `auth.json` between model requests, without
+copying credentials or adding a Relay auth resolver. Static values and
+environment-backed values continue through Pi's native resolver. The worker
+does not refresh model catalogs during a run; the initial scan checks the
+explicit `models-store.json` cache before Pi starts.
+
 `@earendil-works/pi-coding-agent` 0.87.1 is an optional package dependency;
 normal installs still install optional dependencies. Pi execution requires
 Node >=22.19.0, checked only when the private worker starts. Core imports, the
