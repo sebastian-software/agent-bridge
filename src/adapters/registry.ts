@@ -28,6 +28,7 @@ import { CodexAdapter } from "./codex.js";
 import { inspectNativeContextDirectory, redactNativeContextData } from "./environment.js";
 import { FakeProcessAdapter } from "./fake-process.js";
 import { FakeAdapter } from "./fake.js";
+import { LocalPiAdapter } from "./local-pi.js";
 
 const ASSURANCE_RANK: Readonly<Record<Assurance, number>> = {
   none: 0,
@@ -56,7 +57,7 @@ type DiscoverySnapshot = {
 
 type DiscoveryCache = {
   readonly expiresAt: number;
-  readonly connectionsKey: string;
+  readonly configurationKey: string;
   readonly snapshot: DiscoverySnapshot;
 };
 
@@ -71,17 +72,22 @@ export class AdapterRegistry {
   #discoveryCache: DiscoveryCache | undefined;
 
   constructor(
-    adapters: readonly Adapter[] = [
-      new FakeAdapter(),
-      new FakeProcessAdapter(),
-      new ClaudeAdapter(),
-      new CodexAdapter(),
-    ],
+    adapters?: readonly Adapter[],
     options?: { readonly catalogPath?: string; readonly connectionsPath?: string },
   ) {
-    this.#adapters = new Map(adapters.map((adapter) => [adapter.id, adapter]));
     this.#catalogPath = options?.catalogPath ?? defaultCatalogPath();
     this.#connectionsPath = options?.connectionsPath ?? defaultConnectionsPath();
+    this.#adapters = new Map(
+      (
+        adapters ?? [
+          new FakeAdapter(),
+          new FakeProcessAdapter(),
+          new ClaudeAdapter(),
+          new CodexAdapter(),
+          new LocalPiAdapter({ configPath: this.#catalogPath }),
+        ]
+      ).map((adapter) => [adapter.id, adapter]),
+    );
   }
 
   adapter(id: string): Adapter {
@@ -148,6 +154,7 @@ export class AdapterRegistry {
       const selector = request.selector;
       return (
         route.connectionId === selector.connectionId &&
+        (selector.runtimeId === undefined || route.runtimeId === selector.runtimeId) &&
         route.readiness === "ready" &&
         route.provider === selector.provider &&
         route.model === selector.model &&
@@ -191,7 +198,7 @@ export class AdapterRegistry {
       throw new BridgeError({
         code: "route_ambiguous",
         message:
-          "More than one qualified route matches the request. Add a connectionId, via selector, or a more specific capability requirement.",
+          "More than one qualified route matches the request. Add a connectionId, runtimeId, via selector, or a more specific capability requirement.",
         retryable: false,
         details: { candidates: candidates.map(({ route }) => route) },
       });
@@ -224,6 +231,9 @@ export class AdapterRegistry {
         authenticationMode: candidate.route.authenticationMode,
         provider: candidate.route.provider,
         model: candidate.route.model,
+        ...(candidate.route.modelVendorEvidence === undefined
+          ? {}
+          : { modelVendorEvidence: candidate.route.modelVendorEvidence }),
         ...(request.selector.effort === undefined ? {} : { effort: request.selector.effort }),
         via: candidate.route.via,
         ...(candidate.route.connectionId === undefined
@@ -232,6 +242,21 @@ export class AdapterRegistry {
         ...(candidate.route.connectionRevision === undefined
           ? {}
           : { connectionRevision: candidate.route.connectionRevision }),
+        ...(candidate.route.runtimeId === undefined
+          ? {}
+          : { runtimeId: candidate.route.runtimeId }),
+        ...(candidate.route.runtimeRevision === undefined
+          ? {}
+          : { runtimeRevision: candidate.route.runtimeRevision }),
+        ...(candidate.route.inferenceServer === undefined
+          ? {}
+          : { inferenceServer: candidate.route.inferenceServer }),
+        ...(candidate.route.modelDigest === undefined
+          ? {}
+          : { modelDigest: candidate.route.modelDigest }),
+        ...(candidate.route.runtimeInstanceId === undefined
+          ? {}
+          : { runtimeInstanceId: candidate.route.runtimeInstanceId }),
         capabilities: candidate.route.capabilities,
         qualification: candidate.route.qualification,
       },
@@ -251,7 +276,15 @@ export class AdapterRegistry {
     connections: readonly HarnessConnection[],
     options: DiscoveryOptions,
   ): Promise<DiscoverySnapshot> {
-    const connectionKey = JSON.stringify(connections);
+    const [adapterKeys, catalog] = await Promise.all([
+      Promise.all(
+        [...this.#adapters.values()].map(
+          async (adapter) => [adapter.id, await adapter.discoveryCacheKey?.()] as const,
+        ),
+      ),
+      loadUserModelCatalog(this.#catalogPath),
+    ]);
+    const configurationKey = JSON.stringify({ connections, adapterKeys, catalog });
     if (options.connectionId !== undefined) {
       const connection = this.#findConnection(options.connectionId, connections);
       return this.#discoverOneConnection(connection, connections);
@@ -261,7 +294,7 @@ export class AdapterRegistry {
       options.refresh !== true &&
       this.#discoveryCache !== undefined &&
       this.#discoveryCache.expiresAt > Date.now() &&
-      this.#discoveryCache.connectionsKey === connectionKey
+      this.#discoveryCache.configurationKey === configurationKey
     ) {
       return this.#discoveryCache.snapshot;
     }
@@ -279,17 +312,15 @@ export class AdapterRegistry {
         }
       }),
     );
-    const catalog = await loadUserModelCatalog(this.#catalogPath);
     const discoveredAt = new Date().toISOString();
-    const routes = [
-      ...applyUserModelCatalog([...defaultGroups, ...connectionGroups].flat(), catalog),
-    ]
+    const discoveredRoutes = [...defaultGroups, ...connectionGroups].flat();
+    const routes = [...applyUserModelCatalog(discoveredRoutes, catalog)]
       .map((route) => ({ ...route, discoveredAt }))
       .sort((left, right) => left.routeId.localeCompare(right.routeId));
     const snapshot = await this.#finalizeDiscoverySnapshot(routes, connections);
     this.#discoveryCache = {
       expiresAt: Date.now() + DISCOVERY_TTL_MS,
-      connectionsKey: connectionKey,
+      configurationKey,
       snapshot,
     };
     return snapshot;

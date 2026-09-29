@@ -107,4 +107,6 @@ export type Adapter = {
     request: StartInvocationRequest,
     route: RouteDescriptor,
   ) => PolicyResolution;
+  /** Additional configuration identity that invalidates cached discovery when it changes. */
+  readonly discoveryCacheKey?: () => Promise<string>;
 };

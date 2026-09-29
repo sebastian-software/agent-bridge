@@ -40,9 +40,17 @@ observed outcome, not from whether `prompt()` resolves.
 
 The initial [qualification](../research/pi-local-qualification.md) uses
 `@earendil-works/pi-coding-agent` 0.87.1, now pinned as an optional worker
-dependency. Pi is still absent from the default route registry, and no local
-route has been live-qualified. Actual Ollama and LM Studio execution, production
-policy enforcement, resource and credential isolation, broader worker lifecycle
-qualification, and normalized communication/outcome mapping remain release
-gates. Node >=22.19.0 is required by this Pi version, stricter than Relay's
-current >=22 declaration; the private worker checks this before execution.
+dependency. User-global `localRuntimes` profiles now register explicit local
+routes through a Pi wrapper in the default registry. Profiles name the inference
+server and loopback endpoint; `selector.runtimeId` distinguishes duplicate model
+IDs across servers. The wrapper keeps model-vendor evidence separate from the
+server, binds exact model snapshots, and does not create a fallback policy.
+
+Ollama tool-capable models without native remote-model metadata can execute;
+this is server-reported evidence, not a claim that every model is qualified.
+LM Studio discovery alone cannot establish locality because LM Link can route
+requests to another device, so its execution stays unqualified. Live model
+qualification remains open for both runtimes. Pi offers assurance `none`, and
+unsupported policy restrictions fail explicitly. Node >=22.19.0 is required by
+this Pi version, stricter than Relay's current >=22 declaration; discovery and
+the private worker check this before execution.

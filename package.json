@@ -27,6 +27,7 @@
     "dist/src",
     "schemas",
     "README.md",
+    "docs/local-models.md",
     "docs/cli.md",
     "docs/contract.md",
     "docs/mcp.md",

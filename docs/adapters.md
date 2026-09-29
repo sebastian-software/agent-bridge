@@ -10,6 +10,22 @@ Use `Adapter` directly when the harness is an in-process library or needs a
 protocol that cannot be represented as one supervised process. Implement
 `discover()`, `run()`, and, when policy mapping is possible, `resolvePolicy()`.
 
+## Local inference through Pi
+
+The default registry includes `LocalPiAdapter`, which exposes routes only for
+explicit user-global `localRuntimes` profiles. It delegates agent execution to
+the pinned full Pi SDK worker; Ollama and LM Studio are inference servers, not
+replacement harnesses. Discovery reports exact model identity and readiness.
+Ollama tool-capable nonremote models can execute with assurance `none`; LM
+Studio models remain unqualified for local execution because loaded metadata
+does not establish locality. See [local model setup](local-models.md).
+
+Adapters with mutable configuration can implement `discoveryCacheKey()` to
+invalidate the registry's cached route inventory after configuration changes.
+They must still revalidate the captured route before execution and preserve
+bindings for active invocations. Discovery refresh is not permission to move an
+active invocation or its input channel to a new native session.
+
 ## Dialogue capabilities
 
 See [native dialogue support](native-dialogue.md) for the capability matrix,

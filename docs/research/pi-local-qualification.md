@@ -5,10 +5,13 @@ Date: 2026-09-29. Decision: [ADR-0025](../adr/0025-direct-local-model-access.md)
 The internal Pi 0.87.1 worker now satisfies the worker/runtime portion of #149:
 it reuses Pi's full coding-agent SDK in a Relay-supervised process and has
 scripted-SDK coverage for lifecycle, policy boundaries, configuration, native
-text steering, and private session continuation. The private adapter remains
-absent from the default route registry and does not discover routes. This evidence does not
-qualify an Ollama or LM Studio route; those are tracked in #150 and #151. #153
-tracks dialogue behavior across adapters and any live local-model qualification.
+text steering, and private session continuation. The default registry now
+exposes configured local runtimes through a Pi wrapper. Ollama metadata
+identifies selectable nonremote tool-capable models; LM Studio remains
+unqualified for execution because its loaded-model metadata does not establish
+locality. Live local-model qualification remains in #150 and #151; dialogue
+qualification across harnesses is tracked in #153. See
+[local model setup](../local-models.md).
 
 ## Reproduce the standalone SDK probe
 
@@ -65,9 +68,12 @@ performance, general process-tree cleanup, or OS sandbox enforcement.
 
 ## Private worker implementation
 
-Relay now has an internal Pi adapter and supervised worker foundation, but the
-adapter is deliberately absent from the default registry and discovers no
-routes. This is not a production-ready Ollama or LM Studio route.
+Relay has a private Pi worker and a local-runtime wrapper in the default
+registry. Explicit user-global profiles produce discovered routes; no profiles
+produce no local routes. Deterministic discovery fixtures cover Ollama remote
+metadata rejection, exact names/digests, redirects, response-size bounds, a
+shared discovery deadline, and LM Studio loaded/unloaded model diagnostics.
+These fixtures do not perform live model inference.
 
 The worker uses the pinned full SDK's agent session and built-in coding tools.
 Relay replaces only Pi's BashOperations execution seam so its headless worker
@@ -111,7 +117,7 @@ explicit `models-store.json` cache before Pi starts.
 
 `@earendil-works/pi-coding-agent` 0.87.1 is an optional package dependency;
 normal installs still install optional dependencies. Pi execution requires
-Node >=22.19.0, checked only when the private worker starts. Core imports, the
+Node >=22.19.0, checked during local route discovery and when the private worker starts. Core imports, the
 CLI, and Claude/Codex discovery are smoke-tested from a packed installation
 with optional dependencies omitted. Without Pi installed, Pi execution reports
 that it is unavailable instead of preventing the rest of Relay from starting.
@@ -120,11 +126,14 @@ Each invocation still starts a fresh one-shot worker. The private adapter
 persists Pi sessions and can branch a settled session into a new native session
 file; scripted SDK fixtures cover continuation and reject changed checkpoint
 identity before making another model request. It also exposes text-only native
-steering to its worker through the bounded control port; tests verify SDK ACK,
-FIFO delivery across a long-running tool, and the following model requests.
-This does not qualify a local model route, so the private adapter remains absent
-from the default registry and no route advertises these capabilities. General
-questions remain unsupported.
+steering through the bounded control port; tests verify SDK ACK, FIFO delivery
+across a long-running tool, and the following model requests. The local wrapper
+keeps active input bound to the captured invocation while discovery changes.
+Only ready Ollama routes advertise `steering`, after a wrapper-to-SDK fixture
+covers early input, profile removal during an active run, native acknowledgement,
+and subsequent model requests. Local routes expose only capabilities qualified
+at both worker and wrapper boundaries. Live model competence remains a
+separate qualification. General questions remain unsupported.
 
 Opaque continuation handles and their route, account, policy, working-directory,
 and model-configuration bindings live only in the broker process. Handles expire
@@ -138,7 +147,7 @@ exit can leave temporary files for the operating system to clean up.
 
 The worker acceptance for #149 is complete within the tested platform and
 assurance limits above. The following work is separate; the scripted endpoint
-and private adapter do not imply that a local model route is ready:
+and worker qualification do not establish the behavior of a live local model:
 
 - [#150](https://github.com/sebastian-software/harness-relay/issues/150) covers
   Ollama endpoint/model discovery and explicit routing, then live local
@@ -151,7 +160,7 @@ and private adapter do not imply that a local model route is ready:
   dialogue capabilities across Pi and the other supported harnesses. Scripted
   tests cover Pi worker text steering, retained-session continuation and
   binding. General questions remain unsupported; the other harness adapters,
-  live local inference, and route-level Pi capability advertisement still need
+  live local inference, and any additional dialogue capabilities still need
   their own qualification.
 
 On the observed machine, Ollama responds at `127.0.0.1:11434`, but `/api/tags`

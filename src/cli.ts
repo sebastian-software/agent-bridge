@@ -50,6 +50,7 @@ Usage:
 Start options:
   --effort <level>              Requested effort level
   --via <harness>               Required harness family
+  --runtime <id>                Required configured local model runtime
   --connection <id>             Named native connection; omit to use the default login
   --capability <id>             Required capability; repeatable
   --cwd <absolute-path>         Working directory; defaults to the current directory
@@ -405,6 +406,7 @@ async function startParams(parsed: ParsedArguments): Promise<Readonly<Record<str
   const model = requiredOption(parsed, "model");
   const effort = option(parsed, "effort");
   const via = option(parsed, "via");
+  const runtimeId = option(parsed, "runtime");
   const connectionId = option(parsed, "connection");
   const evidence = option(parsed, "evidence");
   const timeoutMs = positiveInteger(option(parsed, "timeout-ms"), "timeout-ms");
@@ -421,6 +423,7 @@ async function startParams(parsed: ParsedArguments): Promise<Readonly<Record<str
       model,
       ...(effort === undefined ? {} : { effort }),
       ...(via === undefined ? {} : { via }),
+      ...(runtimeId === undefined ? {} : { runtimeId }),
       ...(connectionId === undefined ? {} : { connectionId }),
       requiredCapabilities: parsed.options.get("capability") ?? [],
       ...(evidence === undefined ? {} : { minimumObservedEvidence: evidence }),

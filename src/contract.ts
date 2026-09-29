@@ -49,6 +49,8 @@ export type DelegationSelector = {
   readonly effort?: string;
   readonly via?: string;
   readonly connectionId?: string;
+  /** Selects one configured local model server when several expose the same route. */
+  readonly runtimeId?: string;
   readonly requiredCapabilities: readonly string[];
   readonly minimumObservedEvidence?: EvidenceStatus;
 };
@@ -86,6 +88,7 @@ export type RouteDescriptor = {
   readonly nativeModel?: string;
   readonly provider: string;
   readonly model: string;
+  readonly modelVendorEvidence?: EvidenceStatus;
   readonly efforts: readonly string[];
   readonly via: string;
   readonly adapter: string;
@@ -102,6 +105,11 @@ export type RouteDescriptor = {
   readonly connectionId?: string;
   readonly connectionRevision?: string;
   readonly connectionPurpose?: string;
+  readonly runtimeId?: string;
+  readonly runtimeRevision?: string;
+  readonly inferenceServer?: "lm-studio" | "ollama";
+  readonly modelDigest?: string;
+  readonly runtimeInstanceId?: string;
   readonly policySupport?: Readonly<Record<string, readonly string[]>>;
 };
 
@@ -116,10 +124,16 @@ export type ResolvedRoute = {
   readonly authenticationMode: string;
   readonly provider: string;
   readonly model: string;
+  readonly modelVendorEvidence?: EvidenceStatus;
   readonly effort?: string;
   readonly via: string;
   readonly connectionId?: string;
   readonly connectionRevision?: string;
+  readonly runtimeId?: string;
+  readonly runtimeRevision?: string;
+  readonly inferenceServer?: "lm-studio" | "ollama";
+  readonly modelDigest?: string;
+  readonly runtimeInstanceId?: string;
   readonly capabilities: readonly string[];
   readonly qualification: readonly QualificationEvidence[];
 };
@@ -566,6 +580,7 @@ export function parseStartInvocationRequest(value: unknown): StartInvocationRequ
   const effort = optionalString(selectorSource.effort, "params.selector.effort");
   const via = optionalString(selectorSource.via, "params.selector.via");
   const connectionId = optionalString(selectorSource.connectionId, "params.selector.connectionId");
+  const runtimeId = optionalString(selectorSource.runtimeId, "params.selector.runtimeId");
   const minimumObservedEvidence =
     selectorSource.minimumObservedEvidence === undefined
       ? undefined
@@ -622,6 +637,7 @@ export function parseStartInvocationRequest(value: unknown): StartInvocationRequ
       ...(effort === undefined ? {} : { effort }),
       ...(via === undefined ? {} : { via }),
       ...(connectionId === undefined ? {} : { connectionId }),
+      ...(runtimeId === undefined ? {} : { runtimeId }),
       requiredCapabilities:
         selectorSource.requiredCapabilities === undefined
           ? []
