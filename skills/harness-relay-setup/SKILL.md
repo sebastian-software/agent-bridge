@@ -20,10 +20,10 @@ do not establish the identity of the account signed in to the native harness.
    `node /absolute/path/to/checkout/dist/src/cli.js describe --json`. Confirm
    that all seven operations `connection.discover`, `connection.list`,
    `connection.inspect`, `connection.register`, `connection.prepare`,
-   `connection.update`, and `connection.remove` are marked `implemented`. The
-   published `v0.1.0` CLI does not include them. If they are missing, stop and
-   explain that this skill needs a source-built CLI with these operations;
-   installation instructions are at
+   `connection.update`, and `connection.remove` are marked `implemented`.
+   Releases before 0.2.0 do not include them. If they are missing, stop and
+   explain that this skill needs Harness Relay 0.2.0 or newer, or a source
+   build with these operations; installation instructions are at
    https://github.com/sebastian-software/harness-relay/blob/main/docs/skills.md.
    Do not fall back to another `harness-relay` found on `PATH` after validating
    a source build. If using MCP, also verify these operations on the exact

@@ -155,8 +155,7 @@ function activeInvocations(value: unknown): number {
 }
 
 export class HarnessRelayClient {
-  #socketPath: string;
-  #legacySocketPath: string | undefined;
+  readonly #socketPath: string;
   readonly #autostart: boolean;
   #brokerVersionChecked = false;
   #cachedBrokerStatus: unknown;
@@ -164,7 +163,6 @@ export class HarnessRelayClient {
   constructor(options: ClientOptions = {}) {
     const paths = brokerPaths();
     this.#socketPath = options.socketPath ?? paths.socketPath;
-    this.#legacySocketPath = options.socketPath === undefined ? paths.legacySocketPath : undefined;
     this.#autostart = options.autostart ?? true;
   }
 
@@ -346,36 +344,10 @@ export class HarnessRelayClient {
     params: unknown,
     allowAutostart = this.#autostart,
   ): Promise<OperationResultMap[K]> {
-    const request = async (client: IpcClient): Promise<OperationResultMap[K]> =>
-      this.#requestVia(client, operation, params);
     const client = new IpcClient(this.#socketPath);
     try {
-      return await request(client);
+      return await this.#requestVia(client, operation, params);
     } catch (error) {
-      if (
-        this.#legacySocketPath !== undefined &&
-        error instanceof BridgeError &&
-        error.code === "broker_unavailable" &&
-        error.retryable
-      ) {
-        const legacyPath = this.#legacySocketPath;
-        try {
-          this.#brokerVersionChecked = false;
-          this.#cachedBrokerStatus = undefined;
-          const result = await request(new IpcClient(legacyPath));
-          this.#socketPath = legacyPath;
-          this.#legacySocketPath = undefined;
-          return result;
-        } catch (legacyError) {
-          if (
-            !(legacyError instanceof BridgeError) ||
-            legacyError.code !== "broker_unavailable" ||
-            !legacyError.retryable
-          ) {
-            throw legacyError;
-          }
-        }
-      }
       if (
         !allowAutostart ||
         !(error instanceof BridgeError) ||

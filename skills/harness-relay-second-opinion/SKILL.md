@@ -20,7 +20,7 @@ chooses how the appraisal affects the final answer.
    authorizes edits.
 
 2. Bootstrap Harness Relay from the caller's environment. Prefer the installed
-   `harness-relay`; otherwise use `npx --yes harness-relay@0.1.0`. Run
+   `harness-relay`; otherwise use `npx --yes harness-relay@0.2.0`. Run <!-- x-release-please-version -->
    `describe --json` before choosing operations, then discover routes from the
    described contract or `harness-relay routes --json`. When syntax is needed,
    run `harness-relay run --help` (or the same `npx` command with `run --help`);
