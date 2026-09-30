@@ -8,12 +8,6 @@ export type BrokerPaths = {
   readonly runtimeDirectory: string;
   readonly stateDirectory: string;
   readonly socketPath: string;
-  /**
-   * Legacy socket kept reachable while brokers started before the scoped path
-   * existed may still be running. Removal is tracked in issue #127, targeted at
-   * the first release after 0.1.0.
-   */
-  readonly legacySocketPath?: string;
   readonly stateFile: string;
 };
 
@@ -77,11 +71,6 @@ export function brokerPaths(environment: NodeJS.ProcessEnv = process.env): Broke
     runtimeDirectory,
     stateDirectory,
     socketPath: configuredSocketPath ?? join(runtimeDirectory, "broker.sock"),
-    ...(configuredSocketPath === undefined &&
-    configuredRuntimeDirectory === undefined &&
-    xdgRuntimeDirectory !== undefined
-      ? { legacySocketPath: join(xdgRuntimeDirectory, "broker.sock") }
-      : {}),
     stateFile: join(stateDirectory, "state.json"),
   };
 }
