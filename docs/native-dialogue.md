@@ -22,11 +22,14 @@ Relay.
 
 The Pi row describes the worker integration, not availability of a discovered
 local-model route. A usable route also needs its inference-server integration
-and model configuration. Ready Ollama routes integrate the worker's steering
-path and advertise `steering`; they do not advertise continuation, and LM Studio
-routes advertise neither. The SDK tests use a scripted model endpoint; they do
-not prove that any live local model follows instructions or calls tools
-correctly. A route must advertise steering or continuation only after it
+and model configuration. Ready Ollama routes integrate this worker and
+advertise both `steering` and `continuation`; LM Studio routes advertise
+neither. The SDK tests use a scripted model endpoint; they do not prove that
+any live local model follows instructions or calls tools correctly. The
+[qwen3:8b qualification record](qualification/2026-09-30-ollama-qwen3-8b.md)
+adds live evidence for one Ollama model: a steered instruction delivered during
+an uninterrupted tool call, and a continuation that recalled the earlier
+session. A route must advertise steering or continuation only after it
 integrates this worker path and qualifies the selected runtime.
 
 ## Follow delivery, not just acceptance
