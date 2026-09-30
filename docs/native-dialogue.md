@@ -26,10 +26,11 @@ and model configuration. Ready Ollama routes integrate this worker and
 advertise both `steering` and `continuation`; LM Studio routes advertise
 neither. The SDK tests use a scripted model endpoint; they do not prove that
 any live local model follows instructions or calls tools correctly. The
-[qwen3:8b qualification record](qualification/2026-09-30-ollama-qwen3-8b.md)
-adds live evidence for one Ollama model: a steered instruction delivered during
-an uninterrupted tool call, and a continuation that recalled the earlier
-session. A route must advertise steering or continuation only after it
+[qwen3:8b](qualification/2026-09-30-ollama-qwen3-8b.md) and
+[gemma4:26b-a4b](qualification/2026-09-30-ollama-gemma4-26b-a4b.md)
+qualification records add live evidence for two Ollama models: a steered
+instruction delivered during an uninterrupted tool call, and a continuation
+that recalled the earlier session. A route must advertise steering or continuation only after it
 integrates this worker path and qualifies the selected runtime.
 
 ## Follow delivery, not just acceptance

@@ -11,10 +11,13 @@ but execution remains unavailable: a loopback LM Studio server can use LM Link
 to route inference to another device, and the current adapter cannot establish
 that the model runs locally. Loaded-model metadata alone is insufficient.
 
-The [qwen3:8b qualification record](qualification/2026-09-30-ollama-qwen3-8b.md)
-documents one live-qualified Ollama configuration, including locality evidence,
-tool use, steering, continuation, cancellation, timeout, failure cases, and the
-model limitations observed. It qualifies that configuration only.
+Two Ollama configurations are live-qualified, each only as tested:
+[qwen3:8b](qualification/2026-09-30-ollama-qwen3-8b.md) and
+[gemma4:26b-a4b](qualification/2026-09-30-ollama-gemma4-26b-a4b.md). The
+records cover locality evidence, tool use, steering, continuation,
+cancellation, timeout, failure cases, and the model behavior observed.
+gemma4:26b-a4b kept tool calls sequential and reported accurately without
+ordering hints; qwen3:8b needed them.
 
 ## Configure an existing runtime
 
