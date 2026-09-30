@@ -21,7 +21,7 @@ sets the review scope, coordinates invocations, and decides what to accept.
    reasoning, severity or priority when useful, and optional suggestions.
 
 2. Bootstrap Harness Relay from the caller's environment. Prefer the installed
-   `harness-relay`; otherwise use `npx --yes harness-relay@0.1.0`. Run
+   `harness-relay`; otherwise use `npx --yes harness-relay@0.2.0`. Run <!-- x-release-please-version -->
    `describe --json` before relying on operations, then discover the qualified
    routes from the described contract or `harness-relay routes --json`. When
    syntax is needed, run `harness-relay run --help` (or the same `npx` command

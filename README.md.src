@@ -44,9 +44,7 @@ non-interactive mode. `orchestrator` turns supported native requests into
 permission `input_required` events for `invocation.respond`; free-form delegate
 questions use `invocation.answer`. Active input and linked continuation are
 separate operations (`invocation.send` and `invocation.continue`) and are only
-available when a route has qualified native behavior. The fake routes exercise
-these contracts; current native routes do not advertise steering or continuation.
-The Codex route currently
+available when a route advertises the capability. The Codex route currently
 supports `deny` and `unattended`, while the Claude route supports all three.
 
 The deterministic fake routes are useful for local tests:
@@ -56,18 +54,37 @@ harness-relay run --provider harness-relay --model fake-echo --via fake \
   --cwd "$PWD" "hello from a fixture"
 ```
 
+## Routes
+
+`harness-relay routes` reports what is usable on this machine. A route is only
+ready when its adapter, the installed harness version, and the native login
+qualify; otherwise it is listed as unavailable with a diagnostic, never
+replaced by another model or harness.
+
+| Route                              | Status                                                                              |
+| ---------------------------------- | ----------------------------------------------------------------------------------- |
+| Claude Code (`>=2.1.0 <3`)         | Qualified one-shot delegation                                                       |
+| Codex CLI (`>=0.149.0 <1`)         | Qualified one-shot delegation                                                       |
+| Ollama through the embedded Pi SDK | Runs nonremote, tool-capable models with steering; live-model qualification pending |
+| LM Studio through Pi               | Discovery and diagnostics only; execution unavailable                               |
+| Grok Build 1.0.44                  | Adapter present; routes stay unavailable until live qualification                   |
+| Fake routes (`--via fake`)         | Deterministic fixtures for the full contract, including dialogue                    |
+
+Named connections select a second native login or configuration for the same
+harness without changing its default login; see
+[`docs/cli.md`](docs/cli.md#managing-native-connections). Local model setup is
+in [`docs/local-models.md`](docs/local-models.md), and the per-route dialogue
+capabilities are in [`docs/native-dialogue.md`](docs/native-dialogue.md).
+
 ## How it works
 
 The first client autostarts one user-owned broker. The broker supervises the
 selected harness process, persists ordered events, and records a terminal
 outcome. The default socket is `$XDG_RUNTIME_DIR/harness-relay/broker.sock` when
-that variable is set; clients also read the legacy
-`$XDG_RUNTIME_DIR/broker.sock`, a migration path that the first release after
-0.1.0 removes
-([#127](https://github.com/sebastian-software/harness-relay/issues/127)).
-Otherwise a private platform-temporary directory is used; state lives in
-`~/.local/state/harness-relay`. Override them with `HARNESS_RELAY_RUNTIME_DIR`,
-`HARNESS_RELAY_STATE_DIR`, or `HARNESS_RELAY_SOCKET_PATH`.
+that variable is set. Otherwise a private platform-temporary directory is used;
+state lives in `~/.local/state/harness-relay`. Override them with
+`HARNESS_RELAY_RUNTIME_DIR`, `HARNESS_RELAY_STATE_DIR`, or
+`HARNESS_RELAY_SOCKET_PATH`.
 
 An outcome separates returned `content`, `artifacts`, observed workspace
 `effects`, effect-observation completeness, usage, runtime identity evidence,

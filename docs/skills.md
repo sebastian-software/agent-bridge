@@ -1,8 +1,7 @@
 # Caller skills
 
-The `v0.1.0` release contains three caller-side skills. The current source tree
-also contains `harness-relay-setup`, which requires a CLI that implements all
-seven `connection.*` operations; it is not part of `v0.1.0`.
+Harness Relay ships four caller-side skills. Each release pins them to the
+CLI of the same version.
 
 | Skill                          | Use it for                                                           |
 | ------------------------------ | -------------------------------------------------------------------- |
@@ -21,17 +20,21 @@ incomplete outcomes.
 The CLI requires Node.js 22 or newer. Install the public release globally or
 run it without a global install:
 
+<!-- x-release-please-start-version -->
+
 ```sh
-npm install --global harness-relay@0.1.0
+npm install --global harness-relay@0.2.0
 harness-relay describe --json
 
 # Or, for one-off use:
-npx --yes harness-relay@0.1.0 describe --json
+npx --yes harness-relay@0.2.0 describe --json
 ```
 
-The published `v0.1.0` CLI uses the default native session. The current
-source adds explicitly selected native contexts through the `connection.*`
-operations described below. Neither accepts credentials as CLI arguments.
+<!-- x-release-please-end -->
+
+Without a selected connection, the CLI uses the harness's default native
+session. The `connection.*` operations described below add explicitly selected
+native contexts. The CLI never accepts credentials as arguments.
 
 ## Harness prerequisites
 
@@ -49,7 +52,8 @@ Confirm the native executable is on `PATH` (`command -v codex` or
 its environment changed. Check the qualified result with
 `harness-relay routes --json`. A missing login, adapter, or qualified route is
 reported as unavailable; the relay does not silently substitute a different
-model or harness.
+model or harness. Local models run through the optional Pi SDK instead of a
+harness CLI; see [local model setup](local-models.md).
 
 ## Set up another native context
 
@@ -76,19 +80,24 @@ revision instead of adding a duplicate.
 The [Vercel Skills CLI](https://github.com/vercel-labs/skills) installs public
 Git skills for Codex, Claude Code, and other supported agents. A project
 install is the default; add `--global` for a user-level install. The command
-below reads the published `v0.1.0` Git revision into a temporary checkout and
-copies the skills so cleanup cannot leave broken symlinks:
+below reads the published release tag into a temporary checkout and copies the
+skills so cleanup cannot leave broken symlinks:
+
+<!-- x-release-please-start-version -->
 
 ```sh
 skill_checkout="$(mktemp -d)"
 trap 'rm -rf "$skill_checkout"' EXIT
-git clone --branch v0.1.0 --depth 1 \
+git clone --branch v0.2.0 --depth 1 \
   https://github.com/sebastian-software/harness-relay.git \
   "$skill_checkout/harness-relay"
 npx skills add "$skill_checkout/harness-relay" \
   --skill harness-relay harness-relay-second-opinion harness-relay-review \
+  harness-relay-setup \
   --agent codex claude-code --global --copy --yes
 ```
+
+<!-- x-release-please-end -->
 
 Omit `--global` to install into the current project. Omit `claude-code` when
 only Codex should receive the skills. To inspect the installed result:
@@ -97,45 +106,15 @@ only Codex should receive the skills. To inspect the installed result:
 npx skills list --global --agent codex
 ```
 
-The setup skill can be installed from current `main` when an unpinned source
-install is appropriate:
-
-```sh
-npx skills add https://github.com/sebastian-software/harness-relay \
-  --skill harness-relay-setup \
-  --agent codex claude-code --global
-```
-
 Before using the setup skill, run `harness-relay describe --json` and confirm
 that `connection.discover`, `connection.list`, `connection.inspect`,
 `connection.register`, `connection.prepare`, `connection.update`, and
-`connection.remove` are all marked `implemented`. The `v0.1.0` CLI does not
-include these operations. To build the CLI from current `main`, use Node.js 22
-or newer:
-
-```sh
-git clone --branch main --depth 1 \
-  https://github.com/sebastian-software/harness-relay.git
-cd harness-relay
-corepack pnpm install --frozen-lockfile
-pnpm build
-relay_cli="$PWD/dist/src/cli.js"
-node "$relay_cli" describe --json
-node "$relay_cli" connections discover --refresh --json
-```
-
-Use the same source-built executable for every later CLI command, for
-example `node /absolute/path/to/harness-relay/dist/src/cli.js`. Do not run a
-bare `harness-relay` command afterward unless that binary also passed the
-feature check; it may still resolve to the released
-`v0.1.0` CLI. Since `describe` is local and package versions may match, an
-already-running broker can still lack the operations. If an operation reports
-unsupported, inspect it with the same CLI using `broker status --json` and
-`list --active --json`. Run `broker restart` through that CLI without
-`--force` only when no invocations are active; otherwise wait for them to
-finish. Use the setup skill only if the feature check reports all seven
-operations as implemented. The tagged `v0.1.0` checkout above remains the
-reproducible install for the three released skills.
+`connection.remove` are all marked `implemented`; releases before 0.2.0 lack
+them. Because `describe` is answered locally, an older broker that is still
+running can lack the operations even when the CLI has them. If an operation
+reports unsupported, inspect it with `broker status --json` and
+`list --active --json`, then run `broker restart` without `--force` only when
+no invocations are active; otherwise wait for them to finish.
 
 ## Optional Dalo catalog installation
 
@@ -159,18 +138,24 @@ dalo sync
 For a Dalo team catalog, `team catalog add` does support an exact version
 reference. Team members still select, approve, and sync the chosen skills:
 
+<!-- x-release-please-start-version -->
+
 ```sh
 dalo team catalog add relay \
   https://github.com/sebastian-software/harness-relay.git \
-  --version v0.1.0 \
+  --version v0.2.0 \
   --skill +harness-relay \
   --skill +harness-relay-second-opinion \
-  --skill +harness-relay-review
+  --skill +harness-relay-review \
+  --skill +harness-relay-setup
 dalo approve skill relay:harness-relay
 dalo approve skill relay:harness-relay-second-opinion
 dalo approve skill relay:harness-relay-review
+dalo approve skill relay:harness-relay-setup
 dalo sync
 ```
+
+<!-- x-release-please-end -->
 
 Use `dalo target link codex` before syncing if the Codex target has not been
 linked in the Dalo store. Dalo's audit and approval records describe what was

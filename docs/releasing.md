@@ -51,7 +51,9 @@ tarball alone do not establish public installability.
    entry from the squashed commit.
 2. On every push to `main`, `.github/workflows/publish.yml` runs release-please.
    It maintains a single release pull request that bumps `package.json`,
-   regenerates `src/version.ts` and prepends a `CHANGELOG.md` entry.
+   regenerates `src/version.ts`, moves the version pins in `docs/skills.md`
+   and the caller skills (marked with `x-release-please-version`), and
+   prepends a `CHANGELOG.md` entry.
 3. Merging that pull request creates the tag (`v<version>`) and the GitHub
    Release, and the same workflow then publishes the tag to npm with the shared
    `publish-npm` action. The action derives `latest` for stable versions,
