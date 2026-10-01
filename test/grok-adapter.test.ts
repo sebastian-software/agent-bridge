@@ -276,6 +276,35 @@ test("Grok discovery keeps unqualified authentication unavailable without model-
   }
 });
 
+test("Grok discovery qualifies versions within its range", async () => {
+  const fixture = await createFixture("success");
+  try {
+    for (const [version, expected] of [
+      ["1.0.44", "unavailable"],
+      ["1.0.46", "unavailable"],
+      ["1.2.0", "unavailable"],
+      ["1.0.43", "unqualified"],
+      ["2.0.0", "unqualified"],
+    ] as const) {
+      const adapter = new GrokAdapter({
+        executable: fixture.executable,
+        probe: {
+          findExecutable: async () => fixture.executable,
+          readVersion: async () => `grok ${version} (fixture) [stable]`,
+        },
+      });
+      const routes = await adapter.discover();
+      assert.ok(routes.length > 0);
+      assert.ok(
+        routes.every((route) => route.readiness === expected && route.harnessVersion === version),
+        version,
+      );
+    }
+  } finally {
+    await removeFixture(fixture.root);
+  }
+});
+
 test("Grok ACP normalizes text and usage with explicit model, effort, no-leader, and no filesystem tools", async () => {
   const fixture = await createFixture("success");
   try {
