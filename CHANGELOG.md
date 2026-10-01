@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.0](https://github.com/sebastian-software/harness-relay/compare/v0.2.0...v0.3.0) (2026-10-01)
+
+
+### Features
+
+* **claude:** continue sessions through a forked resume ([c115c6d](https://github.com/sebastian-software/harness-relay/commit/c115c6d58e527994da84ae19ab74650900da0f76))
+* **codex:** continue sessions through exec fork ([#173](https://github.com/sebastian-software/harness-relay/issues/173)) ([8aa2bb8](https://github.com/sebastian-software/harness-relay/commit/8aa2bb8c20dfeeabeafb5ad2122cb2d24c16e15f))
+
+
+### Bug Fixes
+
+* remove the legacy socket fallback and refresh the 0.2.0 docs ([#170](https://github.com/sebastian-software/harness-relay/issues/170)) ([066633e](https://github.com/sebastian-software/harness-relay/commit/066633ee484918343112741b19fbf883aac1f158))
+
 ## [0.2.0](https://github.com/sebastian-software/harness-relay/compare/v0.1.0...v0.2.0) (2026-09-29)
 
 
