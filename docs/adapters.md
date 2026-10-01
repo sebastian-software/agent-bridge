@@ -66,6 +66,12 @@ nor `--add-dir`, so the adapter sets the sandbox through `-c sandbox_mode=...`,
 relies on the broker's working directory, and keeps runs with additional
 directories ephemeral and without a handle.
 
+The Claude adapter uses the same hook from version 2.1.282. Its handle is the
+`session_id` from the stream, and a continuation appends
+`--resume <session-id> --fork-session` to the original arguments. Named Claude
+connections keep `CLAUDE_CONFIG_DIR`, so the fork reads the session from the same
+native context.
+
 Extend `ProcessAdapter` for a command-line harness that emits JSONL. Provide a
 manifest-backed `discover()`, a safe argument-array `command()`, and a
 `normalizeNative()` function. The base class owns stdin, stderr bounds,

@@ -13,12 +13,12 @@ Inspect the discovered route's capabilities before choosing an operation;
 protocol documentation alone does not make a capability available through
 Relay.
 
-| Harness boundary                           | Active steering in Relay                                                                                                       | Retained continuation in Relay                                                                               | General questions in Relay                     |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ | ---------------------------------------------- |
-| Pi coding-agent SDK 0.87.1, private worker | Native `AgentSession.steer(text)` is implemented and scripted-tested; the private adapter is not route-discoverable by default | Native persisted-session branch is scripted-tested; the private adapter is not route-discoverable by default | Unsupported                                    |
-| Claude Code 2.1.282, current print adapter | Unsupported                                                                                                                    | Unsupported                                                                                                  | Unsupported; permission responses are separate |
-| Codex CLI 0.159.2 or later, exec adapter   | Unsupported                                                                                                                    | `codex exec fork` of the retained thread; live-qualified on 0.159.2                                          | Unsupported                                    |
-| Grok, pending adapter qualification        | Not advertised                                                                                                                 | Not advertised                                                                                               | Not advertised                                 |
+| Harness boundary                            | Active steering in Relay                                                                                                       | Retained continuation in Relay                                                                               | General questions in Relay                     |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ | ---------------------------------------------- |
+| Pi coding-agent SDK 0.87.1, private worker  | Native `AgentSession.steer(text)` is implemented and scripted-tested; the private adapter is not route-discoverable by default | Native persisted-session branch is scripted-tested; the private adapter is not route-discoverable by default | Unsupported                                    |
+| Claude Code 2.1.282 or later, print adapter | Unsupported                                                                                                                    | `--resume <session> --fork-session`; live-qualified on 2.1.282                                               | Unsupported; permission responses are separate |
+| Codex CLI 0.159.2 or later, exec adapter    | Unsupported                                                                                                                    | `codex exec fork` of the retained thread; live-qualified on 0.159.2                                          | Unsupported                                    |
+| Grok, pending adapter qualification         | Not advertised                                                                                                                 | Not advertised                                                                                               | Not advertised                                 |
 
 The Pi row describes the worker integration, not availability of a discovered
 local-model route. A usable route also needs its inference-server integration
@@ -111,6 +111,14 @@ Codex stores each of them in `CODEX_HOME/sessions`, where it also appears in
 ephemeral and cannot be continued, because `exec fork` has no `--add-dir`. See
 the [qualification record](qualification/2026-10-01-codex-continuation.md).
 
+Claude continuation resumes the predecessor's session with `--resume` and
+`--fork-session`, so it also runs as an independent branch and leaves the
+original session file unchanged. Claude Code already stores print-mode sessions
+under its configuration directory; continuation does not change that. Additional
+directories and every interaction strategy carry over. The broker keeps the
+handle for 24 hours and drops it on restart. See the
+[qualification record](qualification/2026-10-01-claude-continuation.md).
+
 ## Questions and permissions
 
 A question has `kind: "question"` and is answered through
@@ -135,8 +143,8 @@ not a live execution test. Relay's exec adapter uses `codex exec fork` for
 continuation; active steering and questions through the app-server remain
 unimplemented.
 
-Claude Code 2.1.282 advertises streaming JSON input, replayed user messages,
-and session resumption/forking in its CLI help. Those flags still need native
-lifecycle and delivery qualification before Relay can advertise steering or
-continuation. Its current permission handler does not implement general
+Claude Code 2.1.282 advertises streaming JSON input and replayed user messages
+in its CLI help. Relay uses session resumption with forking for continuation;
+steering over streaming input still needs native lifecycle and delivery
+qualification. Its current permission handler does not implement general
 question answers.

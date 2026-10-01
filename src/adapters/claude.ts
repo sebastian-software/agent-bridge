@@ -13,6 +13,7 @@ import type {
 } from "../contract.js";
 import type {
   AdapterConnectionRunContext,
+  AdapterContinuationHandle,
   AdapterEvent,
   AdapterRunContext,
   PolicyResolution,
@@ -40,6 +41,11 @@ export const CLAUDE_SESSION_ENVIRONMENT_DENY_LIST = [
 ] as const;
 
 const CLAUDE_NAMED_CONTEXT_VERSION = "2.1.282";
+// `--resume <id> --fork-session` was verified against 2.1.282: a fork keeps the
+// session context, gets a new session ID, and leaves the original file unchanged.
+const CLAUDE_CONTINUATION_VERSION_RANGE = ">=2.1.282 <3.0.0";
+const CLAUDE_CONTINUATION_TTL_MS = 24 * 60 * 60 * 1000;
+const CLAUDE_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const CLAUDE_NAMED_AUTH_ENVIRONMENT_DENY_LIST = [
   ...CLAUDE_SESSION_ENVIRONMENT_DENY_LIST,
   "ANTHROPIC_API_KEY",
@@ -143,6 +149,9 @@ const MANIFEST = {
     network: ["inherit"],
     additionalDirectories: ["supported"],
   },
+  versionCapabilities: [
+    { range: CLAUDE_CONTINUATION_VERSION_RANGE, capabilities: ["continuation"] },
+  ],
 } as const;
 
 function permissionModeFor(
@@ -196,6 +205,17 @@ function resolvePolicy(request: StartInvocationRequest): PolicyResolution {
   };
 }
 
+function resumedSession(handle: AdapterContinuationHandle): string {
+  if (!CLAUDE_SESSION_ID.test(handle.reference)) {
+    throw new BridgeError({
+      code: "continuation_unavailable",
+      message: "The retained Claude session reference is not a native session ID.",
+      retryable: false,
+    });
+  }
+  return handle.reference;
+}
+
 function commandArgs(context: AdapterRunContext): readonly string[] {
   const args = [
     "-p",
@@ -218,6 +238,10 @@ function commandArgs(context: AdapterRunContext): readonly string[] {
   }
   if (context.request.interactionStrategy === "orchestrator") {
     args.push("--input-format", "stream-json", "--permission-prompt-tool", "stdio");
+  }
+  if (context.continuationHandle !== undefined) {
+    // A fork gives every continuation its own branch and leaves the original intact.
+    args.push("--resume", resumedSession(context.continuationHandle), "--fork-session");
   }
   return args;
 }
@@ -466,6 +490,24 @@ export class ClaudeAdapter extends ProcessAdapter {
             env: { CLAUDE_CONFIG_DIR: context.connection.nativeContextRef },
             envDenyList: CLAUDE_NAMED_AUTH_ENVIRONMENT_DENY_LIST,
           }),
+    };
+  }
+
+  protected override continuationHandleFor(
+    context: AdapterRunContext,
+    identity: ObservedIdentity,
+  ): AdapterContinuationHandle | undefined {
+    const sessionId = identity.nativeSessionId.value;
+    if (
+      !context.route.capabilities.includes("continuation") ||
+      sessionId === undefined ||
+      !CLAUDE_SESSION_ID.test(sessionId)
+    ) {
+      return undefined;
+    }
+    return {
+      reference: sessionId,
+      expiresAt: new Date(Date.now() + CLAUDE_CONTINUATION_TTL_MS).toISOString(),
     };
   }
 
