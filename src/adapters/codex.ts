@@ -13,6 +13,7 @@ import type {
 } from "../contract.js";
 import type {
   AdapterConnectionRunContext,
+  AdapterContinuationHandle,
   AdapterEvent,
   AdapterRunContext,
   PolicyResolution,
@@ -28,6 +29,11 @@ import { inspectNativeContextDirectory } from "./environment.js";
 import { type CommandSpec, ProcessAdapter, promptFor } from "./process.js";
 
 const CODEX_NAMED_CONTEXT_VERSION = "0.155.1";
+// `codex exec fork` was verified against 0.159.2: a fork keeps the session
+// context, gets a new thread ID, and leaves the forked session file unchanged.
+const CODEX_CONTINUATION_VERSION_RANGE = ">=0.159.2 <1.0.0";
+const CODEX_CONTINUATION_TTL_MS = 24 * 60 * 60 * 1000;
+const CODEX_THREAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const CODEX_SESSION_ENVIRONMENT_DENY_LIST = ["CODEX_THREAD_ID", "CODEX_SESSION_ID"] as const;
 const CODEX_NAMED_AUTH_ENVIRONMENT_DENY_LIST = [
   ...CODEX_SESSION_ENVIRONMENT_DENY_LIST,
@@ -155,6 +161,9 @@ const MANIFEST = {
     network: ["allow", "deny"],
     additionalDirectories: ["supported"],
   },
+  versionCapabilities: [
+    { range: CODEX_CONTINUATION_VERSION_RANGE, capabilities: ["continuation"] },
+  ],
 } as const;
 
 function reasoningEffort(value: string): string {
@@ -209,6 +218,28 @@ function sandbox(context: AdapterRunContext): string {
     return "workspace-write";
   }
   return "workspace-write";
+}
+
+/**
+ * A run keeps its native session only when the route can continue it. `exec
+ * fork` has no `--add-dir`, so runs with additional directories stay ephemeral.
+ */
+function retainsSession(context: AdapterRunContext): boolean {
+  return (
+    context.route.capabilities.includes("continuation") &&
+    (context.request.requestedPolicy.additionalDirectories ?? []).length === 0
+  );
+}
+
+function forkedSession(handle: AdapterContinuationHandle): string {
+  if (!CODEX_THREAD_ID.test(handle.reference)) {
+    throw new BridgeError({
+      code: "continuation_unavailable",
+      message: "The retained Codex session reference is not a native thread ID.",
+      retryable: false,
+    });
+  }
+  return handle.reference;
 }
 
 function numberValue(candidate: unknown): number | undefined {
@@ -349,40 +380,55 @@ export class CodexAdapter extends ProcessAdapter {
         retryable: false,
       });
     }
-    const args = [
-      "exec",
+    const handle = context.continuationHandle;
+    if (handle !== undefined && !retainsSession(context)) {
+      throw new BridgeError({
+        code: "continuation_unavailable",
+        message:
+          "Codex continuation needs a route that advertises continuation and no additional directories.",
+        retryable: false,
+      });
+    }
+    // `exec fork` accepts neither --sandbox, --cd, nor --add-dir. The sandbox is
+    // set through configuration and the broker spawns in the working directory.
+    const options = [
       "--json",
-      "--ephemeral",
       "--model",
       context.route.nativeModel ?? context.route.model,
-      "--sandbox",
-      sandbox(context),
-      "--cd",
-      context.request.workingDirectory,
+      ...(handle === undefined
+        ? [
+            ...(retainsSession(context) ? [] : ["--ephemeral"]),
+            "--sandbox",
+            sandbox(context),
+            "--cd",
+            context.request.workingDirectory,
+          ]
+        : ["-c", `sandbox_mode="${sandbox(context)}"`]),
       "-c",
       'approval_policy="never"',
-      "-",
     ];
     if (context.connection !== undefined) {
-      args.splice(-1, 0, "-c", 'model_provider="openai"');
+      options.push("-c", 'model_provider="openai"');
     }
     if (context.route.effort !== undefined) {
-      args.splice(-1, 0, "-c", `model_reasoning_effort=${reasoningEffort(context.route.effort)}`);
+      options.push("-c", `model_reasoning_effort=${reasoningEffort(context.route.effort)}`);
     }
     if (
       context.request.requestedPolicy.network === "allow" ||
       context.request.requestedPolicy.network === "deny"
     ) {
-      args.splice(
-        -1,
-        0,
+      options.push(
         "-c",
         `sandbox_workspace_write.network_access=${context.request.requestedPolicy.network === "allow"}`,
       );
     }
     for (const directory of context.request.requestedPolicy.additionalDirectories ?? []) {
-      args.splice(-1, 0, "--add-dir", directory);
+      options.push("--add-dir", directory);
     }
+    const args =
+      handle === undefined
+        ? ["exec", ...options, "-"]
+        : ["exec", "fork", ...options, forkedSession(handle), "-"];
     return {
       executable: context.route.executable,
       args,
@@ -393,6 +439,20 @@ export class CodexAdapter extends ProcessAdapter {
             env: { CODEX_HOME: context.connection.nativeContextRef },
             envDenyList: CODEX_NAMED_AUTH_ENVIRONMENT_DENY_LIST,
           }),
+    };
+  }
+
+  protected override continuationHandleFor(
+    context: AdapterRunContext,
+    identity: ObservedIdentity,
+  ): AdapterContinuationHandle | undefined {
+    const threadId = identity.nativeSessionId.value;
+    if (!retainsSession(context) || threadId === undefined || !CODEX_THREAD_ID.test(threadId)) {
+      return undefined;
+    }
+    return {
+      reference: threadId,
+      expiresAt: new Date(Date.now() + CODEX_CONTINUATION_TTL_MS).toISOString(),
     };
   }
 

@@ -57,6 +57,15 @@ never include it in events, routes, diagnostics, or caller input. Advertise
 Continuation must not fall back to a new context-free request. Broker fixtures
 exercise the SPI, but native support requires its own qualification evidence.
 
+A `ProcessAdapter` returns the handle from `continuationHandleFor()`, which runs
+only after a successful native result. The Codex adapter uses it from version
+0.159.2: a continuable run omits `--ephemeral`, its handle is the native
+thread ID from `thread.started`, and a continuation runs
+`codex exec fork <thread-id>`. `exec fork` accepts neither `--sandbox`, `--cd`,
+nor `--add-dir`, so the adapter sets the sandbox through `-c sandbox_mode=...`,
+relies on the broker's working directory, and keeps runs with additional
+directories ephemeral and without a handle.
+
 Extend `ProcessAdapter` for a command-line harness that emits JSONL. Provide a
 manifest-backed `discover()`, a safe argument-array `command()`, and a
 `normalizeNative()` function. The base class owns stdin, stderr bounds,
@@ -77,7 +86,9 @@ and identity alongside the error.
 - model entries with `efforts`, `capabilities`, and supported
   `interactionStrategies`;
 - a `policySupport` table for filesystem, commands, network, and additional
-  directories; and
+  directories;
+- optional `versionCapabilities`, which add capabilities only when the detected
+  harness version satisfies their own range; and
 - a precise `qualificationClaim` describing the contract covered by the
   qualification suite.
 

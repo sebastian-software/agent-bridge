@@ -14,6 +14,7 @@ import type {
 import type {
   Adapter,
   AdapterConnectionRunContext,
+  AdapterContinuationHandle,
   AdapterEvent,
   AdapterRunContext,
   AdapterRunResult,
@@ -174,6 +175,14 @@ export abstract class ProcessAdapter implements Adapter {
       pendingEffects?: Map<string, WorkspaceEffect>;
     },
   ): AdapterEvent | undefined;
+
+  /** Return a native session reference after a successful run; omitted by default. */
+  protected continuationHandleFor(
+    _context: AdapterRunContext,
+    _identity: ObservedIdentity,
+  ): AdapterContinuationHandle | undefined {
+    return undefined;
+  }
 
   protected async validateConnectionInvocation(
     _context: AdapterConnectionRunContext,
@@ -538,12 +547,14 @@ export abstract class ProcessAdapter implements Adapter {
           details: { reason: "missing_native_result" },
         });
       }
+      const continuationHandle = this.continuationHandleFor(context, state.identity);
       return {
         content: state.content.parts,
         artifacts: [],
         effects: state.effects,
         observedIdentity: state.identity,
         ...(state.usage === undefined ? {} : { usage: state.usage }),
+        ...(continuationHandle === undefined ? {} : { continuationHandle }),
       };
     } catch (error) {
       // Every rejected run owns teardown, including malformed output, stream

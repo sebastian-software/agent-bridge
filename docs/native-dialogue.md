@@ -17,7 +17,7 @@ Relay.
 | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ | ---------------------------------------------- |
 | Pi coding-agent SDK 0.87.1, private worker | Native `AgentSession.steer(text)` is implemented and scripted-tested; the private adapter is not route-discoverable by default | Native persisted-session branch is scripted-tested; the private adapter is not route-discoverable by default | Unsupported                                    |
 | Claude Code 2.1.282, current print adapter | Unsupported                                                                                                                    | Unsupported                                                                                                  | Unsupported; permission responses are separate |
-| Codex CLI 0.155.1, current exec adapter    | Unsupported                                                                                                                    | Unsupported                                                                                                  | Unsupported                                    |
+| Codex CLI 0.159.2 or later, exec adapter   | Unsupported                                                                                                                    | `codex exec fork` of the retained thread; live-qualified on 0.159.2                                          | Unsupported                                    |
 | Grok, pending adapter qualification        | Not advertised                                                                                                                 | Not advertised                                                                                               | Not advertised                                 |
 
 The Pi row describes the worker integration, not availability of a discovered
@@ -101,6 +101,16 @@ policy. Missing, expired, or changed native context causes an explicit error.
 Relay does not substitute a fresh conversation. Pi continuation handles are
 owned by the running broker and do not survive its restart.
 
+Codex continuation forks the predecessor's native thread with
+`codex exec fork`. Each continuation is its own branch: two continuations of the
+same invocation do not see each other, and the predecessor's session file stays
+unchanged. To make that possible, continuable Codex runs are not ephemeral.
+Codex stores each of them in `CODEX_HOME/sessions`, where it also appears in
+`codex resume`; Relay never deletes those files. The broker keeps the handle for
+24 hours and drops it on restart. Runs with additional directories stay
+ephemeral and cannot be continued, because `exec fork` has no `--add-dir`. See
+the [qualification record](qualification/2026-10-01-codex-continuation.md).
+
 ## Questions and permissions
 
 A question has `kind: "question"` and is answered through
@@ -121,7 +131,9 @@ The installed Codex CLI 0.155.1 can export app-server schemas with
 protocol includes `turn/steer`, guarded by `threadId` and `expectedTurnId`,
 `thread/resume`, `thread/fork`, and `item/tool/requestUserInput` with correlated
 thread, turn, item, and question IDs. This is version-specific schema evidence,
-not a live execution test or support in Relay's current exec adapter.
+not a live execution test. Relay's exec adapter uses `codex exec fork` for
+continuation; active steering and questions through the app-server remain
+unimplemented.
 
 Claude Code 2.1.282 advertises streaming JSON input, replayed user messages,
 and session resumption/forking in its CLI help. Those flags still need native
