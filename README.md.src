@@ -61,14 +61,14 @@ ready when its adapter, the installed harness version, and the native login
 qualify; otherwise it is listed as unavailable with a diagnostic, never
 replaced by another model or harness.
 
-| Route                              | Status                                                                                                         |
-| ---------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| Claude Code (`>=2.1.0 <3`)         | Qualified one-shot delegation                                                                                  |
-| Codex CLI (`>=0.149.0 <1`)         | Qualified one-shot delegation                                                                                  |
-| Ollama through the embedded Pi SDK | Runs nonremote, tool-capable models with steering and continuation; qwen3:8b and gemma4:26b-a4b qualified live |
-| LM Studio through Pi               | Discovery and diagnostics only; execution unavailable                                                          |
-| Grok Build 1.0.44                  | Adapter present; routes stay unavailable until live qualification                                              |
-| Fake routes (`--via fake`)         | Deterministic fixtures for the full contract, including dialogue                                               |
+| Route                              | Status                                                                                          |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------- |
+| Claude Code (`>=2.1.0 <3`)         | Qualified one-shot delegation                                                                   |
+| Codex CLI (`>=0.149.0 <1`)         | Qualified one-shot delegation                                                                   |
+| Ollama through the embedded Pi SDK | Runs nonremote, tool-capable models with steering and continuation; three models qualified live |
+| LM Studio through Pi               | Discovery and diagnostics only; execution unavailable                                           |
+| Grok Build 1.0.44                  | Adapter present; routes stay unavailable until live qualification                               |
+| Fake routes (`--via fake`)         | Deterministic fixtures for the full contract, including dialogue                                |
 
 Named connections select a second native login or configuration for the same
 harness without changing its default login; see

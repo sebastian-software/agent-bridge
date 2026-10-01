@@ -11,13 +11,14 @@ but execution remains unavailable: a loopback LM Studio server can use LM Link
 to route inference to another device, and the current adapter cannot establish
 that the model runs locally. Loaded-model metadata alone is insufficient.
 
-Two Ollama configurations are live-qualified, each only as tested:
-[qwen3:8b](qualification/2026-09-30-ollama-qwen3-8b.md) and
-[gemma4:26b-a4b](qualification/2026-09-30-ollama-gemma4-26b-a4b.md). The
-records cover locality evidence, tool use, steering, continuation,
-cancellation, timeout, failure cases, and the model behavior observed.
-gemma4:26b-a4b kept tool calls sequential and reported accurately without
-ordering hints; qwen3:8b needed them.
+Three Ollama configurations are live-qualified, each only as tested:
+[qwen3:8b](qualification/2026-09-30-ollama-qwen3-8b.md),
+[gemma4:26b-a4b](qualification/2026-09-30-ollama-gemma4-26b-a4b.md), and
+[gemma4:e4b](qualification/2026-10-01-ollama-gemma4-e4b.md). The records cover
+locality evidence, tool use, steering, continuation, cancellation, timeout,
+failure cases, and the model behavior observed. Both Gemma models kept tool
+calls sequential and reported accurately without ordering hints; qwen3:8b
+needed them.
 
 ## Configure an existing runtime
 
@@ -127,7 +128,8 @@ is tracked separately from protocol tests.
 ## Opt-in live qualification
 
 Use an already installed model and an isolated scratch project. The default
-suite does not download one. Record the exact model tag and digest, runtime and
+suite does not download one. `gemma4:e4b` (6.6 GB) is the smallest model that
+passed this procedure and a reasonable choice for repeating it. Record the exact model tag and digest, runtime and
 Relay versions, Pi SDK version, Node version, OS, memory, and model settings.
 Keep this record separate from deterministic fixture results.
 
