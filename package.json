@@ -83,7 +83,7 @@
     "typescript": "5.9.3"
   },
   "optionalDependencies": {
-    "@earendil-works/pi-coding-agent": "0.87.1"
+    "@earendil-works/pi-coding-agent": "1.0.0"
   },
   "engines": {
     "node": ">=22"

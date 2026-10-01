@@ -172,7 +172,7 @@ function route(): ResolvedRoute {
   return {
     routeId: "fixture:fixture-model",
     adapter: "pi",
-    harnessVersion: "0.87.1",
+    harnessVersion: "1.0.0",
     authenticationMode: "none",
     provider: "fixture",
     model: "fixture-model",

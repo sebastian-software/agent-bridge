@@ -222,7 +222,7 @@ function runContext(
   const route: ResolvedRoute = {
     routeId: "openai:fixture-model",
     adapter: "pi",
-    harnessVersion: "0.87.1",
+    harnessVersion: "1.0.0",
     authenticationMode: "api_key",
     provider: "openai",
     model: "fixture-model",

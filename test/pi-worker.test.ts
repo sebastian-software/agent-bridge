@@ -221,7 +221,7 @@ function runContext(
   const route: ResolvedRoute = {
     routeId: "fixture:fixture-model",
     adapter: "pi",
-    harnessVersion: "0.87.1",
+    harnessVersion: "1.0.0",
     authenticationMode: "none",
     provider: "fixture",
     model: "fixture-model",
@@ -1139,7 +1139,7 @@ test("broker invocation timeout records one timed_out outcome with Pi partial ev
     efforts: ["low", "medium", "high"],
     via: "pi",
     adapter: "pi",
-    harnessVersion: "0.87.1",
+    harnessVersion: "1.0.0",
     authenticationMode: "none",
     capabilities: ["core.input.text", "core.output.text"],
     interactionStrategies: ["unattended"],
@@ -1475,7 +1475,7 @@ test("host-parent loss closes Pi worker and its tool descendants", async () => {
   const route = {
     routeId: "fixture:fixture-model",
     adapter: "pi",
-    harnessVersion: "0.87.1",
+    harnessVersion: "1.0.0",
     authenticationMode: "none",
     provider: "fixture",
     model: "fixture-model",
