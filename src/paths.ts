@@ -11,6 +11,23 @@ export type BrokerPaths = {
   readonly stateFile: string;
 };
 
+// Measured with Node's net module: macOS accepts 104-byte socket paths and
+// rejects 105 with EINVAL; Linux's 108-byte sun_path keeps one byte for NUL.
+const MAX_SOCKET_PATH_BYTES = process.platform === "linux" ? 107 : 104;
+
+/** Fail with a readable diagnostic before a socket path is too long to bind or connect. */
+export function assertSocketPathLength(socketPath: string): void {
+  const bytes = Buffer.byteLength(socketPath, "utf8");
+  if (bytes > MAX_SOCKET_PATH_BYTES) {
+    throw new BridgeError({
+      code: "broker_unavailable",
+      message: `The broker socket path is ${String(bytes)} bytes long, but this platform allows at most ${String(MAX_SOCKET_PATH_BYTES)}: ${socketPath}. Set HARNESS_RELAY_RUNTIME_DIR or HARNESS_RELAY_SOCKET_PATH to a shorter path.`,
+      retryable: false,
+      details: { socketPath, bytes, maxBytes: MAX_SOCKET_PATH_BYTES },
+    });
+  }
+}
+
 export async function ensurePrivateDirectory(path: string, label: string): Promise<void> {
   await mkdir(path, { recursive: true, mode: 0o700 });
   const info = await lstat(path);

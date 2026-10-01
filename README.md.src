@@ -84,7 +84,8 @@ outcome. The default socket is `$XDG_RUNTIME_DIR/harness-relay/broker.sock` when
 that variable is set. Otherwise a private platform-temporary directory is used;
 state lives in `~/.local/state/harness-relay`. Override them with
 `HARNESS_RELAY_RUNTIME_DIR`, `HARNESS_RELAY_STATE_DIR`, or
-`HARNESS_RELAY_SOCKET_PATH`.
+`HARNESS_RELAY_SOCKET_PATH`. Unix sockets limit the path to 104 bytes on macOS
+and 107 on Linux; a longer path fails with a diagnostic instead of starting.
 
 An outcome separates returned `content`, `artifacts`, observed workspace
 `effects`, effect-observation completeness, usage, runtime identity evidence,

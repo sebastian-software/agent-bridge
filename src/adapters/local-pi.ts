@@ -445,6 +445,10 @@ export class LocalPiAdapter implements Adapter {
     }
     const inventory = await discoverLocalRuntime(currentProfile, signal);
     signal.throwIfAborted();
+    if (inventory.models.length === 0 && inventory.diagnostics.length > 0) {
+      // A stopped or unreachable server reports why; that beats claiming a changed model.
+      throw routeUnavailable(inventory.diagnostics.join(" "));
+    }
     const currentModel = inventory.models.find(
       (model) =>
         model.id === binding.model.id &&
