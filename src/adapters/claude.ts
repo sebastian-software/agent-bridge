@@ -40,7 +40,7 @@ export const CLAUDE_SESSION_ENVIRONMENT_DENY_LIST = [
   "CLAUDE_CODE_MESSAGING_TOKEN",
 ] as const;
 
-const CLAUDE_NAMED_CONTEXT_VERSION = "2.1.282";
+const CLAUDE_NAMED_CONTEXT_VERSION_RANGE = ">=2.1.282 <3.0.0";
 // `--resume <id> --fork-session` was verified against 2.1.282: a fork keeps the
 // session context, gets a new session ID, and leaves the original file unchanged.
 const CLAUDE_CONTINUATION_VERSION_RANGE = ">=2.1.282 <3.0.0";
@@ -441,7 +441,7 @@ export class ClaudeAdapter extends ProcessAdapter {
         denyList: CLAUDE_NAMED_AUTH_ENVIRONMENT_DENY_LIST,
       },
       authenticationArgs: ["--setting-sources", "user", ...MANIFEST.authArgs],
-      requiredVersion: CLAUDE_NAMED_CONTEXT_VERSION,
+      requiredVersionRange: CLAUDE_NAMED_CONTEXT_VERSION_RANGE,
     });
   }
 

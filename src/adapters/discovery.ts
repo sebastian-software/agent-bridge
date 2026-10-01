@@ -207,7 +207,8 @@ export async function discoverManifestRoutes(
     readonly probe?: DiscoveryProbe;
     readonly environment?: DiscoveryEnvironment;
     readonly authenticationArgs?: readonly string[];
-    readonly requiredVersion?: string;
+    /** Narrower range a named native context requires, within the qualified range. */
+    readonly requiredVersionRange?: string;
   },
 ): Promise<readonly RouteDescriptor[]> {
   const probe = options?.probe ?? {};
@@ -250,12 +251,13 @@ export async function discoverManifestRoutes(
   if (
     version === undefined ||
     !satisfiesVersionRange(version, manifest.qualifiedVersionRange) ||
-    (options?.requiredVersion !== undefined && version.value !== options.requiredVersion)
+    (options?.requiredVersionRange !== undefined &&
+      !satisfiesVersionRange(version, options.requiredVersionRange))
   ) {
     const diagnostic =
-      options?.requiredVersion === undefined
+      options?.requiredVersionRange === undefined
         ? `Installed ${manifest.command} version does not satisfy qualified range ${manifest.qualifiedVersionRange}.`
-        : `Named native contexts require ${manifest.command} ${options.requiredVersion}; detected ${version?.value ?? "an unknown version"}. Install the supported version or use the default login route.`;
+        : `Named native contexts require ${manifest.command} ${options.requiredVersionRange}; detected ${version?.value ?? "an unknown version"}. Install a supported version or use the default login route.`;
     return models.map((model) => ({
       routeId: `${manifest.id}:${model.requestModel}`,
       executable,

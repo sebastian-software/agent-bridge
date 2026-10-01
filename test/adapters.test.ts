@@ -304,7 +304,7 @@ test("Codex discovery exposes canonical model IDs and documented family aliases"
   );
 });
 
-test("named Claude discovery probes only the selected native configuration and exact version", async () => {
+test("named Claude discovery probes only the selected native configuration and version range", async () => {
   const nativeContext = await mkdtemp(join(tmpdir(), "harness-relay-claude-context-"));
   const originalApiKey = process.env.ANTHROPIC_API_KEY;
   process.env.ANTHROPIC_API_KEY = "fixture-inherited-api-key";
@@ -668,6 +668,44 @@ test("Codex named contexts use native login, reject profiles, and redact overlap
       process.env.CODEX_PROFILE = originalProfile;
     }
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("named contexts accept harness versions within their qualified range", async () => {
+  const nativeContext = await mkdtemp(join(tmpdir(), "harness-relay-named-range-"));
+  try {
+    for (const [harness, version, expected] of [
+      ["claude", "2.1.282 (Claude Code)", "ready"],
+      ["claude", "2.3.0 (Claude Code)", "ready"],
+      ["claude", "2.1.281 (Claude Code)", "unqualified"],
+      ["claude", "3.0.0 (Claude Code)", "unqualified"],
+      ["codex", "codex-cli 0.155.1", "ready"],
+      ["codex", "codex-cli 0.159.2", "ready"],
+      ["codex", "codex-cli 0.155.0", "unqualified"],
+      ["codex", "codex-cli 1.0.0", "unqualified"],
+    ] as const) {
+      const probe = {
+        readVersion: async () => version,
+        checkAuthentication: async () => true,
+      };
+      const adapter =
+        harness === "claude"
+          ? new ClaudeAdapter({ executable: process.execPath, probe })
+          : new CodexAdapter({ executable: process.execPath, probe });
+      const routes = await adapter.discoverConnection({
+        id: "range",
+        harness,
+        nativeContextRef: nativeContext,
+        revision: "revision-1",
+      });
+      assert.ok(routes.length > 0);
+      assert.ok(
+        routes.every((candidate) => candidate.readiness === expected),
+        `${harness} ${version}`,
+      );
+    }
+  } finally {
+    await rm(nativeContext, { recursive: true, force: true });
   }
 });
 
