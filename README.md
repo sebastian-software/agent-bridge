@@ -64,7 +64,7 @@ replaced by another model or harness.
 | Route                              | Status                                                                                          |
 | ---------------------------------- | ----------------------------------------------------------------------------------------------- |
 | Claude Code (`>=2.1.0 <3`)         | Qualified one-shot delegation                                                                   |
-| Codex CLI (`>=0.149.0 <1`)         | Qualified one-shot delegation                                                                   |
+| Codex CLI (`>=0.149.0 <1`)         | Qualified one-shot delegation; continuation from 0.159.2                                        |
 | Ollama through the embedded Pi SDK | Runs nonremote, tool-capable models with steering and continuation; three models qualified live |
 | LM Studio through Pi               | Discovery and diagnostics only; execution unavailable                                           |
 | Grok Build 1.0.44                  | Adapter present; routes stay unavailable until live qualification                               |

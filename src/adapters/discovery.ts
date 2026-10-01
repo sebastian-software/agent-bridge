@@ -40,6 +40,13 @@ export type AdapterManifest = {
   readonly qualification: AdapterQualificationManifest;
   readonly qualificationClaim: string;
   readonly policySupport?: Readonly<Record<string, readonly string[]>>;
+  /** Capabilities added only when the detected harness version satisfies the range. */
+  readonly versionCapabilities?: readonly AdapterVersionCapabilities[];
+};
+
+export type AdapterVersionCapabilities = {
+  readonly range: string;
+  readonly capabilities: readonly string[];
 };
 
 export type DiscoveryProbe = {
@@ -276,6 +283,9 @@ export async function discoverManifestRoutes(
     options?.authenticationArgs ?? manifest.authArgs,
     environment,
   );
+  const versionCapabilities = (manifest.versionCapabilities ?? [])
+    .filter((entry) => satisfiesVersionRange(version, entry.range))
+    .flatMap((entry) => entry.capabilities);
   return models.map((model) => ({
     routeId: `${manifest.id}:${model.requestModel}`,
     executable,
@@ -287,7 +297,7 @@ export async function discoverManifestRoutes(
     adapter: manifest.id,
     harnessVersion: version.value,
     authenticationMode: manifest.authenticationMode,
-    capabilities: model.capabilities,
+    capabilities: [...new Set([...model.capabilities, ...versionCapabilities])],
     interactionStrategies: model.interactionStrategies,
     assurance: "native",
     runtimeIdentityEvidence: "unverified",
