@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { brokerPaths } from "../src/paths.js";
+import { BridgeError } from "../src/errors.js";
+import { IpcClient } from "../src/ipc.js";
+import { assertSocketPathLength, brokerPaths } from "../src/paths.js";
 
 test("scopes the default XDG socket without an unscoped fallback", () => {
   assert.deepEqual(
@@ -23,4 +25,27 @@ test("explicit runtime and socket overrides take precedence", () => {
   });
   assert.equal(paths.runtimeDirectory, "/tmp/custom-runtime");
   assert.equal(paths.socketPath, "/tmp/custom.sock");
+});
+
+test("socket paths beyond the platform limit fail with a readable diagnostic", async () => {
+  const limit = process.platform === "linux" ? 107 : 104;
+  assert.doesNotThrow(() => {
+    assertSocketPathLength(`/${"s".repeat(limit - 1)}`);
+  });
+  const tooLong = `/${"s".repeat(limit)}`;
+  assert.throws(
+    () => {
+      assertSocketPathLength(tooLong);
+    },
+    (error: unknown) =>
+      error instanceof BridgeError &&
+      error.code === "broker_unavailable" &&
+      !error.retryable &&
+      error.message.includes(`${String(limit + 1)} bytes long`) &&
+      error.message.includes("HARNESS_RELAY_RUNTIME_DIR"),
+  );
+  await assert.rejects(
+    new IpcClient(tooLong).request("system.describe", {}),
+    (error: unknown) => error instanceof BridgeError && error.message.includes("bytes long"),
+  );
 });

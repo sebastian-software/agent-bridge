@@ -12,7 +12,7 @@ import {
 } from "./contract.js";
 import { BridgeError, type BridgeErrorCode, errorDetail } from "./errors.js";
 import { writeBrokerLog } from "./log.js";
-import { ensurePrivateDirectory } from "./paths.js";
+import { assertSocketPathLength, ensurePrivateDirectory } from "./paths.js";
 
 const MAX_MESSAGE_BYTES = 1_048_576;
 
@@ -111,6 +111,7 @@ export class BrokerServer {
   }
 
   async start(): Promise<void> {
+    assertSocketPathLength(this.#socketPath);
     await ensurePrivateDirectory(this.#runtimeDirectory, "runtime");
     await mkdir(dirname(this.#socketPath), { recursive: true, mode: 0o700 });
     try {
@@ -356,6 +357,7 @@ export class IpcClient {
   }
 
   async request(operation: string, params: unknown): Promise<unknown> {
+    assertSocketPathLength(this.#socketPath);
     const id = `req_${crypto.randomUUID()}`;
     const response = await new Promise<unknown>((resolve, reject) => {
       const socket = createConnection(this.#socketPath);

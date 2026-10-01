@@ -762,3 +762,74 @@ test("early local Pi input waits for route preflight and settles when the run is
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("a stopped Ollama server is reported as unavailable, not as a changed model", async (context) => {
+  const unavailable = await piRuntimeAvailability();
+  if (unavailable.length > 0) {
+    context.skip(unavailable.join(" "));
+    return;
+  }
+  const digest = "d".repeat(64);
+  const server = createServer((request, response) => {
+    if (request.url === "/api/version") {
+      jsonResponse(response, { version: "0.34.4" });
+    } else if (request.url === "/api/tags") {
+      jsonResponse(response, { models: [{ name: "qwen3:4b", model: "qwen3:4b", digest }] });
+    } else {
+      jsonResponse(response, {
+        model_info: { "qwen3.context_length": 16_384 },
+        capabilities: ["completion", "tools"],
+      });
+    }
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  assert.ok(address !== null && typeof address !== "string");
+  const root = await mkdtemp(join(tmpdir(), "harness-relay-local-pi-stopped-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const workingDirectory = join(root, "work");
+  await mkdir(workingDirectory);
+  const configPath = join(root, "config.json");
+  await writeFile(
+    configPath,
+    JSON.stringify({
+      localRuntimes: [
+        { id: "ollama-stopped", kind: "ollama", endpoint: `http://127.0.0.1:${address.port}` },
+      ],
+    }),
+    "utf8",
+  );
+  const adapter = new LocalPiAdapter({ configPath });
+  const registry = new AdapterRegistry([adapter], {
+    catalogPath: configPath,
+    connectionsPath: join(root, "connections.json"),
+  });
+  context.after(async () => registry.dispose());
+  const request = localRequest(workingDirectory);
+  const resolved = await registry.resolve(request);
+
+  server.closeAllConnections();
+  await new Promise<void>((resolve) => {
+    server.close(() => {
+      resolve();
+    });
+  });
+
+  await assert.rejects(
+    adapter.run({
+      invocationId: "local-pi-stopped-server",
+      request,
+      route: resolved.route,
+      signal: new AbortController().signal,
+      async emit() {},
+    }),
+    (error: unknown) =>
+      error instanceof BridgeError &&
+      error.code === "route_unavailable" &&
+      error.message.includes("Ollama profile ollama-stopped is unavailable at") &&
+      !error.message.includes("changed after route discovery"),
+  );
+});
