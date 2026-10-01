@@ -63,7 +63,7 @@ replaced by another model or harness.
 
 | Route                              | Status                                                                                          |
 | ---------------------------------- | ----------------------------------------------------------------------------------------------- |
-| Claude Code (`>=2.1.0 <3`)         | Qualified one-shot delegation                                                                   |
+| Claude Code (`>=2.1.0 <3`)         | Qualified one-shot delegation; continuation from 2.1.282                                        |
 | Codex CLI (`>=0.149.0 <1`)         | Qualified one-shot delegation; continuation from 0.159.2                                        |
 | Ollama through the embedded Pi SDK | Runs nonremote, tool-capable models with steering and continuation; three models qualified live |
 | LM Studio through Pi               | Discovery and diagnostics only; execution unavailable                                           |
