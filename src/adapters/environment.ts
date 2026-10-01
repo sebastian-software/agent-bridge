@@ -56,8 +56,9 @@ export async function inspectNativeContextDirectory(
 
 export function redactNativeContextText(text: string, references: readonly string[]): string {
   const replacements = references
-    .filter((reference) => reference !== "")
-    .flatMap((reference) => [reference, encodeURI(reference), encodeURIComponent(reference)])
+    .flatMap((reference) =>
+      reference === "" ? [] : [reference, encodeURI(reference), encodeURIComponent(reference)],
+    )
     .filter((reference, index, all) => all.indexOf(reference) === index)
     .sort((left, right) => right.length - left.length);
   let result = text;

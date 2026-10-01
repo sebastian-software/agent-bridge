@@ -1225,39 +1225,40 @@ test("broker resumes an invocation after an orchestrator input response", async 
   }
 });
 
+async function runNativePayload(
+  root: string,
+  diagnosticMode: boolean,
+): Promise<Readonly<Record<string, unknown>>> {
+  const broker = new Broker(paths(root), {
+    registry: new AdapterRegistry([new NativePayloadAdapter()]),
+    diagnosticMode,
+  });
+  await broker.initialize();
+  try {
+    const started = await broker.start(
+      request(root, "native-payload", {
+        selector: {
+          provider: "harness-relay",
+          model: "native-payload",
+          via: "native-payload",
+          effort: "high",
+          requiredCapabilities: ["core.input.text"],
+        },
+        interactionStrategy: "deny",
+      }),
+    );
+    return await waitForTerminal(broker, started.invocationId);
+  } finally {
+    await broker.close();
+  }
+}
+
 test("broker keeps native payloads bounded unless diagnostic mode is enabled", async () => {
   const regularRoot = await mkdtemp(join(tmpdir(), "harness-relay-native-regular-"));
   const diagnosticRoot = await mkdtemp(join(tmpdir(), "harness-relay-native-diagnostic-"));
-  const run = async (
-    root: string,
-    diagnosticMode: boolean,
-  ): Promise<Readonly<Record<string, unknown>>> => {
-    const broker = new Broker(paths(root), {
-      registry: new AdapterRegistry([new NativePayloadAdapter()]),
-      diagnosticMode,
-    });
-    await broker.initialize();
-    try {
-      const started = await broker.start(
-        request(root, "native-payload", {
-          selector: {
-            provider: "harness-relay",
-            model: "native-payload",
-            via: "native-payload",
-            effort: "high",
-            requiredCapabilities: ["core.input.text"],
-          },
-          interactionStrategy: "deny",
-        }),
-      );
-      return await waitForTerminal(broker, started.invocationId);
-    } finally {
-      await broker.close();
-    }
-  };
   try {
-    const regular = await run(regularRoot, false);
-    const diagnostic = await run(diagnosticRoot, true);
+    const regular = await runNativePayload(regularRoot, false);
+    const diagnostic = await runNativePayload(diagnosticRoot, true);
     const regularEvent = (regular.outcome as { content: unknown }).content;
     assert.deepEqual(regularEvent, [{ type: "text", text: "done" }]);
     const regularEvents = await (async () => {

@@ -221,9 +221,8 @@ test("Claude refuses continuation on versions without a qualified session fork",
   }
 });
 
-test("Claude rejects a continuation reference that is not a native session ID", () => {
-  const claude = new InspectableClaudeAdapter();
-  const context = (reference: string): AdapterRunContext => ({
+function referenceContext(reference: string): AdapterRunContext {
+  return {
     invocationId: "inv_claude_reference",
     request: claudeRequest("/tmp"),
     route: {
@@ -241,13 +240,17 @@ test("Claude rejects a continuation reference that is not a native session ID", 
     continuationHandle: { reference },
     signal: new AbortController().signal,
     async emit() {},
-  });
+  };
+}
+
+test("Claude rejects a continuation reference that is not a native session ID", () => {
+  const claude = new InspectableClaudeAdapter();
   for (const reference of ["--dangerously-skip-permissions", "latest", ""]) {
     assert.throws(
-      () => claude.commandFor(context(reference)),
+      () => claude.commandFor(referenceContext(reference)),
       (error: unknown) => error instanceof BridgeError && error.code === "continuation_unavailable",
     );
   }
-  const command = claude.commandFor(context(ORIGINAL_SESSION));
+  const command = claude.commandFor(referenceContext(ORIGINAL_SESSION));
   assert.deepEqual(command.args.slice(-3), ["--resume", ORIGINAL_SESSION, "--fork-session"]);
 });
