@@ -28,7 +28,7 @@ import {
 import { inspectNativeContextDirectory } from "./environment.js";
 import { type CommandSpec, ProcessAdapter, promptFor } from "./process.js";
 
-const CODEX_NAMED_CONTEXT_VERSION = "0.155.1";
+const CODEX_NAMED_CONTEXT_VERSION_RANGE = ">=0.155.1 <1.0.0";
 // `codex exec fork` was verified against 0.159.2: a fork keeps the session
 // context, gets a new thread ID, and leaves the forked session file unchanged.
 const CODEX_CONTINUATION_VERSION_RANGE = ">=0.159.2 <1.0.0";
@@ -347,7 +347,7 @@ export class CodexAdapter extends ProcessAdapter {
         overrides: { CODEX_HOME: nativeContext.path },
         denyList: CODEX_NAMED_AUTH_ENVIRONMENT_DENY_LIST,
       },
-      requiredVersion: CODEX_NAMED_CONTEXT_VERSION,
+      requiredVersionRange: CODEX_NAMED_CONTEXT_VERSION_RANGE,
     });
   }
 

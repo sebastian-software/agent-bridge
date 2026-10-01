@@ -5,9 +5,9 @@
 **Status:** Qualified for Codex CLI 0.159.2 with the default login
 
 This record covers Relay's `continuation` capability for the Codex exec
-adapter. It does not cover active steering, general questions, or named Codex
-connections, which still require Codex CLI 0.155.1 and therefore do not
-advertise continuation.
+adapter. It does not cover active steering or general questions. A later check
+on the same day ran an invocation and a continuation through a named Codex
+connection on 0.159.2 after named contexts moved to a version range.
 
 ## Configuration
 
