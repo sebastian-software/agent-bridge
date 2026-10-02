@@ -31,7 +31,9 @@ sets the review scope, coordinates invocations, and decides what to accept.
 3. Honor every explicit model, provider, effort, harness-family (`via`),
    capability, interaction, assurance, and other user preference. When the
    contributors are unspecified, select a useful set of qualified routes for
-   the review and record why they were chosen. An explicitly requested route
+   the review and record why they were chosen; the `harness-relay-routing`
+   skill describes how to choose tier and effort, including a higher tier
+   than the author's. An explicitly requested route
    that is unavailable or ambiguous is a visible failed contributor; never
    silently substitute a different model, effort, or harness. The number and
    ordering of contributors belong to the caller and user rather than to an

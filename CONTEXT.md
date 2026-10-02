@@ -50,6 +50,12 @@ outcome. It does not become the caller's workflow orchestrator.
 - **Local delegate:** A tool-using delegate whose model inference runs locally.
 - **Resolved route:** The concrete adapter, executable, harness version,
   authenticated native context, and model selection chosen for one invocation.
+- **Route guidance:** Editorial advice attached to a route about the model
+  behind it: a capability tier and particular strengths, built in or declared
+  by the user. It is not evidence, adds no capability, and plays no part in
+  route resolution.
+- **Billing mode:** How use of a route is paid for, as far as the bridge can
+  tell: `local`, `subscription`, `metered`, or `unknown`.
 - **Invocation:** One asynchronous, bounded delegation from an orchestrator to
   exactly one resolved route. An invocation is not a task graph or workflow.
 - **Invocation event:** An ordered, cursor-addressable observation emitted
@@ -69,6 +75,8 @@ outcome. It does not become the caller's workflow orchestrator.
 - **Workflow:** Caller-owned coordination of one or more invocations.
 - **Delegation skill:** Caller-side instructions for handing one bounded task
   to a delegate and interpreting its outcome.
+- **Routing skill:** Caller-side instructions for choosing the route and
+  effort of a delegation from route guidance and billing mode.
 - **Workflow skill:** Caller-side instructions for coordinating invocations
   toward a specific goal. The caller remains the root and owns the final
   decision.
@@ -116,6 +124,8 @@ outcome. It does not become the caller's workflow orchestrator.
   model, and effort; a harness family is an optional disambiguator.
 - Route resolution never silently substitutes another model, effort, or
   harness. Ambiguous or unavailable selectors fail with candidate diagnostics.
+- Route guidance and billing mode inform the caller's choice. The bridge
+  never selects a route from them.
 - The next increment expands reviewed built-in adapters while keeping their
   internal boundaries extensible. A public third-party adapter/plugin contract
   and plugin loading are outside this increment.

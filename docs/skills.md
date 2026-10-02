@@ -1,6 +1,6 @@
 # Caller skills
 
-Harness Relay ships four caller-side skills. Each release pins them to the
+Harness Relay ships five caller-side skills. Each release pins them to the
 CLI of the same version.
 
 | Skill                          | Use it for                                                           |
@@ -8,6 +8,7 @@ CLI of the same version.
 | `harness-relay`                | One bounded analysis or implementation delegation                    |
 | `harness-relay-second-opinion` | An independent appraisal of a plan, change, or decision              |
 | `harness-relay-review`         | A review with multiple model contributors and attributed findings    |
+| `harness-relay-routing`        | Choose route and effort for a delegation the user left open          |
 | `harness-relay-setup`          | Manage named native contexts with explicit user-owned authentication |
 
 Each skill runs in the caller's context. The caller remains the root, owns the
@@ -93,7 +94,7 @@ git clone --branch v0.3.1 --depth 1 \
   "$skill_checkout/harness-relay"
 npx skills add "$skill_checkout/harness-relay" \
   --skill harness-relay harness-relay-second-opinion harness-relay-review \
-  harness-relay-setup \
+  harness-relay-routing harness-relay-setup \
   --agent codex claude-code --global --copy --yes
 ```
 
@@ -127,10 +128,12 @@ dalo source add-catalog harness-relay \
   https://github.com/sebastian-software/harness-relay.git
 dalo source inspect harness-relay
 dalo source select harness-relay harness-relay \
-  harness-relay-second-opinion harness-relay-review harness-relay-setup
+  harness-relay-second-opinion harness-relay-review harness-relay-routing \
+  harness-relay-setup
 dalo approve skill harness-relay:harness-relay
 dalo approve skill harness-relay:harness-relay-second-opinion
 dalo approve skill harness-relay:harness-relay-review
+dalo approve skill harness-relay:harness-relay-routing
 dalo approve skill harness-relay:harness-relay-setup
 dalo sync
 ```
@@ -147,10 +150,12 @@ dalo team catalog add relay \
   --skill +harness-relay \
   --skill +harness-relay-second-opinion \
   --skill +harness-relay-review \
+  --skill +harness-relay-routing \
   --skill +harness-relay-setup
 dalo approve skill relay:harness-relay
 dalo approve skill relay:harness-relay-second-opinion
 dalo approve skill relay:harness-relay-review
+dalo approve skill relay:harness-relay-routing
 dalo approve skill relay:harness-relay-setup
 dalo sync
 ```

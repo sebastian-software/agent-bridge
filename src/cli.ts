@@ -444,6 +444,14 @@ async function startParams(parsed: ParsedArguments): Promise<Readonly<Record<str
   };
 }
 
+function nestedField(value: unknown, key: string): string {
+  const field =
+    typeof value === "object" && value !== null
+      ? (value as Readonly<Record<string, unknown>>)[key]
+      : undefined;
+  return typeof field === "string" ? field : "-";
+}
+
 function routeTable(value: unknown): string {
   if (
     typeof value !== "object" ||
@@ -454,7 +462,7 @@ function routeTable(value: unknown): string {
     return JSON.stringify(value, null, 2);
   }
   const lines = [
-    "ROUTE                              CONNECTION       READINESS    VERSION       AUTH       STRATEGIES",
+    "ROUTE                              CONNECTION       READINESS    TIER      BILLING       VERSION       AUTH       STRATEGIES",
   ];
   for (const route of value.routes) {
     if (typeof route !== "object" || route === null) continue;
@@ -463,7 +471,7 @@ function routeTable(value: unknown): string {
       ? item.interactionStrategies.join(",")
       : "";
     lines.push(
-      `${String(item.routeId ?? "").padEnd(34)} ${String(item.connectionId ?? "default").padEnd(16)} ${String(item.readiness ?? "").padEnd(11)} ${String(item.harnessVersion ?? "").padEnd(13)} ${String(item.authenticationMode ?? "").padEnd(10)} ${strategies}`,
+      `${String(item.routeId ?? "").padEnd(34)} ${String(item.connectionId ?? "default").padEnd(16)} ${String(item.readiness ?? "").padEnd(11)} ${nestedField(item.guidance, "tier").padEnd(9)} ${nestedField(item.billing, "mode").padEnd(13)} ${String(item.harnessVersion ?? "").padEnd(13)} ${String(item.authenticationMode ?? "").padEnd(10)} ${strategies}`,
     );
   }
   return lines.join("\n");

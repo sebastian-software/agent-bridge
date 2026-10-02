@@ -268,12 +268,12 @@ test("route discovery reports qualified and authenticated command routes", async
     },
   });
   const routes = await claude.discover();
-  assert.equal(routes.length, 7);
+  assert.equal(routes.length, 5);
   assert.ok(routes.every((candidate) => candidate.readiness === "ready"));
   assert.ok(routes.every((candidate) => candidate.executable === process.execPath));
   assert.ok(routes.every((candidate) => candidate.qualification.length === 1));
   const opusAlias = routes.find((candidate) => candidate.model === "opus");
-  assert.equal(opusAlias?.canonicalModel, "claude-opus-4-8");
+  assert.equal(opusAlias?.canonicalModel, "claude-opus-5-5");
   assert.equal(opusAlias?.qualification[0]?.testedAt, "2026-09-05T22:04:14+02:00");
   assert.match(opusAlias?.qualification[0]?.claim ?? "", /test\/adapters\.test\.ts/);
   assert.match(
@@ -281,11 +281,87 @@ test("route discovery reports qualified and authenticated command routes", async
     /verifies route discovery, command argument construction/,
   );
   assert.doesNotMatch(opusAlias?.qualification[0]?.claim ?? "", /exercised native model/);
-  const haiku = routes.find((candidate) => candidate.model === "claude-haiku-4-5-20251001");
-  assert.equal(haiku?.canonicalModel, "claude-haiku-4-5-20251001");
+  const sonnet = routes.find((candidate) => candidate.model === "claude-sonnet-5-5");
+  assert.equal(sonnet?.canonicalModel, "claude-sonnet-5-5");
+  assert.deepEqual(sonnet?.efforts, ["low", "medium", "high", "xhigh", "max"]);
+  // The harness resolves these aliases to retired models, so no route offers them.
+  assert.ok(routes.every((candidate) => !["haiku", "sonnet"].includes(candidate.model)));
 });
 
-test("Codex discovery exposes canonical model IDs and documented family aliases", async () => {
+function codexAdapter(output: string): CodexAdapter {
+  return new CodexAdapter({
+    executable: process.execPath,
+    probe: {
+      readVersion: async () => "0.159.2 (Codex)",
+      checkAuthentication: async () => ({ authenticated: true, output }),
+    },
+  });
+}
+
+test("manifest routes carry built-in guidance and billing from the authentication probe", async () => {
+  const claude = await new ClaudeAdapter({
+    executable: process.execPath,
+    probe: {
+      readVersion: async () => "2.1.282 (Claude Code)",
+      checkAuthentication: async () => ({
+        authenticated: true,
+        output: JSON.stringify({
+          loggedIn: true,
+          authMethod: "claude.ai",
+          subscriptionType: "max",
+        }),
+      }),
+    },
+  }).discover();
+  assert.deepEqual(
+    Object.fromEntries(claude.map((candidate) => [candidate.model, candidate.guidance?.tier])),
+    {
+      "claude-fable-5-1": "frontier",
+      fable: "frontier",
+      "claude-opus-5-5": "strong",
+      opus: "strong",
+      "claude-sonnet-5-5": "balanced",
+    },
+  );
+  assert.ok(claude.every((candidate) => candidate.guidance?.source === "built-in"));
+  assert.ok(
+    claude.every(
+      (candidate) =>
+        candidate.billing?.mode === "subscription" && candidate.billing.evidence === "reported",
+    ),
+  );
+
+  const codex = await codexAdapter("Logged in using an API key - sk-***").discover();
+  const astra = codex.find((candidate) => candidate.model === "gpt-6-astra");
+  assert.deepEqual(astra?.guidance, {
+    tier: "frontier",
+    strengths: ["computer-use"],
+    asOf: "2026-10-02",
+    source: "built-in",
+  });
+  assert.deepEqual(astra?.efforts, ["low", "medium", "high", "xhigh", "max", "ultra"]);
+  assert.deepEqual(astra?.billing, { mode: "metered", evidence: "reported" });
+  // A strength describes the model; it never adds a route capability.
+  assert.ok(!astra?.capabilities.includes("computer-use"));
+  const luna = codex.find((candidate) => candidate.model === "gpt-6-luna");
+  assert.equal(luna?.guidance?.tier, "fast");
+  assert.deepEqual(luna?.efforts, ["low", "medium", "high", "xhigh", "max"]);
+  assert.ok(codex.every((candidate) => candidate.guidance?.source === "built-in"));
+
+  // A probe that reports only success, an unknown login, or no login leaves billing unknown.
+  const unknown = { mode: "unknown", evidence: "unverified" };
+  const [workload] = await codexAdapter("Logged in using workload identity").discover();
+  assert.deepEqual(workload?.billing, unknown);
+  for (const checkAuthentication of [async () => true, async () => false]) {
+    const [candidate] = await new CodexAdapter({
+      executable: process.execPath,
+      probe: { readVersion: async () => "0.159.2 (Codex)", checkAuthentication },
+    }).discover();
+    assert.deepEqual(candidate?.billing, unknown);
+  }
+});
+
+test("Codex discovery exposes canonical model IDs with their qualification claim", async () => {
   const codex = new CodexAdapter({
     executable: process.execPath,
     probe: {
@@ -294,12 +370,15 @@ test("Codex discovery exposes canonical model IDs and documented family aliases"
     },
   });
   const routes = await codex.discover();
-  assert.equal(routes.length, 6);
-  const alias = routes.find((candidate) => candidate.model === "gpt-5-codex");
-  assert.equal(alias?.canonicalModel, "gpt-5.3-codex");
-  assert.match(alias?.qualification[0]?.claim ?? "", /2473c44fc41befe82847287b13af53245c008a39/);
+  assert.deepEqual(
+    routes.map((candidate) => candidate.model),
+    ["gpt-6-astra", "gpt-6.1-sol", "gpt-6-luna"],
+  );
+  const sol = routes.find((candidate) => candidate.model === "gpt-6.1-sol");
+  assert.equal(sol?.canonicalModel, "gpt-6.1-sol");
+  assert.match(sol?.qualification[0]?.claim ?? "", /2473c44fc41befe82847287b13af53245c008a39/);
   assert.match(
-    alias?.qualification[0]?.claim ?? "",
+    sol?.qualification[0]?.claim ?? "",
     /runtime model identity requires a separate opt-in/,
   );
 });
@@ -494,7 +573,7 @@ test("Codex named contexts use native login, reject profiles, and redact overlap
       ...request(alphaWorkspace),
       selector: {
         provider: "openai",
-        model: "gpt-5.5",
+        model: "gpt-6.1-sol",
         via: "codex",
         connectionId: "alpha",
         requiredCapabilities: ["core.input.text"],
@@ -510,7 +589,7 @@ test("Codex named contexts use native login, reject profiles, and redact overlap
       ...request(gammaWorkspace),
       selector: {
         provider: "openai",
-        model: "gpt-5.5",
+        model: "gpt-6.1-sol",
         via: "codex",
         connectionId: "gamma",
         requiredCapabilities: ["core.input.text"],
@@ -992,7 +1071,7 @@ test("Claude and Codex pass native aliases through to the harness", () => {
     route: {
       ...route("claude", process.execPath),
       model: "opus",
-      canonicalModel: "claude-opus-4-8",
+      canonicalModel: "claude-opus-5-5",
     },
     signal: new AbortController().signal,
     async emit() {},
@@ -1005,16 +1084,13 @@ test("Claude and Codex pass native aliases through to the harness", () => {
     request: request(process.cwd()),
     route: {
       ...route("codex", process.execPath),
-      model: "gpt-5-codex",
-      canonicalModel: "gpt-5.3-codex",
+      model: "sol",
+      canonicalModel: "gpt-6.1-sol",
     },
     signal: new AbortController().signal,
     async emit() {},
   });
-  assert.equal(
-    codexAliasCommand.args[codexAliasCommand.args.indexOf("--model") + 1],
-    "gpt-5-codex",
-  );
+  assert.equal(codexAliasCommand.args[codexAliasCommand.args.indexOf("--model") + 1], "sol");
 
   const codexCatalogCommand = codex.commandFor({
     invocationId: "inv_codex_catalog_model",
@@ -1022,15 +1098,15 @@ test("Claude and Codex pass native aliases through to the harness", () => {
     route: {
       ...route("codex", process.execPath),
       model: "local",
-      canonicalModel: "gpt-5.3-codex",
-      nativeModel: "gpt-5.3-codex",
+      canonicalModel: "gpt-6.1-sol",
+      nativeModel: "gpt-6.1-sol",
     },
     signal: new AbortController().signal,
     async emit() {},
   });
   assert.equal(
     codexCatalogCommand.args[codexCatalogCommand.args.indexOf("--model") + 1],
-    "gpt-5.3-codex",
+    "gpt-6.1-sol",
   );
 
   const claudeCatalogCommand = claude.commandFor({
@@ -1039,15 +1115,15 @@ test("Claude and Codex pass native aliases through to the harness", () => {
     route: {
       ...route("claude", process.execPath),
       model: "local",
-      canonicalModel: "claude-opus-4-8",
-      nativeModel: "claude-opus-4-8",
+      canonicalModel: "claude-opus-5-5",
+      nativeModel: "claude-opus-5-5",
     },
     signal: new AbortController().signal,
     async emit() {},
   });
   assert.equal(
     claudeCatalogCommand.args[claudeCatalogCommand.args.indexOf("--model") + 1],
-    "claude-opus-4-8",
+    "claude-opus-5-5",
   );
 });
 
@@ -1185,7 +1261,7 @@ test("policy resolution rejects unsupported fields and records exact controls", 
   const claudeRoute: RouteDescriptor = {
     routeId: "claude:test",
     provider: "anthropic",
-    model: "haiku",
+    model: "opus",
     efforts: ["low", "medium", "high", "max"],
     via: "claude-code",
     adapter: "claude",
@@ -1235,7 +1311,7 @@ test("policy resolution rejects unsupported fields and records exact controls", 
       ...claudeRoute,
       routeId: "codex:test",
       provider: "openai",
-      model: "gpt-5.5",
+      model: "gpt-6.1-sol",
       via: "codex",
       adapter: "codex",
     },
@@ -1253,7 +1329,8 @@ test("policy resolution rejects unsupported fields and records exact controls", 
     signal: new AbortController().signal,
     async emit() {},
   });
-  assert.ok(command.args.includes("model_reasoning_effort=xhigh"));
+  // Codex has a native `max`, so every effort reaches the harness under its own name.
+  assert.ok(command.args.includes("model_reasoning_effort=max"));
   assert.equal(command.stdin, "hello");
 
   const networkAllowed = codex.commandFor({
@@ -1293,7 +1370,7 @@ test("policy resolution rejects unsupported fields and records exact controls", 
       ...claudeRoute,
       routeId: "codex:test-read-only",
       provider: "openai",
-      model: "gpt-5.5",
+      model: "gpt-6.1-sol",
       via: "codex",
       adapter: "codex",
     },

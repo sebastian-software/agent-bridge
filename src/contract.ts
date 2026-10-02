@@ -80,6 +80,31 @@ export type QualificationEvidence = {
   readonly claim: string;
 };
 
+/** Capability tiers, ordered from most to least capable. */
+export const ROUTE_TIERS = ["frontier", "strong", "balanced", "fast"] as const;
+
+export type RouteTier = (typeof ROUTE_TIERS)[number];
+
+/**
+ * Editorial advice about the model behind a route. It describes the model, not
+ * what the route can do; route resolution never reads it.
+ */
+export type RouteGuidance = {
+  readonly tier: RouteTier;
+  readonly strengths: readonly string[];
+  readonly source: "built-in" | "user-declared";
+  /** ISO date of the assessment. */
+  readonly asOf?: string;
+};
+
+export type RouteBillingMode = "local" | "metered" | "subscription" | "unknown";
+
+/** How use of a route is paid for, as far as the bridge can tell. */
+export type RouteBilling = {
+  readonly mode: RouteBillingMode;
+  readonly evidence: EvidenceStatus;
+};
+
 export type RouteDescriptor = {
   readonly routeId: string;
   readonly executable?: string;
@@ -111,6 +136,8 @@ export type RouteDescriptor = {
   readonly modelDigest?: string;
   readonly runtimeInstanceId?: string;
   readonly policySupport?: Readonly<Record<string, readonly string[]>>;
+  readonly guidance?: RouteGuidance;
+  readonly billing?: RouteBilling;
 };
 
 export type ResolvedRoute = {

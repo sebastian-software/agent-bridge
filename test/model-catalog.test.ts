@@ -10,6 +10,7 @@ import type { RouteDescriptor } from "../src/contract.js";
 import { ClaudeAdapter } from "../src/adapters/claude.js";
 import { FakeAdapter } from "../src/adapters/fake.js";
 import { AdapterRegistry } from "../src/adapters/registry.js";
+import { BridgeError } from "../src/errors.js";
 import { applyUserModelCatalog } from "../src/model-catalog.js";
 
 class CountingAdapter implements Adapter {
@@ -119,8 +120,75 @@ test("user aliases preserve a native harness alias separately from its canonical
     adapters: { claude: { aliases: { quick: "opus" } } },
   });
   const quick = mapped.find((route) => route.adapter === "claude" && route.model === "quick");
-  assert.equal(quick?.canonicalModel, "claude-opus-4-8");
+  assert.equal(quick?.canonicalModel, "claude-opus-5-5");
   assert.equal(quick?.nativeModel, "opus");
+});
+
+test("user catalog declares and replaces route guidance without touching resolution fields", async () => {
+  const routes = await new ClaudeAdapter({
+    executable: process.execPath,
+    probe: {
+      readVersion: async () => "2.1.282 (Claude Code)",
+      checkAuthentication: async () => true,
+    },
+  }).discover();
+  const mapped = applyUserModelCatalog(routes, {
+    adapters: {
+      claude: {
+        aliases: { quick: "opus" },
+        models: {
+          preview: { nativeModel: "claude-preview", guidance: { tier: "frontier" } },
+          plain: { nativeModel: "claude-plain" },
+        },
+        guidance: { "claude-sonnet-5-5": { tier: "fast", strengths: ["speed"] } },
+      },
+    },
+  });
+  const byModel = (model: string): RouteDescriptor | undefined =>
+    mapped.find((route) => route.model === model);
+
+  // An alias names the same model, so the built-in assessment carries over.
+  assert.equal(byModel("quick")?.guidance?.tier, "strong");
+  assert.equal(byModel("quick")?.guidance?.source, "built-in");
+  // A user-declared model is a different model: only its own declaration counts.
+  assert.deepEqual(byModel("preview")?.guidance, {
+    tier: "frontier",
+    strengths: [],
+    source: "user-declared",
+  });
+  assert.equal(byModel("plain")?.guidance, undefined);
+  // A declaration keyed by model replaces the built-in assessment.
+  assert.deepEqual(byModel("claude-sonnet-5-5")?.guidance, {
+    tier: "fast",
+    strengths: ["speed"],
+    source: "user-declared",
+  });
+  assert.equal(byModel("claude-fable-5-1")?.guidance?.source, "built-in");
+
+  const sonnet = routes.find((route) => route.model === "claude-sonnet-5-5");
+  const { guidance: _before, ...original } = sonnet ?? {};
+  const { guidance: _after, ...replaced } = byModel("claude-sonnet-5-5") ?? {};
+  assert.deepEqual(replaced, original);
+});
+
+test("user catalog rejects malformed guidance", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-relay-catalog-"));
+  const catalogPath = join(root, "config.json");
+  try {
+    for (const adapter of [
+      { guidance: [] },
+      { guidance: { opus: { tier: "best" } } },
+      { models: { preview: { nativeModel: "claude-preview", guidance: { tier: "best" } } } },
+    ]) {
+      await writeFile(catalogPath, JSON.stringify({ adapters: { claude: adapter } }), "utf8");
+      await assert.rejects(
+        new AdapterRegistry([new FakeAdapter()], { catalogPath }).discover(),
+        (error) => error instanceof BridgeError && error.code === "invalid_request",
+      );
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("model aliases preserve readiness and identity evidence per connection", async () => {

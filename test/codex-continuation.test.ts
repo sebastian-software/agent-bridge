@@ -91,7 +91,7 @@ function codexRequest(
   overrides?: Partial<StartInvocationRequest>,
 ): StartInvocationRequest {
   return {
-    selector: { provider: "openai", model: "gpt-5.5", via: "codex", requiredCapabilities: [] },
+    selector: { provider: "openai", model: "gpt-6.1-sol", via: "codex", requiredCapabilities: [] },
     input: [{ type: "text", text: "first task" }],
     workingDirectory: workspace,
     interactionStrategy: "deny",
@@ -262,13 +262,13 @@ function referenceContext(reference: string): AdapterRunContext {
     invocationId: "inv_codex_reference",
     request: codexRequest("/tmp"),
     route: {
-      routeId: "codex:gpt-5.5",
+      routeId: "codex:gpt-6.1-sol",
       executable: process.execPath,
       adapter: "codex",
       harnessVersion: "0.159.2",
       authenticationMode: "codex-native",
       provider: "openai",
-      model: "gpt-5.5",
+      model: "gpt-6.1-sol",
       via: "codex",
       capabilities: ["core.input.text", "continuation"],
       qualification: [],

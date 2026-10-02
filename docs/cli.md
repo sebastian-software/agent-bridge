@@ -57,6 +57,15 @@ JSON mode, followed by the complete outcome. It exits zero only for
 `succeeded`; SIGINT requests cancellation before returning. The equivalent
 programmatic convenience is `createClient().run(request)`.
 
+## Choosing a route
+
+`routes` lists each route's tier and billing mode; `routes --json` returns the
+full `guidance` and `billing` fields described in the
+[contract reference](contract.md#route-guidance-and-billing). Both are advice
+for the caller. The CLI never picks a model, and `start` and `run` still need
+`--provider` and `--model`. The `harness-relay-routing` skill applies routing
+rules to these fields.
+
 ## Selecting a local model
 
 Configure user-global `localRuntimes` in `config.json`, then run
@@ -84,7 +93,7 @@ harness-relay connections list --json
 harness-relay connections register --id analysis --harness codex \
   --native-context "$HOME/.codex" --purpose analysis --json
 harness-relay connections inspect analysis --json
-harness-relay start --provider openai --model gpt-5.5 --via codex \
+harness-relay start --provider openai --model gpt-6.1-sol --via codex \
   --connection analysis --cwd "$PWD" --text "Review this change" --json
 ```
 

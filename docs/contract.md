@@ -56,6 +56,63 @@ fails instead of silently adopting refreshed metadata. Catalog aliases may
 name an existing local model but cannot synthesize an executable local route.
 See [local model setup](local-models.md) for readiness and assurance limits.
 
+## Route guidance and billing
+
+A route descriptor may carry two optional fields that help a caller choose
+among routes. Route resolution reads neither, and neither is qualification
+evidence (ADR-0026).
+
+`guidance` is editorial advice about the model behind the route:
+
+| Field       | Meaning                                                                   |
+| ----------- | ------------------------------------------------------------------------- |
+| `tier`      | `frontier`, `strong`, `balanced`, or `fast`, from most to least capable   |
+| `strengths` | Tasks the model particularly suits, such as `computer-use`                |
+| `source`    | `built-in` for the adapter manifest, `user-declared` for the user catalog |
+| `asOf`      | ISO date of the assessment; always present for built-in guidance          |
+
+A strength describes the model. It does not add a capability: `capabilities`
+remain the only statement of what the route can do. A route without
+`guidance` has an unknown tier. Built-in routes list `efforts` from lowest to
+highest.
+
+`billing` reports how use of the route is paid for:
+
+| `mode`         | Meaning                                                  |
+| -------------- | -------------------------------------------------------- |
+| `local`        | Inference runs on the user's hardware; no charge per use |
+| `subscription` | A flat-rate login that draws on a usage cap              |
+| `metered`      | Charged per use, for example an API key                  |
+| `unknown`      | Not established                                          |
+
+`billing.evidence` is `reported` when the mode comes from the harness's own
+authentication status, `inferred` for a ready local route, and `unverified`
+for `unknown`. Claude Code reports a claude.ai subscription login; Codex
+reports a ChatGPT login or an API key. Any other login, and every route that
+is not ready, is `unknown`. The status output is classified during discovery
+and not retained.
+
+The user catalog in `config.json` declares or replaces guidance. An entry
+under `adapters.<adapter>.guidance` is keyed by the requested or canonical
+model. A model defined under `adapters.<adapter>.models` takes its own
+`guidance` and never inherits one; an alias keeps the guidance of its target.
+
+```json
+{
+  "adapters": {
+    "pi": { "guidance": { "qwen3:8b": { "tier": "fast" } } },
+    "codex": {
+      "guidance": {
+        "gpt-6.1-sol": { "tier": "balanced", "strengths": ["refactoring"], "asOf": "2026-10-02" }
+      }
+    }
+  }
+}
+```
+
+An invalid tier, strengths list, or date fails discovery with
+`invalid_request`.
+
 Connection management operations share the same broker API across IPC, the
 typed client, CLI, and MCP. `connection.discover` includes default and named
 route observations plus redacted registration summaries; `connection.list`

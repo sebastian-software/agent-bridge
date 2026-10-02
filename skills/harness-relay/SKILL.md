@@ -33,7 +33,9 @@ constraints, interprets the result, and makes the final decision.
    the equivalent `harness-relay routes --json` command. Honor explicit
    provider, model, effort, harness-family (`via`), capability, interaction,
    assurance, and other user preferences. When those choices are absent,
-   select an appropriate qualified route and effort for the task. An explicit
+   select an appropriate qualified route and effort for the task; the
+   `harness-relay-routing` skill describes how to choose from the routes'
+   `guidance` and `billing`. An explicit
    route that is unavailable or ambiguous is a visible resolution failure;
    never silently substitute another model, effort, or harness. For local
    routes, preserve the discovered `runtimeId` (`--runtime` in the CLI) to

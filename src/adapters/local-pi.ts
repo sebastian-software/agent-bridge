@@ -29,6 +29,7 @@ import {
   piRuntimeAvailability,
 } from "../local-runtimes.js";
 import { defaultCatalogPath } from "../model-catalog.js";
+import { LOCAL_BILLING, UNKNOWN_BILLING } from "../route-guidance.js";
 import { PiAdapter } from "./pi.js";
 
 const PI_VERSION = "1.0.0";
@@ -208,6 +209,8 @@ function descriptor(
     inferenceServer: inventory.profile.kind,
     ...(model.digest === undefined ? {} : { modelDigest: model.digest }),
     ...(model.instanceId === undefined ? {} : { runtimeInstanceId: model.instanceId }),
+    // Only a ready route has established that inference runs on the local server.
+    billing: readiness === "ready" ? LOCAL_BILLING : UNKNOWN_BILLING,
   };
 }
 
