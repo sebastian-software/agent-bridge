@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.3.1](https://github.com/sebastian-software/harness-relay/compare/v0.3.0...v0.3.1) (2026-10-02)
+
+
+### Bug Fixes
+
+* accept version ranges for named native contexts ([b1a51f4](https://github.com/sebastian-software/harness-relay/commit/b1a51f412544f213df3334c5428129696cc45ab9))
+* **deps:** update minor tooling and runtime dependencies ([#180](https://github.com/sebastian-software/harness-relay/issues/180)) ([e28402e](https://github.com/sebastian-software/harness-relay/commit/e28402e1775a644f472c300f4c559e4f0f935de3))
+* **deps:** update Pi SDK to 1.0.0 ([#179](https://github.com/sebastian-software/harness-relay/issues/179)) ([1d49703](https://github.com/sebastian-software/harness-relay/commit/1d497033685908c999d7d7017e618eb84d368dec))
+* explain long socket paths and stopped local runtimes ([58a8249](https://github.com/sebastian-software/harness-relay/commit/58a82492ad6c8907bf521dbfbeceaa010778680f))
+* **grok:** qualify Grok Build by version range ([#178](https://github.com/sebastian-software/harness-relay/issues/178)) ([5cdb36a](https://github.com/sebastian-software/harness-relay/commit/5cdb36a4102ba98042fe07bfca789a3d48913419))
+
 ## [0.3.0](https://github.com/sebastian-software/harness-relay/compare/v0.2.0...v0.3.0) (2026-10-01)
 
 
