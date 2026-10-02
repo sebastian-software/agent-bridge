@@ -24,6 +24,7 @@ import type {
 } from "./types.js";
 
 import { BridgeError, type BridgeErrorCode } from "../errors.js";
+import { parseVersion, satisfiesVersionRange } from "./discovery.js";
 import {
   childEnvironment,
   inspectNativeContextDirectory,
@@ -34,8 +35,8 @@ import { readBoundedLines } from "./pi-protocol.js";
 import { promptFor } from "./process.js";
 
 const execFileAsync = promisify(execFile);
-const QUALIFIED_VERSION = "1.0.44";
-const QUALIFIED_VERSION_RANGE = "=1.0.44";
+// ACP v1 was fixture-qualified on Grok Build 1.0.44.
+const QUALIFIED_VERSION_RANGE = ">=1.0.44 <2.0.0";
 const ACP_PROTOCOL_VERSION = 1;
 const MAX_ACP_LINE_BYTES = 1024 * 1024;
 const MAX_ACP_TEXT_BYTES = 2 * 1024 * 1024;
@@ -490,7 +491,7 @@ export class GrokAdapter implements Adapter {
     if (configProblem !== undefined) {
       return routeDescriptors("unavailable", undefined, "unknown", [configProblem]);
     }
-    return this.#discover(native.path, QUALIFIED_VERSION);
+    return this.#discover(native.path);
   }
 
   async runConnection(context: AdapterConnectionRunContext): Promise<AdapterRunResult> {
@@ -1207,10 +1208,7 @@ export class GrokAdapter implements Adapter {
     return result;
   }
 
-  async #discover(
-    nativeHome?: string,
-    requiredVersion?: string,
-  ): Promise<readonly RouteDescriptor[]> {
+  async #discover(nativeHome?: string): Promise<readonly RouteDescriptor[]> {
     let executable = this.#executable;
     executable ??= await (this.#probe?.findExecutable ?? findExecutable)(MANIFEST.command);
     if (executable === undefined) {
@@ -1235,12 +1233,10 @@ export class GrokAdapter implements Adapter {
       environment,
     );
     const version = versionFrom(versionOutput) ?? "unknown";
-    if (
-      version !== QUALIFIED_VERSION ||
-      (requiredVersion !== undefined && version !== requiredVersion)
-    ) {
+    const parsed = parseVersion(version);
+    if (parsed === undefined || !satisfiesVersionRange(parsed, QUALIFIED_VERSION_RANGE)) {
       return routeDescriptors("unqualified", executable, version, [
-        `Grok Build ${version} is not the qualified ${QUALIFIED_VERSION} release.`,
+        `Grok Build ${version} does not satisfy the qualified range ${QUALIFIED_VERSION_RANGE}.`,
       ]);
     }
     if (process.platform === "win32") {
@@ -1249,7 +1245,7 @@ export class GrokAdapter implements Adapter {
       ]);
     }
     return routeDescriptors("unavailable", executable, version, [
-      "Grok 1.0.44 ACP v1 is fixture-qualified, but native authentication status and account-specific model availability have no qualified read-only probe. Discovery does not run `grok models` or authenticate. Complete the native login yourself; route readiness remains unavailable until auth/model discovery is qualified.",
+      "Grok ACP v1 is fixture-qualified from 1.0.44, but native authentication status and account-specific model availability have no qualified read-only probe. Discovery does not run `grok models` or authenticate. Complete the native login yourself; route readiness remains unavailable until auth/model discovery is qualified.",
       "ACP filesystem and terminal client capabilities are disabled. This adapter currently supports text-only prompt/output; native tool execution, effects, permission prompts, and continuation are not qualified.",
     ]);
   }

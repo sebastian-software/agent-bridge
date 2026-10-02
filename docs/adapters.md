@@ -155,13 +155,13 @@ real-account behavior are outside the fixture evidence.
 
 ## Grok Build
 
-The Grok adapter is currently a version-pinned, fixture-tested ACP v1 path for
-Grok Build 1.0.44. Discovery intentionally reports every Grok route as
+The Grok adapter is currently a fixture-tested ACP v1 path for Grok Build
+`>=1.0.44 <2.0.0`, first tested against 1.0.44. Discovery intentionally reports every Grok route as
 unavailable: there is no qualified passive operation for native authentication
 status or account-specific model access, and discovery does not run `grok
 models` or start authentication. The listed model IDs are candidates, not a
-claim that the selected account can use them. A missing or different CLI version
-is unqualified.
+claim that the selected account can use them. A missing CLI or a version outside
+that range is unqualified.
 
 The adapter requests text-only ACP operation and advertises no client
 filesystem or terminal methods. Any reverse ACP request for those methods fails
