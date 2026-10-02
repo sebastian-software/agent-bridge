@@ -45,7 +45,8 @@ extend what a route can do. `capabilities` remain the only statement of that.
 A strength such as `computer-use` says the model suits the task; it does not
 say the route was qualified for it.
 
-The `harness-relay-routing` skill holds the rules and no model names:
+The routing rules ship as `references/routing.md` of the `harness-relay` skill
+(see the 2026-10-02 update of ADR-0023) and name no models:
 
 - Explicit user choices and existing preferences come first.
 - Routine work goes to the lowest tier and effort that can do it, and moves

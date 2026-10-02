@@ -1,20 +1,27 @@
-# Caller skills
+# Caller skill
 
-Harness Relay ships five caller-side skills. Each release pins them to the
-CLI of the same version.
+Harness Relay ships one caller-side skill, `harness-relay`. Each release pins it
+to the CLI of the same version. Its `SKILL.md` holds the shared procedure and
+routes by intent to reference files that the agent loads only when needed:
 
-| Skill                          | Use it for                                                           |
-| ------------------------------ | -------------------------------------------------------------------- |
-| `harness-relay`                | One bounded analysis or implementation delegation                    |
-| `harness-relay-second-opinion` | An independent appraisal of a plan, change, or decision              |
-| `harness-relay-review`         | A review with multiple model contributors and attributed findings    |
-| `harness-relay-routing`        | Choose route and effort for a delegation the user left open          |
-| `harness-relay-setup`          | Manage named native contexts with explicit user-owned authentication |
+| The user wants                                              | Where the skill continues |
+| ----------------------------------------------------------- | ------------------------- |
+| One bounded analysis or implementation task delegated       | `SKILL.md` core procedure |
+| A route and effort chosen from route guidance and billing   | `references/routing.md`   |
+| An independent second opinion or a review by several models | `references/review.md`    |
+| To steer a running delegate or continue a finished one      | `references/dialogue.md`  |
+| To register or prepare a named login for a harness          | `references/setup.md`     |
 
-Each skill runs in the caller's context. The caller remains the root, owns the
-working directory and user constraints, and makes the final decision. Skills
-use `describe --json` to discover the installed contract and preserve failed or
-incomplete outcomes.
+The skill runs in the caller's context. The caller remains the root, owns the
+working directory and user constraints, and makes the final decision. The skill
+uses `describe --json` to discover the installed contract and preserves failed
+or incomplete outcomes.
+
+Earlier releases shipped separate skills (`harness-relay`,
+`harness-relay-second-opinion`, `harness-relay-review`, `harness-relay-routing`,
+and `harness-relay-setup`). After updating, remove the retired ones from your
+agents, for example with `npx skills remove`, so they do not compete with the
+combined skill.
 
 ## Install the CLI
 
@@ -47,6 +54,7 @@ complete its native sign-in before expecting a qualified default route:
 | ----------- | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | Codex CLI   | `npm install --global @openai/codex`             | Run `codex login` and complete the browser sign-in. See the [Codex CLI documentation](https://developers.openai.com/codex/cli/).               |
 | Claude Code | `npm install --global @anthropic-ai/claude-code` | Run `claude` and complete the authentication flow. See [Anthropic's Claude Code setup guide](https://code.claude.com/docs/en/getting-started). |
+| Grok Build  | Install Grok Build from xAI                      | Run `grok login`; `grok models` shows whether the account is signed in.                                                                        |
 
 Confirm the native executable is on `PATH` (`command -v codex` or
 `command -v claude`), then restart the relay broker if the harness was added or
@@ -58,7 +66,7 @@ harness CLI; see [local model setup](local-models.md).
 
 ## Set up another native context
 
-Use the `harness-relay-setup` skill or the same shared CLI/MCP operations to
+Ask the `harness-relay` skill to set up a login, or use the same CLI/MCP operations to
 register a context the user already configured or prepare a separate private
 context. For example:
 
@@ -93,21 +101,20 @@ git clone --branch v0.3.1 --depth 1 \
   https://github.com/sebastian-software/harness-relay.git \
   "$skill_checkout/harness-relay"
 npx skills add "$skill_checkout/harness-relay" \
-  --skill harness-relay harness-relay-second-opinion harness-relay-review \
-  harness-relay-routing harness-relay-setup \
+  --skill harness-relay \
   --agent codex claude-code --global --copy --yes
 ```
 
 <!-- x-release-please-end -->
 
 Omit `--global` to install into the current project. Omit `claude-code` when
-only Codex should receive the skills. To inspect the installed result:
+only Codex should receive the skill. To inspect the installed result:
 
 ```sh
 npx skills list --global --agent codex
 ```
 
-Before using the setup skill, run `harness-relay describe --json` and confirm
+Before setting up a login, run `harness-relay describe --json` and confirm
 that `connection.discover`, `connection.list`, `connection.inspect`,
 `connection.register`, `connection.prepare`, `connection.update`, and
 `connection.remove` are all marked `implemented`; releases before 0.2.0 lack
@@ -119,7 +126,7 @@ no invocations are active; otherwise wait for them to finish.
 
 ## Optional Dalo catalog installation
 
-Dalo can manage these skills as an untrusted catalog. The standalone catalog
+Dalo can manage the skill as an untrusted catalog. The standalone catalog
 command pins the catalog checkout itself and intentionally has no `--version`
 option. Inspect, select, approve, and sync explicitly:
 
@@ -127,19 +134,13 @@ option. Inspect, select, approve, and sync explicitly:
 dalo source add-catalog harness-relay \
   https://github.com/sebastian-software/harness-relay.git
 dalo source inspect harness-relay
-dalo source select harness-relay harness-relay \
-  harness-relay-second-opinion harness-relay-review harness-relay-routing \
-  harness-relay-setup
+dalo source select harness-relay harness-relay
 dalo approve skill harness-relay:harness-relay
-dalo approve skill harness-relay:harness-relay-second-opinion
-dalo approve skill harness-relay:harness-relay-review
-dalo approve skill harness-relay:harness-relay-routing
-dalo approve skill harness-relay:harness-relay-setup
 dalo sync
 ```
 
 For a Dalo team catalog, `team catalog add` does support an exact version
-reference. Team members still select, approve, and sync the chosen skills:
+reference. Team members still select, approve, and sync the skill:
 
 <!-- x-release-please-start-version -->
 
@@ -147,16 +148,8 @@ reference. Team members still select, approve, and sync the chosen skills:
 dalo team catalog add relay \
   https://github.com/sebastian-software/harness-relay.git \
   --version v0.3.1 \
-  --skill +harness-relay \
-  --skill +harness-relay-second-opinion \
-  --skill +harness-relay-review \
-  --skill +harness-relay-routing \
-  --skill +harness-relay-setup
+  --skill +harness-relay
 dalo approve skill relay:harness-relay
-dalo approve skill relay:harness-relay-second-opinion
-dalo approve skill relay:harness-relay-review
-dalo approve skill relay:harness-relay-routing
-dalo approve skill relay:harness-relay-setup
 dalo sync
 ```
 
@@ -167,7 +160,7 @@ linked in the Dalo store. Dalo's audit and approval records describe what was
 selected and accepted; they do not change the Harness Relay route or model
 resolution rules.
 
-## Discover the contract and skills
+## Discover the contract and skill
 
 After installation, ask the CLI for the live operation surface and routes:
 
@@ -180,5 +173,5 @@ Use `npx skills list` for project skills or `npx skills list --global` for
 user-level skills. The skill files are also visible in the versioned
 [`skills/`](../skills/) source tree. The bridge contract remains in
 [`docs/contract.md`](contract.md), and the command examples and flags remain
-in [`docs/cli.md`](cli.md); the skills intentionally do not duplicate those
+in [`docs/cli.md`](cli.md); the skill intentionally does not duplicate those
 manuals.

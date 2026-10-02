@@ -63,8 +63,8 @@ programmatic convenience is `createClient().run(request)`.
 full `guidance` and `billing` fields described in the
 [contract reference](contract.md#route-guidance-and-billing). Both are advice
 for the caller. The CLI never picks a model, and `start` and `run` still need
-`--provider` and `--model`. The `harness-relay-routing` skill applies routing
-rules to these fields.
+`--provider` and `--model`. The routing reference of the `harness-relay` skill
+applies routing rules to these fields.
 
 ## Selecting a local model
 
