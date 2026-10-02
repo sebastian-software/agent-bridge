@@ -22,7 +22,7 @@ constraints, interprets the result, and makes the final decision.
 
 2. Bootstrap the command from the caller's environment. Prefer an installed
    `harness-relay`. If it is unavailable, use the public release CLI with
-   `npx --yes harness-relay@0.3.0`. Run `describe --json` first and use its <!-- x-release-please-version -->
+   `npx --yes harness-relay@0.3.1`. Run `describe --json` first and use its <!-- x-release-please-version -->
    operation and capability data as the source of truth. When command syntax
    is needed, run `harness-relay run --help` (or the same `npx` command with
    `run --help`); the installed skill must not depend on repository
