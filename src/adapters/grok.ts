@@ -1230,15 +1230,19 @@ export class GrokAdapter implements Adapter {
     const onAbort = (): void => {
       void (async () => {
         if (state.sessionId !== undefined) {
-          // Grok stops its running tool on session/cancel; give it a bounded window
-          // before the process-group termination that remains authoritative.
+          // Grok stops its running tool on session/cancel; give it the caller's
+          // termination grace before the process-group termination that remains
+          // authoritative.
           await writeMessage({
             jsonrpc: "2.0",
             method: "session/cancel",
             params: { sessionId: state.sessionId },
           }).catch(() => {});
           if (promptSettled !== undefined) {
-            await Promise.race([promptSettled, delay(CANCEL_GRACE_MS)]);
+            await Promise.race([
+              promptSettled,
+              delay(context.terminationGraceMs ?? CANCEL_GRACE_MS),
+            ]);
           }
         }
         rejectPending(abortError());
