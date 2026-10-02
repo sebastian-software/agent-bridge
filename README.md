@@ -2,118 +2,124 @@
 
 # harness-relay
 
-**Local harness-to-harness delegation gateway.**
+**Let one coding agent hand work to another.**
 
 [![Powered by Sebastian Software](https://img.shields.io/badge/Powered_by-Sebastian_Software-005164?style=flat)](https://oss.sebastian-software.com) [![CI](https://github.com/sebastian-software/harness-relay/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/sebastian-software/harness-relay/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg)](package.json)
 
-`harness-relay` is a local, model-first delegation gateway. It lets an
-orchestrating agent delegate one bounded invocation to an installed harness,
-observe progress, and regain control with a normalized outcome. It is not a
-workflow orchestrator, sandbox, source-control manager, or credential store.
+Harness Relay lets the agent you are working with delegate a bounded task to
+another agent harness installed on your machine — Claude Code, Codex, Grok
+Build, or a local model through Ollama — and get back a normalized result: the
+answer, the files that changed, and evidence of what actually ran. It runs
+locally, uses the logins you already have, and leaves every decision with the
+agent that asked.
 
-## Install
+## What you can do with it
 
-The package requires Node.js 22 or newer and currently supports macOS and
-Linux. Windows support is not claimed yet.
+- **Get a second opinion.** Have Codex or Grok appraise a plan or a diff that
+  Claude Code produced, without being led by the first answer.
+- **Review with several models.** Send the same change to Claude, Codex, and
+  Grok and get findings attributed to each, disagreements included.
+- **Hand off a task.** Let another harness or a local model implement a bounded
+  change in your working directory, then see which files it touched.
+- **Keep the conversation going.** Continue a finished Claude Code or Codex
+  session, or add instructions while a local model is still working.
+
+## Quick start
+
+Harness Relay needs Node.js 22 or newer on macOS or Linux, and at least one
+harness that is installed and logged in.
 
 ```sh
-pnpm add --global harness-relay
-# or
-npx harness-relay routes
-```
-
-Caller-side delegation, second-opinion, multi-model review, and native-context
-setup skills are available for Codex and Claude Code. See the [skills installation and
-discovery guide](docs/skills.md) for the version-pinned public setup.
-
-## First delegation
-
-Discover qualified local routes before starting work:
-
-```sh
+npm install --global harness-relay
 harness-relay routes
-harness-relay run --provider anthropic --model opus --interaction deny \
-  "Summarize the repository changes in this working directory."
 ```
 
-Use `--cwd` to select an absolute working directory. `deny` rejects native
-permission requests, while `unattended` opts into the harness's qualified
-non-interactive mode. `orchestrator` turns supported native requests into
-permission `input_required` events for `invocation.respond`; free-form delegate
-questions use `invocation.answer`. Active input and linked continuation are
-separate operations (`invocation.send` and `invocation.continue`) and are only
-available when a route advertises the capability. The Codex route currently
-supports `deny` and `unattended`, while the Claude route supports all three.
-
-The deterministic fake routes are useful for local tests:
+`routes` lists what is usable on this machine, with each model's capability
+tier and whether it runs locally, on a subscription, or is billed per use. To
+use Relay from your agent, install the skill for Claude Code and Codex:
 
 ```sh
-harness-relay run --provider harness-relay --model fake-echo --via fake \
-  --cwd "$PWD" "hello from a fixture"
+npx skills add https://github.com/sebastian-software/harness-relay \
+  --skill harness-relay --agent claude-code codex --global
 ```
 
-## Routes
+Then ask your agent, for example: _"Get a second opinion from Codex on this
+plan"_ or _"Have Claude, Codex, and Grok review this diff."_ When you name no
+model, the skill picks one from the routes' tier and billing. The
+[skill guide](docs/skills.md) covers version-pinned installs and Dalo. Agents
+that prefer tools can use the [MCP server](docs/mcp.md) instead.
 
-`harness-relay routes` reports what is usable on this machine. A route is only
-ready when its adapter, the installed harness version, and the native login
-qualify; otherwise it is listed as unavailable with a diagnostic, never
-replaced by another model or harness.
+You can also delegate straight from the shell:
 
-| Route                              | Status                                                                                          |
+```sh
+harness-relay run --provider anthropic --model opus --via claude-code \
+  --interaction deny "Review the changes in this directory and list risks."
+```
+
+## Supported harnesses
+
+| Harness                            | Status                                                                                          |
 | ---------------------------------- | ----------------------------------------------------------------------------------------------- |
 | Claude Code (`>=2.1.0 <3`)         | Qualified one-shot delegation; continuation from 2.1.282                                        |
 | Codex CLI (`>=0.149.0 <1`)         | Qualified one-shot delegation; continuation from 0.159.2                                        |
+| Grok Build (`>=1.0.44 <2`)         | Qualified one-shot delegation over ACP; live on 1.0.46                                          |
 | Ollama through the embedded Pi SDK | Runs nonremote, tool-capable models with steering and continuation; three models qualified live |
 | LM Studio through Pi               | Discovery and diagnostics only; execution unavailable                                           |
-| Grok Build (`>=1.0.44 <2`)         | Qualified one-shot delegation over ACP; live on 1.0.46                                          |
-| Fake routes (`--via fake`)         | Deterministic fixtures for the full contract, including dialogue                                |
 
-Named connections select a second native login or configuration for the same
-harness without changing its default login; see
-[`docs/cli.md`](docs/cli.md#managing-native-connections). Local model setup is
-in [`docs/local-models.md`](docs/local-models.md), and the per-route dialogue
-capabilities are in [`docs/native-dialogue.md`](docs/native-dialogue.md).
+Each qualification is backed by a dated record in
+[`docs/qualification/`](docs/qualification/). Setup for local models is in
+[`docs/local-models.md`](docs/local-models.md); what each route supports for
+steering and continuation is in
+[`docs/native-dialogue.md`](docs/native-dialogue.md).
+
+## Good to know
+
+- **You stay in charge.** Relay runs one bounded invocation at a time and
+  reports back. It is not a workflow orchestrator; combining results and
+  deciding what to keep is up to the calling agent or you.
+- **No silent substitution.** If the requested model, harness, or login is not
+  available, you get an explicit error, never a different model.
+- **Not a sandbox.** A delegate works in the directory you give it, with its
+  harness's own permissions. Relay reports the changes it observes but does not
+  isolate or roll them back, so commit or use a worktree first. `--interaction
+  deny` rejects the harness's permission requests; `unattended` allows them.
+- **Your logins, not Relay's.** Relay never handles credentials. To use a
+  second account for a harness, register a
+  [named connection](docs/cli.md#managing-native-connections) and pick it per
+  invocation.
 
 ## How it works
 
-The first client autostarts one user-owned broker. The broker supervises the
-selected harness process, persists ordered events, and records a terminal
-outcome. The default socket is `$XDG_RUNTIME_DIR/harness-relay/broker.sock` when
-that variable is set. Otherwise a private platform-temporary directory is used;
-state lives in `~/.local/state/harness-relay`. Override them with
-`HARNESS_RELAY_RUNTIME_DIR`, `HARNESS_RELAY_STATE_DIR`, or
-`HARNESS_RELAY_SOCKET_PATH`. Unix sockets limit the path to 104 bytes on macOS
-and 107 on Linux; a longer path fails with a diagnostic instead of starting.
+The first command starts a small local broker that supervises the harness
+process, records its events in order, and stores the outcome. An outcome keeps
+the returned content apart from the observed workspace effects, usage, the
+model and harness identity actually reported, the permissions in effect, and
+the final status, so incomplete or failed work is never mistaken for success.
 
-An outcome separates returned `content`, `artifacts`, observed workspace
-`effects`, effect-observation completeness, usage, runtime identity evidence,
-policy evidence, and terminal status. Effects are lightweight observations;
-they are not isolation, attribution proof, rollback, or a commit.
-
-## Integrating from an agent
-
-For a shell or generic JSON client, use the same stable sequence:
+Any client can follow the same sequence:
 
 ```sh
 harness-relay describe --json
-harness-relay start --provider harness-relay --model fake-echo --via fake \
-  --cwd "$PWD" --text "hello" --json
+harness-relay start --provider anthropic --model opus --via claude-code \
+  --cwd "$PWD" --text "Summarize this repository" --json
 harness-relay events <invocation-id> --follow --json
 harness-relay result <invocation-id> --json
 ```
 
-Typed TypeScript callers can use `createClient()` from the package entry point.
-The detailed contract, state machine, cursors, errors, retention, and privacy
-rules are in [`docs/contract.md`](docs/contract.md). CLI flags and examples
-are in [`docs/cli.md`](docs/cli.md).
+TypeScript callers can use `createClient()` from the package entry point.
 
-## MCP
+## Documentation
 
-Register the stdio server with Claude Code or Codex as described in
-[`docs/mcp.md`](docs/mcp.md). The recommended MCP flow is
-`describe` → `start` → `events` → `result`.
+- [Skill guide](docs/skills.md): installing and using the caller skill
+- [CLI reference](docs/cli.md): commands, flags, connections, and broker paths
+- [MCP](docs/mcp.md): registering the MCP server with Claude Code or Codex
+- [Contract](docs/contract.md): operations, state machine, events, and errors
+- [Local models](docs/local-models.md) and
+  [native dialogue](docs/native-dialogue.md): per-route capabilities
+- [Adapter guide](docs/adapters.md): how harness adapters are built and
+  qualified
 
 ## Development and contributing
 
@@ -122,15 +128,12 @@ pnpm install --frozen-lockfile
 pnpm check
 ```
 
-`pnpm agent:check` runs the standard gate: OxLint and ESLint, the oxfmt format
-check, TypeScript validation, the build, and the tests. `pnpm check` adds
-coverage and the package dry-run, and is what CI runs. Conventions for agents
-and contributors live in [`AGENTS.md`](AGENTS.md); architecture and terminology
-live in [`CONTEXT.md`](CONTEXT.md) and the [`docs/adr/`](docs/adr/) decision
-records. Adapter authors start at [`docs/adapters.md`](docs/adapters.md), which
-describes the SPI, the manifest fields, the normalization rules, and the tests
-a new harness adapter is expected to bring. Work is tracked in GitHub issues;
-see the `epic` label for grouped work.
+`pnpm agent:check` runs linting, the format check, type checking, the build,
+and the tests; `pnpm check` adds coverage and the package dry-run and is what
+CI runs. Conventions live in [`AGENTS.md`](AGENTS.md), terminology in
+[`CONTEXT.md`](CONTEXT.md), and decisions in [`docs/adr/`](docs/adr/). The
+deterministic fake routes (`--via fake`) exercise the full contract without a
+real harness. Work is tracked in GitHub issues.
 
 ## From the same workshop
 

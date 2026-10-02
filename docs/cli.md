@@ -164,6 +164,15 @@ after changing shell exports such as `PATH`, proxy settings, or harness
 configuration. `broker status --json` reports only the environment variable
 names, never their values.
 
+The first client autostarts one user-owned broker, which supervises harness
+processes, persists ordered events, and records terminal outcomes. Its socket is
+`$XDG_RUNTIME_DIR/harness-relay/broker.sock` when that variable is set and a
+private platform-temporary directory otherwise; state lives in
+`~/.local/state/harness-relay`. Override them with `HARNESS_RELAY_RUNTIME_DIR`,
+`HARNESS_RELAY_STATE_DIR`, or `HARNESS_RELAY_SOCKET_PATH`. Unix sockets limit
+the path to 104 bytes on macOS and 107 on Linux; a longer path fails with a
+diagnostic instead of starting.
+
 Stable process exit codes are: `0` success, `1` execution/internal failure,
 `2` invalid request, `3` broker unavailable, `4` invocation unavailable or not
 terminal, `5` route unavailable/ambiguous, and `6` invocation conflict.
