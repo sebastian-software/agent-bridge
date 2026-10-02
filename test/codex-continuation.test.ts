@@ -257,9 +257,8 @@ test("Codex runs with additional directories keep no continuation handle", async
   }
 });
 
-test("Codex rejects a continuation reference that is not a native thread ID", () => {
-  const codex = new InspectableCodexAdapter();
-  const context = (reference: string): AdapterRunContext => ({
+function referenceContext(reference: string): AdapterRunContext {
+  return {
     invocationId: "inv_codex_reference",
     request: codexRequest("/tmp"),
     route: {
@@ -277,13 +276,17 @@ test("Codex rejects a continuation reference that is not a native thread ID", ()
     continuationHandle: { reference },
     signal: new AbortController().signal,
     async emit() {},
-  });
+  };
+}
+
+test("Codex rejects a continuation reference that is not a native thread ID", () => {
+  const codex = new InspectableCodexAdapter();
   for (const reference of ["--dangerously-bypass-approvals-and-sandbox", "last", ""]) {
     assert.throws(
-      () => codex.commandFor(context(reference)),
+      () => codex.commandFor(referenceContext(reference)),
       (error: unknown) => error instanceof BridgeError && error.code === "continuation_unavailable",
     );
   }
-  const command = codex.commandFor(context(ORIGINAL_THREAD));
+  const command = codex.commandFor(referenceContext(ORIGINAL_THREAD));
   assert.deepEqual(command.args.slice(-2), [ORIGINAL_THREAD, "-"]);
 });
