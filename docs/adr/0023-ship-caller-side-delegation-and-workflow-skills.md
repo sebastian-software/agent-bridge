@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-15
-- **Updated:** 2026-09-16
+- **Updated:** 2026-10-02
 
 The first usable public release includes both general delegation guidance and
 concrete workflow skills. A caller needs a reusable way to hand off a bounded
@@ -52,3 +52,16 @@ Each delegation's status and available results must remain visible. Failures
 and incomplete work are reported alongside the contributions that are
 available, without being suppressed or presented as success. Recovery and retry
 decisions remain caller-owned.
+
+## Update 2026-10-02: one routed skill
+
+The workflows ship as one `harness-relay` skill instead of four separate
+skills. The delegation, second-opinion, and review skills repeated the same
+bootstrap, route-selection, evidence, and reporting rules, and a second opinion
+is a review with one contributor. Separate skills also compete for the agent's
+attention when it decides which one applies.
+
+`SKILL.md` now holds the shared procedure and routes by intent to reference
+files that are loaded only when needed: second opinions and reviews, dialogue
+with a running or finished delegate, and named-login setup. The scope and the
+rules above are unchanged; only the packaging is.

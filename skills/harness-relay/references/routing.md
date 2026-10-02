@@ -1,16 +1,9 @@
----
-name: harness-relay-routing
-description: Choose the Harness Relay route and effort for a delegation from the installed CLI's route guidance and billing evidence when the user has not named them.
-metadata:
-  short-description: Choose a route and effort for a delegation
----
+# Choosing a route and effort
 
-# Harness Relay routing
-
-Use this skill before a delegation, second opinion, or review whenever the
-user has not named the model and effort. It decides which route to ask for;
-the other Harness Relay skills run the invocation. The caller remains the
-root and owns the choice.
+Use this before a delegation, second opinion, or review whenever the user has
+not named the model and effort. It decides which route to ask for; the core
+procedure in [SKILL.md](../SKILL.md) runs the invocation. The caller remains
+the root and owns the choice.
 
 Which models exist, how capable they are, and what they cost changes faster
 than this skill. Take those facts only from the installed CLI. Do not choose a
@@ -85,8 +78,9 @@ model from memory.
    asks for it. A local model the user wants in regular use needs a guidance
    entry in the user's `config.json`.
 
-9. Hand over and report. Pass the chosen provider, model, effort, and harness
-   family to the delegation, second-opinion, or review skill. In the report,
+9. Hand over and report. Continue the core procedure, or
+   [review.md](review.md), with the chosen provider, model, effort, and harness
+   family. In the report,
    state for each choice the task class, tier, route, effort, billing mode,
    and reason, each escalation, and any rule that no ready route could
    satisfy.
