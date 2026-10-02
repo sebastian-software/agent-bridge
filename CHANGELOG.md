@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.4.0](https://github.com/sebastian-software/harness-relay/compare/v0.3.1...v0.4.0) (2026-10-02)
+
+
+### Features
+
+* add route guidance, billing mode, and a routing skill ([f109c90](https://github.com/sebastian-software/harness-relay/commit/f109c907ee6b6acad099bff986a1bc5ce313e984))
+* **grok:** qualify Grok Build 1.0.46 live over ACP ([9e89a4f](https://github.com/sebastian-software/harness-relay/commit/9e89a4f143894ef62fc86971afed9252d30117b6)), closes [#148](https://github.com/sebastian-software/harness-relay/issues/148)
+* **skills:** ship one routed skill and lead the README with use cases ([#192](https://github.com/sebastian-software/harness-relay/issues/192)) ([952febd](https://github.com/sebastian-software/harness-relay/commit/952febd9f495f0ecc64fc84ddd2555528e638fb6))
+
+
+### Bug Fixes
+
+* **deps:** update dependency jdx/mise to v2026.9.18 ([a42a036](https://github.com/sebastian-software/harness-relay/commit/a42a03620a7f43b8ee32e8a803ae22233342575f))
+* **deps:** update jdx/mise-action action to v5 ([50f71a0](https://github.com/sebastian-software/harness-relay/commit/50f71a06b0405553b895568725124794e62d5eb9))
+* **deps:** update node.js to v24 ([bc23192](https://github.com/sebastian-software/harness-relay/commit/bc23192a65fc12363ee7ac6cbc5ac0883721cca7))
+* **deps:** update pnpm to v12 ([84a597d](https://github.com/sebastian-software/harness-relay/commit/84a597deb50802b56d6f0acbb462ff88dcf43509))
+* **deps:** update pnpm/action-setup digest to 0977fd9 ([19c6182](https://github.com/sebastian-software/harness-relay/commit/19c61822866cb10a3480291acf0aba3958f7be8c))
+* **grok:** bound the cancel grace by the caller's termination grace ([abd0a29](https://github.com/sebastian-software/harness-relay/commit/abd0a29efed2695632ece1d125d843103c3c38d9))
+
 ## [0.3.1](https://github.com/sebastian-software/harness-relay/compare/v0.3.0...v0.3.1) (2026-10-02)
 
 

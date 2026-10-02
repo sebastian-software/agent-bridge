@@ -34,7 +34,7 @@ user's authorized task, and say so in the report.
    exactly what the delegate may change and what it should validate.
 
 2. **Bootstrap the CLI.** Prefer an installed `harness-relay`; otherwise use
-   `npx --yes harness-relay@0.3.1`. Run `describe --json` first and treat its <!-- x-release-please-version -->
+   `npx --yes harness-relay@0.4.0`. Run `describe --json` first and treat its <!-- x-release-please-version -->
    operations and capabilities as the source of truth. Use
    `harness-relay run --help` for syntax. Do not rely on repository
    documentation or reproduce the protocol from memory.

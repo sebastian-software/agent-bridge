@@ -31,11 +31,11 @@ run it without a global install:
 <!-- x-release-please-start-version -->
 
 ```sh
-npm install --global harness-relay@0.3.1
+npm install --global harness-relay@0.4.0
 harness-relay describe --json
 
 # Or, for one-off use:
-npx --yes harness-relay@0.3.1 describe --json
+npx --yes harness-relay@0.4.0 describe --json
 ```
 
 <!-- x-release-please-end -->
@@ -97,7 +97,7 @@ skills so cleanup cannot leave broken symlinks:
 ```sh
 skill_checkout="$(mktemp -d)"
 trap 'rm -rf "$skill_checkout"' EXIT
-git clone --branch v0.3.1 --depth 1 \
+git clone --branch v0.4.0 --depth 1 \
   https://github.com/sebastian-software/harness-relay.git \
   "$skill_checkout/harness-relay"
 npx skills add "$skill_checkout/harness-relay" \
@@ -147,7 +147,7 @@ reference. Team members still select, approve, and sync the skill:
 ```sh
 dalo team catalog add relay \
   https://github.com/sebastian-software/harness-relay.git \
-  --version v0.3.1 \
+  --version v0.4.0 \
   --skill +harness-relay
 dalo approve skill relay:harness-relay
 dalo sync
