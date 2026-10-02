@@ -30,6 +30,7 @@ how a decision changed; the current text is normative.
 | 0023 | [Ship caller-side delegation and workflow skills](0023-ship-caller-side-delegation-and-workflow-skills.md)         |
 | 0024 | [User-scoped multiple accounts without automatic fallback](0024-user-scoped-multiple-accounts-without-fallback.md) |
 | 0025 | [Reuse an existing harness for local model execution](0025-direct-local-model-access.md)                           |
+| 0026 | [Publish advisory route guidance and ship a routing skill](0026-advisory-route-guidance-and-routing-skill.md)      |
 
 Open questions are maintained in [`CONTEXT.md`](../../CONTEXT.md) and the
 GitHub issue tracker rather than in stale ADR lists.

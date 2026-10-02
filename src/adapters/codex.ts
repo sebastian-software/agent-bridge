@@ -20,7 +20,10 @@ import type {
 } from "./types.js";
 
 import { BridgeError } from "../errors.js";
+import { codexBillingFromLoginStatus } from "./billing.js";
 import {
+  type AdapterManifest,
+  type AdapterModelManifest,
   discoverManifestRoutes,
   type DiscoveryProbe,
   unavailableManifestRoutes,
@@ -126,7 +129,29 @@ async function unsupportedCodexContextMode(
   return undefined;
 }
 
-const MANIFEST = {
+type ModelEntry = Pick<AdapterModelManifest, "efforts" | "guidance" | "model">;
+
+const GUIDANCE_AS_OF = "2026-10-02";
+const CODEX_EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultra"] as const;
+const CODEX_MODELS: readonly ModelEntry[] = [
+  {
+    model: "gpt-6-astra",
+    efforts: CODEX_EFFORTS,
+    guidance: { tier: "frontier", strengths: ["computer-use"], asOf: GUIDANCE_AS_OF },
+  },
+  {
+    model: "gpt-6.1-sol",
+    efforts: CODEX_EFFORTS,
+    guidance: { tier: "strong", strengths: [], asOf: GUIDANCE_AS_OF },
+  },
+  {
+    model: "gpt-6-luna",
+    efforts: CODEX_EFFORTS.filter((effort) => effort !== "ultra"),
+    guidance: { tier: "fast", strengths: [], asOf: GUIDANCE_AS_OF },
+  },
+];
+
+const MANIFEST: AdapterManifest = {
   id: "codex",
   provider: "openai",
   via: "codex",
@@ -135,16 +160,11 @@ const MANIFEST = {
   authArgs: ["login", "status"],
   qualifiedVersionRange: ">=0.149.0 <1.0.0",
   authenticationMode: "codex-native",
-  models: [
-    { model: "gpt-5.5", aliases: ["gpt-5"] },
-    { model: "gpt-5.3-codex", aliases: ["gpt-5-codex"] },
-    { model: "codex-mini-latest", aliases: ["codex-mini"] },
-  ].map((model) => ({
+  models: CODEX_MODELS.map((model) => ({
     ...model,
     canonicalModel: model.model,
-    efforts: ["low", "medium", "high", "max"],
     capabilities: ["core.input.text", "core.output.text", "core.streaming.events"],
-    interactionStrategies: ["deny", "unattended"] as const,
+    interactionStrategies: ["deny", "unattended"],
   })),
   qualification: {
     qualificationId: "codex-cli-v0-jsonl",
@@ -164,11 +184,8 @@ const MANIFEST = {
   versionCapabilities: [
     { range: CODEX_CONTINUATION_VERSION_RANGE, capabilities: ["continuation"] },
   ],
-} as const;
-
-function reasoningEffort(value: string): string {
-  return value === "max" ? "xhigh" : value;
-}
+  billingFromAuthStatus: codexBillingFromLoginStatus,
+};
 
 function resolvePolicy(request: StartInvocationRequest): PolicyResolution {
   const unsupported: string[] = [];
@@ -200,7 +217,7 @@ function resolvePolicy(request: StartInvocationRequest): PolicyResolution {
   if (request.selector.effort !== undefined) {
     controls.push({
       flag: "-c",
-      value: `model_reasoning_effort=${reasoningEffort(request.selector.effort)}`,
+      value: `model_reasoning_effort=${request.selector.effort}`,
     });
   }
   return {
@@ -411,7 +428,7 @@ export class CodexAdapter extends ProcessAdapter {
       options.push("-c", 'model_provider="openai"');
     }
     if (context.route.effort !== undefined) {
-      options.push("-c", `model_reasoning_effort=${reasoningEffort(context.route.effort)}`);
+      options.push("-c", `model_reasoning_effort=${context.route.effort}`);
     }
     if (
       context.request.requestedPolicy.network === "allow" ||

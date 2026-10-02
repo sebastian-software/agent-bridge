@@ -29,7 +29,9 @@ chooses how the appraisal affects the final answer.
 3. Honor explicit provider, model, effort, harness-family (`via`), capability,
    interaction, assurance, and other user preferences. If no route is
    specified, choose a qualified route suitable for the question, preferably
-   from a different model family than the primary appraisal. If an explicitly
+   from a different model family than the primary appraisal; the
+   `harness-relay-routing` skill describes how to choose tier and effort. If
+   an explicitly
    requested route is unavailable or ambiguous, report that failure and do not
    silently substitute another route.
 

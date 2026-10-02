@@ -52,7 +52,7 @@ async function claudeFixture(prefix: string, version: string): Promise<Fixture> 
     "  const resumed = resumeAt === -1 ? undefined : args[resumeAt + 1];",
     "  const forked = args.includes('--fork-session');",
     `  const session = resumed === undefined ? '${ORIGINAL_SESSION}' : forked ? randomUUID() : resumed;`,
-    "  console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: session, model: 'claude-haiku-4-5-20251001' }));",
+    "  console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: session, model: 'claude-opus-5-5' }));",
     "  const text = (resumed === undefined ? 'new' : 'fork of ' + resumed) + ': ' + input;",
     "  console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: text, session_id: session }));",
     "});",
@@ -91,7 +91,7 @@ function claudeRequest(workspace: string): StartInvocationRequest {
   return {
     selector: {
       provider: "anthropic",
-      model: "haiku",
+      model: "opus",
       via: "claude-code",
       requiredCapabilities: [],
     },
@@ -226,13 +226,13 @@ function referenceContext(reference: string): AdapterRunContext {
     invocationId: "inv_claude_reference",
     request: claudeRequest("/tmp"),
     route: {
-      routeId: "claude:haiku",
+      routeId: "claude:opus",
       executable: process.execPath,
       adapter: "claude",
       harnessVersion: "2.1.282",
       authenticationMode: "claude-native",
       provider: "anthropic",
-      model: "haiku",
+      model: "opus",
       via: "claude-code",
       capabilities: ["core.input.text", "continuation"],
       qualification: [],

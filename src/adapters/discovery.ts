@@ -3,8 +3,9 @@ import { constants } from "node:fs";
 import { access } from "node:fs/promises";
 import { promisify } from "node:util";
 
-import type { InteractionStrategy, RouteDescriptor } from "../contract.js";
+import type { InteractionStrategy, RouteBilling, RouteDescriptor } from "../contract.js";
 
+import { builtInGuidance, type ModelGuidance, UNKNOWN_BILLING } from "../route-guidance.js";
 import { childEnvironment } from "./environment.js";
 
 const execFileAsync = promisify(execFile);
@@ -17,6 +18,8 @@ export type AdapterModelManifest = {
   readonly efforts: readonly string[];
   readonly capabilities: readonly string[];
   readonly interactionStrategies: readonly InteractionStrategy[];
+  /** Editorial advice about the model; never part of route resolution. */
+  readonly guidance?: ModelGuidance;
 };
 
 export type AdapterQualificationManifest = {
@@ -42,11 +45,18 @@ export type AdapterManifest = {
   readonly policySupport?: Readonly<Record<string, readonly string[]>>;
   /** Capabilities added only when the detected harness version satisfies the range. */
   readonly versionCapabilities?: readonly AdapterVersionCapabilities[];
+  /** Classifies the output of a successful `authArgs` probe; the output is not retained. */
+  readonly billingFromAuthStatus?: (output: string) => RouteBilling;
 };
 
 export type AdapterVersionCapabilities = {
   readonly range: string;
   readonly capabilities: readonly string[];
+};
+
+export type AuthenticationStatus = {
+  readonly authenticated: boolean;
+  readonly output?: string;
 };
 
 export type DiscoveryProbe = {
@@ -60,7 +70,7 @@ export type DiscoveryProbe = {
     executable: string,
     args: readonly string[],
     environment?: NodeJS.ProcessEnv,
-  ) => Promise<boolean>;
+  ) => Promise<AuthenticationStatus | boolean>;
 };
 
 export type DiscoveryEnvironment = {
@@ -179,16 +189,20 @@ async function checkAuthentication(
   executable: string,
   args: readonly string[],
   environment?: NodeJS.ProcessEnv,
-): Promise<boolean> {
+): Promise<AuthenticationStatus> {
   try {
-    await execFileAsync(executable, [...args], {
+    const result = await execFileAsync(executable, [...args], {
       timeout: PROBE_TIMEOUT_MS,
       ...(environment === undefined ? {} : { env: environment }),
     });
-    return true;
+    return { authenticated: true, output: `${result.stdout}\n${result.stderr}` };
   } catch {
-    return false;
+    return { authenticated: false };
   }
+}
+
+function guidanceFor(model: AdapterModelManifest): Pick<RouteDescriptor, "guidance"> {
+  return model.guidance === undefined ? {} : { guidance: builtInGuidance(model.guidance) };
 }
 
 async function isExecutable(path: string): Promise<boolean> {
@@ -239,6 +253,8 @@ export async function discoverManifestRoutes(
       qualification: [],
       diagnostics: [`Executable ${manifest.command} was not found or is not executable.`],
       ...(manifest.policySupport === undefined ? {} : { policySupport: manifest.policySupport }),
+      ...guidanceFor(model),
+      billing: UNKNOWN_BILLING,
     }));
   }
 
@@ -277,14 +293,22 @@ export async function discoverManifestRoutes(
       qualification: [],
       diagnostics: [diagnostic],
       ...(manifest.policySupport === undefined ? {} : { policySupport: manifest.policySupport }),
+      ...guidanceFor(model),
+      billing: UNKNOWN_BILLING,
     }));
   }
 
-  const authenticated = await (probe.checkAuthentication ?? checkAuthentication)(
+  const authentication = await (probe.checkAuthentication ?? checkAuthentication)(
     executable,
     options?.authenticationArgs ?? manifest.authArgs,
     environment,
   );
+  const { authenticated, output: authenticationOutput } =
+    typeof authentication === "boolean" ? { authenticated: authentication } : authentication;
+  const billing =
+    authenticated && authenticationOutput !== undefined
+      ? (manifest.billingFromAuthStatus?.(authenticationOutput) ?? UNKNOWN_BILLING)
+      : UNKNOWN_BILLING;
   const versionCapabilities = (manifest.versionCapabilities ?? [])
     .filter((entry) => satisfiesVersionRange(version, entry.range))
     .flatMap((entry) => entry.capabilities);
@@ -312,6 +336,8 @@ export async function discoverManifestRoutes(
       },
     ],
     ...(manifest.policySupport === undefined ? {} : { policySupport: manifest.policySupport }),
+    ...guidanceFor(model),
+    billing,
     diagnostics: authenticated
       ? [
           "Authentication status probe succeeded; readiness remains provisional until an invocation succeeds.",
@@ -344,5 +370,7 @@ export function unavailableManifestRoutes(
     qualification: [],
     diagnostics: [diagnostic],
     ...(manifest.policySupport === undefined ? {} : { policySupport: manifest.policySupport }),
+    ...guidanceFor(model),
+    billing: UNKNOWN_BILLING,
   }));
 }

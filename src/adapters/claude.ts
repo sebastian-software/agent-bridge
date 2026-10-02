@@ -20,7 +20,10 @@ import type {
 } from "./types.js";
 
 import { BridgeError } from "../errors.js";
+import { claudeBillingFromAuthStatus } from "./billing.js";
 import {
+  type AdapterManifest,
+  type AdapterModelManifest,
   discoverManifestRoutes,
   type DiscoveryProbe,
   unavailableManifestRoutes,
@@ -105,7 +108,29 @@ async function unsupportedClaudeNamedSettings(path: string): Promise<string | un
   return undefined;
 }
 
-const MANIFEST = {
+type ModelEntry = Pick<AdapterModelManifest, "aliases" | "guidance" | "model">;
+
+const GUIDANCE_AS_OF = "2026-10-02";
+
+const CLAUDE_MODELS: readonly ModelEntry[] = [
+  {
+    model: "claude-fable-5-1",
+    aliases: ["fable"],
+    guidance: { tier: "frontier", strengths: [], asOf: GUIDANCE_AS_OF },
+  },
+  {
+    model: "claude-opus-5-5",
+    aliases: ["opus"],
+    guidance: { tier: "strong", strengths: [], asOf: GUIDANCE_AS_OF },
+  },
+  {
+    // No `sonnet` alias: Claude Code 2.1.282 resolves it to the retired claude-sonnet-5.
+    model: "claude-sonnet-5-5",
+    guidance: { tier: "balanced", strengths: [], asOf: GUIDANCE_AS_OF },
+  },
+];
+
+const MANIFEST: AdapterManifest = {
   id: "claude",
   provider: "anthropic",
   via: "claude-code",
@@ -114,25 +139,12 @@ const MANIFEST = {
   authArgs: ["auth", "status"],
   qualifiedVersionRange: ">=2.1.0 <3.0.0",
   authenticationMode: "claude-native",
-  models: [
-    {
-      model: "claude-opus-4-8",
-      aliases: ["opus", "claude-opus-4-8"],
-    },
-    {
-      model: "claude-sonnet-5",
-      aliases: ["sonnet", "claude-sonnet-5"],
-    },
-    {
-      model: "claude-haiku-4-5-20251001",
-      aliases: ["haiku", "claude-haiku-4-5"],
-    },
-  ].map((model) => ({
+  models: CLAUDE_MODELS.map((model) => ({
     ...model,
     canonicalModel: model.model,
-    efforts: ["low", "medium", "high", "max"],
+    efforts: ["low", "medium", "high", "xhigh", "max"],
     capabilities: ["core.input.text", "core.output.text", "core.streaming.events"],
-    interactionStrategies: ["deny", "orchestrator", "unattended"] as const,
+    interactionStrategies: ["deny", "orchestrator", "unattended"],
   })),
   qualification: {
     qualificationId: "claude-code-v2-stream-json",
@@ -152,7 +164,8 @@ const MANIFEST = {
   versionCapabilities: [
     { range: CLAUDE_CONTINUATION_VERSION_RANGE, capabilities: ["continuation"] },
   ],
-} as const;
+  billingFromAuthStatus: claudeBillingFromAuthStatus,
+};
 
 function permissionModeFor(
   strategy: StartInvocationRequest["interactionStrategy"],

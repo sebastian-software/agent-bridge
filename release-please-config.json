@@ -12,6 +12,7 @@
         "docs/skills.md",
         "skills/harness-relay/SKILL.md",
         "skills/harness-relay-review/SKILL.md",
+        "skills/harness-relay-routing/SKILL.md",
         "skills/harness-relay-second-opinion/SKILL.md"
       ]
     }

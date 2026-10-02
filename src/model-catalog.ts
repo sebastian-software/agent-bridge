@@ -5,17 +5,25 @@ import { join } from "node:path";
 import type { QualificationEvidence, RouteDescriptor } from "./contract.js";
 
 import { BridgeError } from "./errors.js";
+import {
+  parseUserGuidance,
+  userDeclaredGuidance,
+  type UserGuidanceDefinition,
+} from "./route-guidance.js";
 
 export type UserModelDefinition = {
   readonly nativeModel: string;
   readonly efforts?: readonly string[];
   readonly capabilities?: readonly string[];
   readonly interactionStrategies?: RouteDescriptor["interactionStrategies"];
+  readonly guidance?: UserGuidanceDefinition;
 };
 
 export type UserAdapterCatalog = {
   readonly aliases?: Readonly<Record<string, string>>;
   readonly models?: Readonly<Record<string, UserModelDefinition>>;
+  /** Declares or replaces route guidance, keyed by requested or canonical model. */
+  readonly guidance?: Readonly<Record<string, UserGuidanceDefinition>>;
 };
 
 export type UserModelCatalog = {
@@ -111,8 +119,13 @@ function parseCatalog(value: unknown, path: string): UserModelCatalog {
           retryable: false,
         });
       }
+      const modelGuidance =
+        model.guidance === undefined
+          ? undefined
+          : parseUserGuidance(model.guidance, `${adapterId}/${modelId}`);
       models[modelId] = {
         nativeModel: model.nativeModel,
+        ...(modelGuidance === undefined ? {} : { guidance: modelGuidance }),
         ...(efforts === undefined ? {} : { efforts }),
         ...(capabilities === undefined ? {} : { capabilities }),
         ...(interactionStrategies === undefined
@@ -123,9 +136,22 @@ function parseCatalog(value: unknown, path: string): UserModelCatalog {
             }),
       };
     }
+    const guidanceSource = adapter.guidance === undefined ? undefined : object(adapter.guidance);
+    if (adapter.guidance !== undefined && guidanceSource === undefined) {
+      throw new BridgeError({
+        code: "invalid_request",
+        message: `Model catalog guidance for ${adapterId} must be an object.`,
+        retryable: false,
+      });
+    }
+    const guidance: Record<string, UserGuidanceDefinition> = {};
+    for (const [modelId, rawGuidance] of Object.entries(guidanceSource ?? {})) {
+      guidance[modelId] = parseUserGuidance(rawGuidance, `${adapterId}/${modelId}`);
+    }
     parsedAdapters[adapterId] = {
       ...(aliases === undefined ? {} : { aliases: aliases as Record<string, string> }),
       ...(Object.keys(models).length === 0 ? {} : { models }),
+      ...(Object.keys(guidance).length === 0 ? {} : { guidance }),
     };
   }
   return Object.keys(parsedAdapters).length === 0 ? {} : { adapters: parsedAdapters };
@@ -209,6 +235,9 @@ function routeWithModel(
     ...(catalog?.interactionStrategies === undefined
       ? {}
       : { interactionStrategies: catalog.interactionStrategies }),
+    ...(catalog?.guidance === undefined
+      ? {}
+      : { guidance: userDeclaredGuidance(catalog.guidance) }),
     qualification: [
       ...route.qualification,
       userEvidence(
@@ -220,6 +249,24 @@ function routeWithModel(
       ),
     ],
   };
+}
+
+/** A user-declared model is not the template's model, so its guidance does not carry over. */
+function withoutGuidance(route: RouteDescriptor): RouteDescriptor {
+  const { guidance: _guidance, ...rest } = route;
+  return rest;
+}
+
+function withDeclaredGuidance(
+  route: RouteDescriptor,
+  declared: Readonly<Record<string, UserGuidanceDefinition>>,
+): RouteDescriptor {
+  const definition =
+    declared[route.model] ??
+    (route.canonicalModel === undefined ? undefined : declared[route.canonicalModel]);
+  return definition === undefined
+    ? route
+    : { ...route, guidance: userDeclaredGuidance(definition) };
 }
 
 export function applyUserModelCatalog(
@@ -278,11 +325,20 @@ export function applyUserModelCatalog(
       for (const [modelId, definition] of Object.entries(adapterCatalog.models ?? {})) {
         if (!hasModel(modelId)) {
           result.push(
-            routeWithModel(template, modelId, definition.nativeModel, definition, adapterId),
+            routeWithModel(
+              withoutGuidance(template),
+              modelId,
+              definition.nativeModel,
+              definition,
+              adapterId,
+            ),
           );
         }
       }
     }
   }
-  return result;
+  return result.map((route) => {
+    const declared = catalog.adapters?.[route.adapter]?.guidance;
+    return declared === undefined ? route : withDeclaredGuidance(route, declared);
+  });
 }

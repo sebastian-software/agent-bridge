@@ -89,12 +89,14 @@ and identity alongside the error.
 - `id`, `provider`, `via`, and executable `command`;
 - `versionArgs` and `authArgs` probes;
 - a semver `qualifiedVersionRange` and `authenticationMode`;
-- model entries with `efforts`, `capabilities`, and supported
-  `interactionStrategies`;
+- model entries with `efforts` (lowest first), `capabilities`, supported
+  `interactionStrategies`, and optional `guidance`;
 - a `policySupport` table for filesystem, commands, network, and additional
   directories;
 - optional `versionCapabilities`, which add capabilities only when the detected
-  harness version satisfies their own range; and
+  harness version satisfies their own range;
+- an optional `billingFromAuthStatus` classifier for the output of the
+  `authArgs` probe; and
 - a precise `qualificationClaim` describing the contract covered by the
   qualification suite.
 
@@ -106,6 +108,14 @@ alias; built-in native aliases such as `opus` remain in the requested
 harness while the requested alias remains in `model`. `canonicalModel` is an
 expected-resolution hint for route metadata; the observed runtime model is
 recorded separately from both values.
+
+Model `guidance` is an editorial assessment with a tier, strengths, and an
+`asOf` date. Review it with every manifest change, and leave it out for a
+model that is kept only for callers that still request it. A strength must
+not stand in for a capability the route has not been qualified for.
+`billingFromAuthStatus` returns a mode only for a status output that was
+observed on a qualified harness version and returns `unknown` otherwise.
+Discovery passes it the probe output and discards the output afterwards.
 
 Discovery records the absolute executable, observed version, authentication
 readiness, diagnostics, and a qualification record. Missing executables are
