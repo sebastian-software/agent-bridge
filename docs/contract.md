@@ -127,7 +127,7 @@ at cancellation, terminal completion, or broker restart are recorded as
 the same per-invocation idempotency key returns its existing input ID; reusing
 that key for different content is a conflict. Native send is available only
 when both the route capability and adapter handler are implemented. The fake
-fixture exercises this contract. The private Pi 0.87.1 worker implements
+fixture exercises this contract. The private Pi 1.0.0 worker implements
 text-only native steering through `AgentSession.steer(text)` and returns its
 delivery ACK only after the SDK accepts the message into its queue. Pinned-SDK
 integration tests cover FIFO delivery across a running shell command and the

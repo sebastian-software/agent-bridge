@@ -18,7 +18,9 @@ Three Ollama configurations are live-qualified, each only as tested:
 locality evidence, tool use, steering, continuation, cancellation, timeout,
 failure cases, and the model behavior observed. Both Gemma models kept tool
 calls sequential and reported accurately without ordering hints; qwen3:8b
-needed them.
+needed them. Those records used Pi SDK 0.87.1; the
+[Pi SDK 1.0.0 record](qualification/2026-10-01-pi-sdk-1.0.0.md) repeats the
+procedure with gemma4:e4b on the current SDK.
 
 ## Configure an existing runtime
 

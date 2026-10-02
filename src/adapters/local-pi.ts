@@ -31,7 +31,7 @@ import {
 import { defaultCatalogPath } from "../model-catalog.js";
 import { PiAdapter } from "./pi.js";
 
-const PI_VERSION = "0.87.1";
+const PI_VERSION = "1.0.0";
 const PI_TOOLS = ["read", "write", "edit", "bash", "grep", "find", "ls"] as const;
 const MAX_PI_ROUTE_INSTANCES = 256;
 

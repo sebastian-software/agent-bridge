@@ -39,7 +39,7 @@ import {
   readBoundedLines,
 } from "./pi-protocol.js";
 
-const PI_HARNESS_VERSION = "0.87.1";
+const PI_HARNESS_VERSION = "1.0.0";
 const MAX_QUEUED_OUTPUT_BYTES = 34 * 1024 * 1024;
 const MAX_TOOL_OUTPUT_BYTES = 16 * 1024 * 1024;
 const MAX_ASSISTANT_OUTPUT_BYTES = 16 * 1024 * 1024;
@@ -202,7 +202,7 @@ async function createGuardedPiCredentials(authPath: string): Promise<{
   if (!isPiAuthStorageModule(authStorageModuleValue)) {
     throw new PiRuntimeConfigurationError("pi_config_unavailable");
   }
-  // This internal module is intentionally pinned to the worker's verified Pi 0.87.1 runtime.
+  // This internal module is intentionally pinned to the worker's verified Pi 1.0.0 runtime.
   const authStorageModule = authStorageModuleValue;
   const state: { failureCode?: PiRuntimeConfigurationFailureCode } = {};
   const assertHealthy = (): void => {

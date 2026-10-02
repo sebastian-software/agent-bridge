@@ -190,7 +190,7 @@ function assertPiProviderConfigurationSafe(provider: unknown): void {
 }
 
 /**
- * Validate the actual ModelConfig instance loaded by Pi 0.87.1. ModelRuntime.config is an
+ * Validate the actual ModelConfig instance loaded by Pi 1.0.0. ModelRuntime.config is an
  * internal SDK field, so fail closed if its pinned accessors are absent or change shape.
  */
 export function assertPiLoadedModelConfigurationSafe(configuration: unknown): void {

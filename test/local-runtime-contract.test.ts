@@ -88,7 +88,7 @@ test("persisted invocation restores exact local runtime identity and legacy rout
       resolvedRoute: {
         routeId: "pi:ollama:ollama-mac:revision:fixture-local:snapshot",
         adapter: "pi",
-        harnessVersion: "0.87.1",
+        harnessVersion: "1.0.0",
         authenticationMode: "none",
         provider: "unknown",
         model: "fixture:local",

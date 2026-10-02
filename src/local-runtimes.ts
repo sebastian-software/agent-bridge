@@ -571,7 +571,7 @@ export async function piRuntimeAvailability(): Promise<readonly string[]> {
     !Number.isSafeInteger(patch) ||
     nodeTooOld
   ) {
-    return ["Pi 0.87.1 requires Node.js 22.19.0 or later."];
+    return ["Pi 1.0.0 requires Node.js 22.19.0 or later."];
   }
   try {
     const resolved = import.meta.resolve("@earendil-works/pi-coding-agent");
@@ -579,9 +579,9 @@ export async function piRuntimeAvailability(): Promise<readonly string[]> {
       await readFile(fileURLToPath(new URL("../package.json", resolved)), "utf8"),
     ) as unknown;
     const version = object(metadata)?.version;
-    if (version !== "0.87.1") {
+    if (version !== "1.0.0") {
       return [
-        `The installed optional Pi SDK is version ${String(version ?? "unknown")}; local routes require 0.87.1.`,
+        `The installed optional Pi SDK is version ${String(version ?? "unknown")}; local routes require 1.0.0.`,
       ];
     }
   } catch {
