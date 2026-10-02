@@ -34,8 +34,16 @@ import {
 import { readBoundedLines } from "./pi-protocol.js";
 import { promptFor } from "./process.js";
 
+/** Discovery probes, plus the read-only `grok models` listing used for readiness. */
+export type GrokDiscoveryProbe = DiscoveryProbe & {
+  readonly readModels?: (
+    executable: string,
+    environment?: NodeJS.ProcessEnv,
+  ) => Promise<string | undefined>;
+};
+
 const execFileAsync = promisify(execFile);
-// ACP v1 was fixture-qualified on Grok Build 1.0.44.
+// ACP v1 was fixture-qualified on Grok Build 1.0.44 and live-qualified on 1.0.46.
 const QUALIFIED_VERSION_RANGE = ">=1.0.44 <2.0.0";
 const ACP_PROTOCOL_VERSION = 1;
 const MAX_ACP_LINE_BYTES = 1024 * 1024;
@@ -44,6 +52,14 @@ const MAX_ACP_QUEUED_NOTIFICATION_BYTES = 2 * 1024 * 1024;
 const MAX_ACP_QUEUED_NOTIFICATIONS = 128;
 const TERMINATION_GRACE_MS = 2000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
+const MODELS_PROBE_TIMEOUT_MS = 10_000;
+const CANCEL_GRACE_MS = 2000;
+const LIVE_QUALIFICATION = {
+  qualificationId: "grok-build-acp-v1-live",
+  testedAt: "2026-10-02",
+  claim:
+    "Grok Build ACP v1, live-qualified on 1.0.46 with the default login: readiness and model access from `grok models`, the model set and verified through ACP `session/set_model`, effort through `agent --reasoning-effort`, `deny` through rejected permission requests, `unattended` through `agent --always-approve`, cancellation, and timeout. Fixture suite: test/grok-adapter.test.ts.",
+} as const;
 
 const GROK_MODELS = [
   { model: "grok-4.7", efforts: ["low", "medium", "high", "xhigh"] },
@@ -216,6 +232,76 @@ async function waitForProcessGroupExit(child: ChildProcess, timeoutMs: number): 
   return !processGroupExists(child);
 }
 
+/**
+ * Process groups of the child's descendants outside its own group. Grok Build
+ * runs each tool command as its own process-group leader, so signalling the
+ * agent's group alone leaves running tools behind.
+ */
+async function descendantProcessGroups(rootPid: number): Promise<readonly number[]> {
+  let listing: string;
+  try {
+    listing = (await execFileAsync("ps", ["-A", "-o", "pid=,ppid=,pgid="], { timeout: 2500 }))
+      .stdout;
+  } catch {
+    return [];
+  }
+  const children = new Map<number, number[]>();
+  const groups = new Map<number, number>();
+  for (const line of listing.split("\n")) {
+    const [pid, parent, group] = line.trim().split(/\s+/u).map(Number);
+    if (
+      pid === undefined ||
+      parent === undefined ||
+      group === undefined ||
+      Number.isNaN(group) ||
+      group <= 1
+    ) {
+      continue;
+    }
+    children.set(parent, [...(children.get(parent) ?? []), pid]);
+    groups.set(pid, group);
+  }
+  const found = new Set<number>();
+  const queue = [...(children.get(rootPid) ?? [])];
+  for (let pid = queue.pop(); pid !== undefined; pid = queue.pop()) {
+    const group = groups.get(pid);
+    if (group !== undefined && group !== rootPid) {
+      found.add(group);
+    }
+    queue.push(...(children.get(pid) ?? []));
+  }
+  return [...found];
+}
+
+function groupAlive(group: number): boolean {
+  try {
+    process.kill(-group, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function terminateGroups(groups: readonly number[], graceMs: number): Promise<void> {
+  for (const signal of ["SIGTERM", "SIGKILL"] as const) {
+    for (const group of groups) {
+      try {
+        process.kill(-group, signal);
+      } catch {
+        // The group may already have exited.
+      }
+    }
+    const deadline = Date.now() + graceMs;
+    while (groups.some(groupAlive) && Date.now() < deadline) {
+      await delay(25);
+    }
+    if (!groups.some(groupAlive)) {
+      return;
+    }
+  }
+  throw nativeFailure("A Grok tool process group did not exit after forced termination.");
+}
+
 async function terminateProcessGroup(
   child: ChildProcess,
   exitPromise: Promise<void>,
@@ -225,6 +311,8 @@ async function terminateProcessGroup(
     await exitPromise;
     return;
   }
+  // Snapshot before signalling: once the agent exits, its tools move to init.
+  const toolGroups = process.platform === "win32" ? [] : await descendantProcessGroups(child.pid);
   signalProcessGroup(child, "SIGINT");
   if (!(await waitForProcessGroupExit(child, graceMs))) {
     signalProcessGroup(child, "SIGKILL");
@@ -233,6 +321,7 @@ async function terminateProcessGroup(
   if (!(await waitForProcessGroupExit(child, graceMs))) {
     throw nativeFailure("Grok ACP process group did not exit after forced termination.");
   }
+  await terminateGroups(toolGroups, graceMs);
 }
 
 async function findExecutable(command: string): Promise<string | undefined> {
@@ -263,6 +352,39 @@ async function readVersion(
     }
     return undefined;
   }
+}
+
+async function readModels(
+  executable: string,
+  environment?: NodeJS.ProcessEnv,
+): Promise<string | undefined> {
+  try {
+    const result = await execFileAsync(executable, ["--no-auto-update", "models"], {
+      timeout: MODELS_PROBE_TIMEOUT_MS,
+      ...(environment === undefined ? {} : { env: environment }),
+    });
+    return result.stdout.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Parse `grok models`: an authentication line followed by a bulleted model list. */
+export function parseGrokModels(output: string | undefined): {
+  readonly authenticated: boolean | undefined;
+  readonly models: readonly string[];
+} {
+  const text = output ?? "";
+  const authenticated = /^You are logged in\b/mu.test(text)
+    ? true
+    : /^You are not authenticated\b/mu.test(text)
+      ? false
+      : undefined;
+  const models = text.split("\n").flatMap((line) => {
+    const model = /^ *[*-] +([\w.-]+)/u.exec(line)?.[1];
+    return model === undefined ? [] : [model];
+  });
+  return { authenticated, models };
 }
 
 function versionFrom(output: string | undefined): string | undefined {
@@ -406,25 +528,36 @@ function policyFor(request: StartInvocationRequest): PolicyResolution {
       adapter: "grok",
       controls: [
         ...(request.interactionStrategy === "deny"
-          ? [{ flag: "--permission-mode", value: "dontAsk" }]
+          ? [{ method: "session/request_permission", response: "reject_once" }]
           : []),
-        ...(request.interactionStrategy === "unattended" ? [{ flag: "--always-approve" }] : []),
+        ...(request.interactionStrategy === "unattended"
+          ? [{ flag: "agent --always-approve" }]
+          : []),
       ],
     },
   };
 }
 
+function requestedModel(context: AdapterRunContext): string {
+  return context.route.nativeModel ?? context.route.model;
+}
+
+/**
+ * Grok 1.0.46 ignores `--model`, `--always-approve`, and `--permission-mode`
+ * before the `agent` subcommand in ACP mode, so every native control follows it.
+ * The model is also set and verified through ACP because `--model` alone does
+ * not select it.
+ */
 function commandArgs(context: AdapterRunContext): readonly string[] {
-  const args = ["--no-auto-update", "--model", context.route.nativeModel ?? context.route.model];
-  if (context.route.effort !== undefined) {
-    args.push("--effort", context.route.effort);
-  }
-  if (context.request.interactionStrategy === "deny") {
-    args.push("--permission-mode", "dontAsk");
-  } else if (context.request.interactionStrategy === "unattended") {
+  const args = ["--no-auto-update", "--no-subagents", "agent"];
+  if (context.request.interactionStrategy === "unattended") {
     args.push("--always-approve");
   }
-  args.push("--no-subagents", "agent", "--no-leader", "stdio");
+  args.push("--model", requestedModel(context));
+  if (context.route.effort !== undefined) {
+    args.push("--reasoning-effort", context.route.effort);
+  }
+  args.push("--no-leader", "stdio");
   return args;
 }
 
@@ -462,9 +595,9 @@ function authFailure(error: RecordValue): boolean {
 export class GrokAdapter implements Adapter {
   readonly id = "grok";
   readonly #executable: string | undefined;
-  readonly #probe: DiscoveryProbe | undefined;
+  readonly #probe: GrokDiscoveryProbe | undefined;
 
-  constructor(options?: { readonly executable?: string; readonly probe?: DiscoveryProbe }) {
+  constructor(options?: { readonly executable?: string; readonly probe?: GrokDiscoveryProbe }) {
     this.#executable = options?.executable ?? process.env.HARNESS_RELAY_GROK_PATH;
     this.#probe = options?.probe;
   }
@@ -629,6 +762,9 @@ export class GrokAdapter implements Adapter {
       notificationChain: Promise.resolve(),
       queuedNotifications: 0,
       queuedNotificationBytes: 0,
+      // Grok 1.0.46 sends session/update before session/new returns its ID.
+      earlyUpdates: [] as Array<{ readonly params: unknown; readonly bytes: number }>,
+      permissionDenied: undefined as { readonly kind?: string } | undefined,
       fatal: undefined as Error | undefined,
     };
     let nextId = 1;
@@ -834,6 +970,69 @@ export class GrokAdapter implements Adapter {
       await emit({ category: "activity", data: { phase: "session_update", updateType } });
     };
 
+    const queueUpdate = (params: unknown, bytes: number): void => {
+      state.notificationChain = state.notificationChain
+        .then(async () => {
+          try {
+            await handleUpdate(params);
+          } finally {
+            state.queuedNotifications -= 1;
+            state.queuedNotificationBytes -= bytes;
+          }
+        })
+        .catch((error: unknown) => {
+          failTransport(asError(error));
+        });
+    };
+
+    // Grok asks the client before edits and commands unless `agent --always-approve`
+    // is set. Under `deny` Relay selects Grok's reject option; Grok then ends the turn.
+    const answerPermission = (id: RpcId, paramsValue: unknown): void => {
+      const params = record(paramsValue);
+      const toolCall = record(params?.toolCall);
+      const options = Array.isArray(params?.options) ? params.options.map(record) : [];
+      const reject = options.find((option) => option?.kind === "reject_once");
+      if (
+        context.request.interactionStrategy !== "deny" ||
+        typeof reject?.optionId !== "string" ||
+        params?.sessionId !== state.sessionId
+      ) {
+        void writeMessage({
+          jsonrpc: "2.0",
+          id,
+          error: { code: -32_601, message: "Relay cannot answer this Grok permission request." },
+        }).catch((error: unknown) => {
+          failTransport(asError(error));
+        });
+        failTransport(
+          nativeFailure(
+            "Grok requested a native permission that this interaction strategy cannot answer.",
+            "unsupported_capability",
+          ),
+        );
+        return;
+      }
+      const kind = typeof toolCall?.kind === "string" ? toolCall.kind : undefined;
+      state.permissionDenied ??= kind === undefined ? {} : { kind };
+      void writeMessage({
+        jsonrpc: "2.0",
+        id,
+        result: { outcome: { outcome: "selected", optionId: reject.optionId } },
+      }).catch((error: unknown) => {
+        failTransport(asError(error));
+      });
+      state.notificationChain = state.notificationChain
+        .then(async () =>
+          emit({
+            category: "diagnostic",
+            data: { phase: "permission_denied", ...(kind === undefined ? {} : { kind }) },
+          }),
+        )
+        .catch((error: unknown) => {
+          failTransport(asError(error));
+        });
+    };
+
     const handleLine = (line: string): void => {
       if (state.fatal !== undefined) {
         return;
@@ -864,6 +1063,10 @@ export class GrokAdapter implements Adapter {
         return;
       }
       if (typeof message.method === "string") {
+        if (isRpcId(message.id) && message.method === "session/request_permission") {
+          answerPermission(message.id, message.params);
+          return;
+        }
         if (message.id !== undefined) {
           const id = message.id;
           const method = message.method;
@@ -876,7 +1079,7 @@ export class GrokAdapter implements Adapter {
           });
           failTransport(
             nativeFailure(
-              `Grok ACP requested unsupported client method ${method}; the adapter does not execute native tools.`,
+              `Grok ACP requested unsupported client method ${method}; Relay offers no ACP client filesystem or terminal methods.`,
               "unsupported_capability",
             ),
           );
@@ -907,21 +1110,15 @@ export class GrokAdapter implements Adapter {
           }
           state.queuedNotifications += 1;
           state.queuedNotificationBytes += notificationBytes;
-          state.notificationChain = state.notificationChain
-            .then(async () => {
-              try {
-                await handleUpdate(params);
-              } finally {
-                state.queuedNotifications -= 1;
-                state.queuedNotificationBytes -= notificationBytes;
-              }
-            })
-            .catch((error: unknown) => {
-              failTransport(asError(error));
-            });
+          if (state.sessionId === undefined) {
+            state.earlyUpdates.push({ params, bytes: notificationBytes });
+            return;
+          }
+          queueUpdate(params, notificationBytes);
         }
         return;
       }
+
       if (!isRpcId(message.id)) {
         failTransport(
           nativeFailure(
@@ -1029,18 +1226,24 @@ export class GrokAdapter implements Adapter {
       );
       await termination;
     };
+    let promptSettled: Promise<void> | undefined;
     const onAbort = (): void => {
-      if (state.sessionId !== undefined) {
-        void writeMessage({
-          jsonrpc: "2.0",
-          method: "session/cancel",
-          params: { sessionId: state.sessionId },
-        }).catch(() => {
-          // Process-group termination remains the authoritative cancellation path.
-        });
-      }
-      rejectPending(abortError());
-      void terminate().catch((error: unknown) => {
+      void (async () => {
+        if (state.sessionId !== undefined) {
+          // Grok stops its running tool on session/cancel; give it a bounded window
+          // before the process-group termination that remains authoritative.
+          await writeMessage({
+            jsonrpc: "2.0",
+            method: "session/cancel",
+            params: { sessionId: state.sessionId },
+          }).catch(() => {});
+          if (promptSettled !== undefined) {
+            await Promise.race([promptSettled, delay(CANCEL_GRACE_MS)]);
+          }
+        }
+        rejectPending(abortError());
+        await terminate();
+      })().catch((error: unknown) => {
         failTransport(asError(error));
       });
     };
@@ -1106,16 +1309,87 @@ export class GrokAdapter implements Adapter {
       }
       state.sessionId = session.sessionId;
       updateIdentity(session.sessionId);
+      for (const early of state.earlyUpdates.splice(0)) {
+        queueUpdate(early.params, early.bytes);
+      }
+      const wantedModel = requestedModel(context);
+      const sessionModels = record(session.models);
+      const availableModels = Array.isArray(sessionModels?.availableModels)
+        ? sessionModels.availableModels
+            .map((entry) => record(entry)?.modelId)
+            .filter((modelId): modelId is string => typeof modelId === "string")
+        : undefined;
+      if (availableModels !== undefined && !availableModels.includes(wantedModel)) {
+        throw new BridgeError({
+          code: "route_unavailable",
+          message: `Grok does not offer ${wantedModel} to the authenticated account.`,
+          retryable: false,
+          details: { model: wantedModel },
+        });
+      }
+      if (sessionModels?.currentModelId !== wantedModel) {
+        const selected = record(
+          await request(
+            "session/set_model",
+            { sessionId: session.sessionId, modelId: wantedModel },
+            DEFAULT_REQUEST_TIMEOUT_MS,
+          ),
+        );
+        if (record(record(selected?._meta)?.model)?.Ok !== wantedModel) {
+          throw nativeFailure(`Grok did not confirm the requested model ${wantedModel}.`);
+        }
+      }
       context.reportPartial?.(resultSnapshot());
-      const promptResult = record(
-        await request("session/prompt", {
-          sessionId: session.sessionId,
-          prompt: [{ type: "text", text: prompt }],
-        }),
+      const promptRequest = request("session/prompt", {
+        sessionId: session.sessionId,
+        prompt: [{ type: "text", text: prompt }],
+      });
+      promptSettled = promptRequest.then(
+        () => {},
+        () => {},
       );
+      const promptResult = record(await promptRequest);
       await state.notificationChain;
       if (state.fatal !== undefined) {
         throw state.fatal;
+      }
+      const promptMeta = record(promptResult?._meta);
+      const ranModel = typeof promptMeta?.modelId === "string" ? promptMeta.modelId : undefined;
+      if (ranModel !== undefined) {
+        if (ranModel !== wantedModel) {
+          throw nativeFailure(`Grok ran ${ranModel} instead of the requested ${wantedModel}.`);
+        }
+        state.identity = {
+          ...state.identity,
+          model: { value: ranModel, evidence: "reported", source: "grok-acp" },
+        };
+      }
+      const inputTokens = numberValue(promptMeta?.inputTokens);
+      const outputTokens = numberValue(promptMeta?.outputTokens);
+      const cacheReadTokens = numberValue(promptMeta?.cachedReadTokens);
+      if (inputTokens !== undefined || outputTokens !== undefined) {
+        state.usage = {
+          ...state.usage,
+          ...(inputTokens === undefined ? {} : { inputTokens }),
+          ...(outputTokens === undefined ? {} : { outputTokens }),
+          ...(cacheReadTokens === undefined ? {} : { cacheReadTokens }),
+          evidence: "reported",
+          source: "grok-acp",
+        };
+      }
+      if (state.permissionDenied !== undefined && !context.signal.aborted) {
+        throw new BridgeError({
+          code: "harness_failed",
+          message:
+            "Grok stopped after Relay denied a native permission request under the deny interaction strategy.",
+          retryable: false,
+          details: {
+            reason: "permission_denied",
+            ...(state.permissionDenied.kind === undefined
+              ? {}
+              : { kind: state.permissionDenied.kind }),
+          },
+        });
       }
       const stopReason =
         typeof promptResult?.stopReason === "string"
@@ -1244,9 +1518,30 @@ export class GrokAdapter implements Adapter {
         "Grok ACP process-tree supervision is not qualified on Windows.",
       ]);
     }
-    return routeDescriptors("unavailable", executable, version, [
-      "Grok ACP v1 is fixture-qualified from 1.0.44, but native authentication status and account-specific model availability have no qualified read-only probe. Discovery does not run `grok models` or authenticate. Complete the native login yourself; route readiness remains unavailable until auth/model discovery is qualified.",
-      "ACP filesystem and terminal client capabilities are disabled. This adapter currently supports text-only prompt/output; native tool execution, effects, permission prompts, and continuation are not qualified.",
-    ]);
+    const listing = parseGrokModels(
+      await (this.#probe?.readModels ?? readModels)(executable, environment),
+    );
+    if (listing.authenticated !== true) {
+      return routeDescriptors("unavailable", executable, version, [
+        listing.authenticated === false
+          ? "Grok reports no authenticated account. Run `grok login` in the selected context, then refresh routes."
+          : "Grok's read-only model listing (`grok models`) could not be read, so authentication and model access are unknown.",
+      ]);
+    }
+    return routeDescriptors("ready", executable, version, []).map((route) =>
+      listing.models.includes(route.model)
+        ? {
+            ...route,
+            qualification: [LIVE_QUALIFICATION],
+            diagnostics: [
+              "`grok models` reports an authenticated account with access to this model. Grok executes its own tools; Relay offers no ACP client filesystem or terminal methods.",
+            ],
+          }
+        : {
+            ...route,
+            readiness: "unavailable" as const,
+            diagnostics: [`Grok does not list ${route.model} for the authenticated account.`],
+          },
+    );
   }
 }

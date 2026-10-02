@@ -155,34 +155,54 @@ real-account behavior are outside the fixture evidence.
 
 ## Grok Build
 
-The Grok adapter is currently a fixture-tested ACP v1 path for Grok Build
-`>=1.0.44 <2.0.0`, first tested against 1.0.44. Discovery intentionally reports every Grok route as
-unavailable: there is no qualified passive operation for native authentication
-status or account-specific model access, and discovery does not run `grok
-models` or start authentication. The listed model IDs are candidates, not a
-claim that the selected account can use them. A missing CLI or a version outside
-that range is unqualified.
+The Grok adapter speaks ACP v1 to `grok agent --no-leader stdio` for Grok Build
+`>=1.0.44 <2.0.0`. It was fixture-tested on 1.0.44 and live-qualified on 1.0.46
+with the default login; see the
+[qualification record](qualification/2026-10-02-grok-build-1.0.46.md).
 
-The adapter requests text-only ACP operation and advertises no client
-filesystem or terminal methods. Any reverse ACP request for those methods fails
-the invocation. Native tool execution, effects, permission prompts, sandbox
-enforcement, and continuation are not qualified. The descriptor therefore
-claims no assurance or filesystem/command/network policy support. Cancellation
-fixtures exercise process-group teardown, but a live Grok descendant lifecycle
-has not been qualified. A fixture also confirms that after an accepted prompt
-write, a native process can close its stdin read end without the parent
+Discovery runs the read-only `grok models` listing in the selected context. A
+route is `ready` only when Grok reports a logged-in account and lists the model;
+an unauthenticated context or an unreadable listing makes every route
+unavailable, and an unlisted model is unavailable on its own. Run against an
+empty `GROK_HOME`, `grok models` creates Grok's default directory layout there.
+
+Grok 1.0.46 ignores `--model`, `--always-approve`, and `--permission-mode` when
+they precede the `agent` subcommand, so every native control follows it. The
+model is also selected with ACP `session/set_model` after checking it against
+the session's available models, and the `modelId` in the prompt result must
+match; otherwise the invocation fails instead of reporting another model.
+Effort uses `agent --reasoning-effort`. Usage comes from the prompt result's
+token counts and any reported cost.
+
+Grok executes its own tools; Relay advertises no ACP client filesystem or
+terminal methods, and any such reverse request fails the invocation. Under
+`unattended`, `agent --always-approve` lets Grok edit files and run commands
+without asking. Under `deny`, Relay answers each `session/request_permission`
+with Grok's reject option; Grok then ends the turn, and the invocation fails
+with `harness_failed` and reason `permission_denied`. `orchestrator` and
+filesystem, command, or network restrictions are unsupported, so the
+descriptor claims assurance `none`. Effects come from the broker's workspace
+observation.
+
+Grok runs each tool command as its own process-group leader, so terminating the
+agent's group alone leaves tools running. On cancellation or timeout the adapter
+first sends ACP `session/cancel`, which stops the running tool, and waits up to
+two seconds for the turn to settle. It then terminates the agent's process
+group and every descendant process group it recorded before signalling.
+
+Session updates that arrive before `session/new` returns its ID are held and
+validated once the ID is known. A fixture also confirms that after an accepted
+prompt write, a native process can close its stdin read end without the parent
 Writable emitting `close` or `error` while the process stays alive. Such runs
 settle through the caller's timeout or cancellation signal; the adapter does
 not impose a default prompt deadline.
 
-Named Grok contexts use `GROK_HOME` for version probing and invocation, and the
-adapter removes inherited Grok and xAI authentication/model override variables
-before launching the child. It rejects config entries for external auth
-commands, per-model credentials or headers, and non-xAI endpoints. These are
-fixture-tested context-selection and isolation rules; they do not prove which
-account Grok authenticated or which model its service ran. Native readiness
-remains unavailable until a read-only authentication and model-access probe is
-qualified.
+Named Grok contexts use `GROK_HOME` for version probing, discovery, and
+invocation, and the adapter removes inherited Grok and xAI authentication or
+model override variables before launching the child. It rejects config entries
+for external auth commands, per-model credentials or headers, and non-xAI
+endpoints. A context that is not logged in is unavailable; Relay never falls
+back to the default login.
 
 ## Normalization rules
 

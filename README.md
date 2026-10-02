@@ -67,7 +67,7 @@ replaced by another model or harness.
 | Codex CLI (`>=0.149.0 <1`)         | Qualified one-shot delegation; continuation from 0.159.2                                        |
 | Ollama through the embedded Pi SDK | Runs nonremote, tool-capable models with steering and continuation; three models qualified live |
 | LM Studio through Pi               | Discovery and diagnostics only; execution unavailable                                           |
-| Grok Build (`>=1.0.44 <2`)         | Adapter present; routes stay unavailable until live qualification                               |
+| Grok Build (`>=1.0.44 <2`)         | Qualified one-shot delegation over ACP; live on 1.0.46                                          |
 | Fake routes (`--via fake`)         | Deterministic fixtures for the full contract, including dialogue                                |
 
 Named connections select a second native login or configuration for the same
