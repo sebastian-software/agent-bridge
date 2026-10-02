@@ -29,16 +29,34 @@ writeFileSync(join(cwd, "invocation.json"), JSON.stringify(invocation));
 const input = createInterface({ input: process.stdin });
 const send = (message) => process.stdout.write(JSON.stringify(message) + "\n");
 const pause = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+let currentModel = "grok-4.7";
+let pendingPrompt;
 
 for await (const line of input) {
   const message = JSON.parse(line);
+  if (message.method === undefined && message.id === 0) {
+    writeFileSync(join(cwd, "permission-reply.json"), JSON.stringify(message));
+    send({ jsonrpc: "2.0", id: pendingPrompt, result: { stopReason: "cancelled", _meta: { modelId: currentModel } } });
+    continue;
+  }
   if (message.method === "initialize") {
     send({ jsonrpc: "2.0", id: message.id, result: {
       protocolVersion: 1,
       agentCapabilities: { sessionCapabilities: { close: true } },
     }});
   } else if (message.method === "session/new") {
-    send({ jsonrpc: "2.0", id: message.id, result: { sessionId: "fixture-session" } });
+    // Grok 1.0.46 announces commands for the new session before session/new returns.
+    send({ jsonrpc: "2.0", method: "session/update", params: {
+      sessionId: "fixture-session",
+      update: { sessionUpdate: "available_commands_update", availableCommands: [] },
+    }});
+    const availableModels = ["grok-4.7", "grok-4.6", "grok-4.5"]
+      .filter((modelId) => scenario !== "model-unavailable" || modelId !== "grok-4.6")
+      .map((modelId) => ({ modelId, name: modelId }));
+    send({ jsonrpc: "2.0", id: message.id, result: {
+      sessionId: "fixture-session",
+      models: { currentModelId: currentModel, availableModels },
+    }});
     if (scenario === "pause-input" || scenario === "close-input") {
       writeFileSync(join(cwd, "input-state"), scenario);
       if (scenario === "pause-input") {
@@ -51,7 +69,25 @@ for await (const line of input) {
         setInterval(() => {}, 1000);
       }
     }
+  } else if (message.method === "session/set_model") {
+    writeFileSync(join(cwd, "set-model.json"), JSON.stringify(message.params));
+    if (scenario !== "set-model-ignored") {
+      currentModel = message.params.modelId;
+    }
+    send({ jsonrpc: "2.0", id: message.id, result: { _meta: { model: { Ok: currentModel } } } });
   } else if (message.method === "session/prompt") {
+    if (scenario === "permission") {
+      pendingPrompt = message.id;
+      send({ jsonrpc: "2.0", id: 0, method: "session/request_permission", params: {
+        sessionId: "fixture-session",
+        toolCall: { toolCallId: "call-1", kind: "edit", title: "Edit perm.txt" },
+        options: [
+          { optionId: "allow-once", name: "Yes", kind: "allow_once" },
+          { optionId: "reject-once", name: "No", kind: "reject_once" },
+        ],
+      }});
+      continue;
+    }
     if (scenario === "half-close-after-prompt") {
       writeFileSync(join(cwd, "input-state"), String(process.pid));
       process.stdin.destroy();
@@ -61,6 +97,12 @@ for await (const line of input) {
     if (scenario === "hang-with-child") {
       const child = spawn(process.execPath, ["-e", "process.on('SIGINT', () => {}); setInterval(() => {}, 1000)"], { stdio: "ignore" });
       writeFileSync(join(cwd, "descendant.pid"), String(child.pid));
+      continue;
+    }
+    if (scenario === "hang-with-tool-group") {
+      // Grok Build runs each tool command as its own process-group leader.
+      const tool = spawn(process.execPath, ["-e", "process.on('SIGINT', () => {}); process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"], { stdio: "ignore", detached: true });
+      writeFileSync(join(cwd, "descendant.pid"), String(tool.pid));
       continue;
     }
     if (scenario === "unterminated-output") {
@@ -108,6 +150,12 @@ for await (const line of input) {
       }});
       send({ jsonrpc: "2.0", id: message.id, result: {
         stopReason: scenario === "missing-terminal" ? undefined : "end_turn",
+        _meta: {
+          modelId: scenario === "wrong-model" ? "grok-4.7" : currentModel,
+          inputTokens: 120,
+          outputTokens: 8,
+          cachedReadTokens: 40,
+        },
       }});
     }
   } else if (message.method === "session/close") {
@@ -200,12 +248,24 @@ function createContext(
   return { context, events, partials };
 }
 
-function adapterFor(fixture: Fixture): GrokAdapter {
+const LOGGED_IN_MODELS = [
+  "You are logged in with grok.com.",
+  "",
+  "Default model: grok-4.7",
+  "",
+  "Available models:",
+  "  * grok-4.7 (default)",
+  "  - grok-4.6",
+  "  - grok-4.5",
+].join("\n");
+
+function adapterFor(fixture: Fixture, models: string | undefined = LOGGED_IN_MODELS): GrokAdapter {
   return new GrokAdapter({
     executable: fixture.executable,
     probe: {
       findExecutable: async () => fixture.executable,
       readVersion: async () => "Grok Build 1.0.44 (fixture)",
+      readModels: async () => models,
     },
   });
 }
@@ -244,19 +304,37 @@ async function assertPidExited(pid: number): Promise<void> {
   assert.fail(`Descendant process ${pid} survived Grok cancellation.`);
 }
 
-test("Grok discovery keeps unqualified authentication unavailable without model-list probes", async () => {
+test("Grok discovery derives readiness and model access from grok models", async () => {
   const fixture = await createFixture("success");
   try {
     const adapter = adapterFor(fixture);
     const routes = await adapter.discover();
-    assert.ok(routes.length > 0);
-    assert.ok(routes.every((route) => route.readiness === "unavailable"));
+    const readiness = Object.fromEntries(routes.map((route) => [route.model, route.readiness]));
+    assert.deepEqual(readiness, {
+      "grok-4.7": "ready",
+      "grok-4.7-build-fast": "unavailable",
+      "grok-4.6": "ready",
+      "grok-4.5": "ready",
+    });
     assert.ok(routes.every((route) => route.assurance === "none"));
     assert.ok(routes.every((route) => route.policySupport === undefined));
-    assert.ok(routes.every((route) => route.qualification.length === 0));
-    assert.ok(
-      routes.every((route) => route.diagnostics.some((item) => /read-only probe/i.test(item))),
+    for (const route of routes) {
+      assert.equal(route.qualification.length, route.readiness === "ready" ? 1 : 0);
+    }
+    assert.match(
+      routes.find((route) => route.model === "grok-4.7-build-fast")?.diagnostics[0] ?? "",
+      /does not list/u,
     );
+
+    for (const [models, diagnostic] of [
+      ["You are not authenticated.\n\nAvailable models:\n  * grok-4.6 (default)", /grok login/u],
+      ["", /could not be read/u],
+    ] as const) {
+      const unauthenticated = await adapterFor(fixture, models).discover();
+      assert.ok(unauthenticated.every((route) => route.readiness === "unavailable"));
+      assert.ok(unauthenticated.every((route) => route.qualification.length === 0));
+      assert.match(unauthenticated[0]?.diagnostics[0] ?? "", diagnostic);
+    }
 
     const policy = adapter.resolvePolicy(
       {
@@ -280,9 +358,9 @@ test("Grok discovery qualifies versions within its range", async () => {
   const fixture = await createFixture("success");
   try {
     for (const [version, expected] of [
-      ["1.0.44", "unavailable"],
-      ["1.0.46", "unavailable"],
-      ["1.2.0", "unavailable"],
+      ["1.0.44", "ready"],
+      ["1.0.46", "ready"],
+      ["1.2.0", "ready"],
       ["1.0.43", "unqualified"],
       ["2.0.0", "unqualified"],
     ] as const) {
@@ -291,14 +369,12 @@ test("Grok discovery qualifies versions within its range", async () => {
         probe: {
           findExecutable: async () => fixture.executable,
           readVersion: async () => `grok ${version} (fixture) [stable]`,
+          readModels: async () => LOGGED_IN_MODELS,
         },
       });
-      const routes = await adapter.discover();
-      assert.ok(routes.length > 0);
-      assert.ok(
-        routes.every((route) => route.readiness === expected && route.harnessVersion === version),
-        version,
-      );
+      const route = (await adapter.discover()).find((candidate) => candidate.model === "grok-4.6");
+      assert.equal(route?.readiness, expected, version);
+      assert.equal(route.harnessVersion, version);
     }
   } finally {
     await removeFixture(fixture.root);
@@ -314,7 +390,18 @@ test("Grok ACP normalizes text and usage with explicit model, effort, no-leader,
 
     assert.deepEqual(result.content, [{ type: "text", text: "fixture answer" }]);
     assert.equal(result.usage?.costUsd, 0.02);
-    assert.equal(result.observedIdentity.model.evidence, "unverified");
+    assert.equal(result.usage?.inputTokens, 120);
+    assert.equal(result.usage?.outputTokens, 8);
+    assert.equal(result.usage?.cacheReadTokens, 40);
+    assert.deepEqual(result.observedIdentity.model, {
+      value: "grok-4.6",
+      evidence: "reported",
+      source: "grok-acp",
+    });
+    assert.deepEqual(
+      JSON.parse(await readFile(join(fixture.root, "set-model.json"), "utf8")) as unknown,
+      { sessionId: "fixture-session", modelId: "grok-4.6" },
+    );
     assert.equal(result.observedIdentity.nativeSessionId.value, "fixture-session");
     assert.ok(events.some((event) => event.category === "output"));
     assert.ok(events.some((event) => event.category === "usage"));
@@ -327,14 +414,12 @@ test("Grok ACP normalizes text and usage with explicit model, effort, no-leader,
     };
     assert.deepEqual(invocation.args, [
       "--no-auto-update",
-      "--model",
-      "grok-4.6",
-      "--effort",
-      "high",
-      "--permission-mode",
-      "dontAsk",
       "--no-subagents",
       "agent",
+      "--model",
+      "grok-4.6",
+      "--reasoning-effort",
+      "high",
       "--no-leader",
       "stdio",
     ]);
@@ -492,6 +577,28 @@ test("Grok cancellation reaps descendants that ignore SIGINT", async () => {
   }
 });
 
+test("Grok cancellation also ends tools running in their own process group", async () => {
+  const fixture = await createFixture("hang-with-tool-group");
+  const controller = new AbortController();
+  try {
+    const { context } = createContext(fixture.root, fixture.executable, {
+      signal: controller.signal,
+      terminationGraceMs: 100,
+    });
+    const invocation = adapterFor(fixture).run(context);
+    await waitForFile(join(fixture.root, "descendant.pid"));
+    const toolPid = Number(await readFile(join(fixture.root, "descendant.pid"), "utf8"));
+    controller.abort();
+    await assert.rejects(
+      invocation,
+      (error: unknown) => error instanceof Error && error.name === "AbortError",
+    );
+    await assertPidExited(toolPid);
+  } finally {
+    await removeFixture(fixture.root);
+  }
+});
+
 test("Grok settles a backpressured prompt when stdin is cancelled or closed", async (t) => {
   for (const scenario of ["pause-input", "close-input"]) {
     await t.test(scenario, async () => {
@@ -566,5 +673,76 @@ test("Grok does not infer completion from a peer stdin half-close after an accep
   } finally {
     controller.abort();
     await removeFixture(fixture.root);
+  }
+});
+
+test("Grok fails instead of running a model the account or session did not confirm", async () => {
+  for (const [scenario, code, message] of [
+    ["model-unavailable", "route_unavailable", /does not offer grok-4\.6/u],
+    ["set-model-ignored", "harness_failed", /did not confirm/u],
+    ["wrong-model", "harness_failed", /ran grok-4\.7 instead/u],
+  ] as const) {
+    const fixture = await createFixture(scenario);
+    try {
+      const { context } = createContext(fixture.root, fixture.executable);
+      await assert.rejects(
+        adapterFor(fixture).run(context),
+        (error: unknown) =>
+          error instanceof BridgeError && error.code === code && message.test(error.message),
+        scenario,
+      );
+    } finally {
+      await removeFixture(fixture.root);
+    }
+  }
+});
+
+test("Grok deny rejects native permission requests and reports the stopped turn", async () => {
+  const fixture = await createFixture("permission");
+  try {
+    const { context, events } = createContext(fixture.root, fixture.executable);
+    await assert.rejects(
+      adapterFor(fixture).run(context),
+      (error: unknown) =>
+        error instanceof BridgeError &&
+        error.code === "harness_failed" &&
+        error.details?.reason === "permission_denied" &&
+        error.details.kind === "edit",
+    );
+    const reply = JSON.parse(
+      await readFile(join(fixture.root, "permission-reply.json"), "utf8"),
+    ) as { result?: { outcome?: unknown } };
+    assert.deepEqual(reply.result?.outcome, { outcome: "selected", optionId: "reject-once" });
+    assert.ok(
+      events.some(
+        (event) => event.category === "diagnostic" && event.data?.phase === "permission_denied",
+      ),
+    );
+  } finally {
+    await removeFixture(fixture.root);
+  }
+
+  const unattended = await createFixture("permission");
+  try {
+    const { context } = createContext(unattended.root, unattended.executable);
+    const unattendedContext = {
+      ...context,
+      request: { ...context.request, interactionStrategy: "unattended" as const },
+    };
+    await assert.rejects(
+      adapterFor(unattended).run(unattendedContext),
+      (error: unknown) => error instanceof BridgeError && error.code === "unsupported_capability",
+    );
+    const invocation = JSON.parse(
+      await readFile(join(unattended.root, "invocation.json"), "utf8"),
+    ) as { readonly args: readonly string[] };
+    assert.deepEqual(invocation.args.slice(0, 4), [
+      "--no-auto-update",
+      "--no-subagents",
+      "agent",
+      "--always-approve",
+    ]);
+  } finally {
+    await removeFixture(unattended.root);
   }
 });
