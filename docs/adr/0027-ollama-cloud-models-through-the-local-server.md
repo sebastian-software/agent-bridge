@@ -1,6 +1,6 @@
 # ADR-0027: Route Ollama cloud models through the local Ollama server
 
-- **Status:** Accepted; fixture-tested, live qualification pending
+- **Status:** Accepted; live-qualified with two free-plan cloud models
 - **Date:** 2026-10-02
 
 ## Context
@@ -40,9 +40,15 @@ metadata does not establish where inference runs.
   or a local variant.
 - Preflight repeats discovery, including the sign-in check. A sign-out after
   discovery fails the invocation with that reason.
-- Cloud routes report `billing` `unknown`. Ollama's account plan is not
-  observed, and a free or flat-rate plan cannot be told apart from the status
-  code.
+- Ready cloud routes report `billing` `metered` with evidence `inferred`.
+  Ollama prices every cloud request per token at the model's rate and draws it
+  from the plan's included credits, then from purchased credits; this holds
+  for the free plan too. Relay does not read the plan, so the evidence is
+  inferred from the pricing model, not reported for the account.
+- A ready cloud route means the server is signed in. It does not establish
+  that the account's plan includes the model: discovery cannot learn that
+  without spending a request. A model outside the plan fails the invocation
+  with Ollama's own HTTP 402 message.
 - Everything else matches local Ollama routes: Pi executes the tools on the
   user's machine, assurance stays `none`, the model vendor stays `unknown`
   unless the server establishes it, and the exact tag and digest are bound.
@@ -60,6 +66,10 @@ metadata does not establish where inference runs.
   how Relay would hold one.
 - Discovery adds one request per server that lists a cloud model. It stays
   within the existing request and inventory deadlines.
-- Live qualification of a cloud model is open. The fixture tests cover tag
-  classification, the sign-in check, preflight after sign-out, and that no
-  account detail or sign-in link reaches a route.
+- The [qualification record](../qualification/2026-10-06-ollama-cloud-models.md)
+  covers `gemma4:31b-cloud` and `gpt-oss:120b-cloud` on a free plan and the
+  402 failure for models outside it, such as `glm-5.3:cloud` and
+  `kimi-k3:cloud`. GLM, Kimi, DeepSeek, and MiniMax cloud models have not run
+  through Relay. The fixture tests cover tag classification, the sign-in
+  check, preflight after sign-out, and that no account detail or sign-in link
+  reaches a route.
