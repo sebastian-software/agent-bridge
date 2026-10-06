@@ -134,8 +134,16 @@ code and keeps no account detail. Without a sign-in the route is unavailable
 and asks for `ollama signin`; Relay never signs in for you and never falls back
 to a local model. Only entries whose `remote_host` is exactly
 `https://ollama.com` qualify; Ollama models forwarding anywhere else stay
-excluded. Billing is `unknown`, because the plan behind the account is not
-observed. Usage limits of that plan surface as a failed invocation.
+excluded.
+
+Billing is `metered` with evidence `inferred`: Ollama prices each cloud
+request per token at the model's rate, drawn from the plan's included credits
+and then from purchased credits. A ready route means only that the server is
+signed in. Whether the plan includes the model shows on the first request:
+the free plan covers a set of starter models such as `gemma4:31b-cloud` and
+`gpt-oss:120b-cloud`, and a model outside it, such as `glm-5.3:cloud`, fails
+the invocation with Ollama's HTTP 402 message about usage credits. Relay does
+not retry or switch models.
 
 Run a cloud model like any other Ollama route, with the exact model from
 discovery:
@@ -155,8 +163,9 @@ harness-relay run \
   --network allow
 ```
 
-No cloud model has been qualified live yet; the fixture tests cover
-classification, the sign-in check, and preflight after a sign-out.
+The [cloud qualification record](qualification/2026-10-06-ollama-cloud-models.md)
+covers two free-plan models; GLM, Kimi, DeepSeek, and MiniMax cloud models
+have not run through Relay yet.
 
 ## Interpret failures and evidence
 

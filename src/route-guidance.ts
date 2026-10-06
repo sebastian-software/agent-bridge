@@ -13,6 +13,9 @@ export const UNKNOWN_BILLING: RouteBilling = { mode: "unknown", evidence: "unver
 
 export const LOCAL_BILLING: RouteBilling = { mode: "local", evidence: "inferred" };
 
+/** Ollama prices every cloud request per token, drawn from plan or purchased credits. */
+export const OLLAMA_CLOUD_BILLING: RouteBilling = { mode: "metered", evidence: "inferred" };
+
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/u;
 
 function isTier(value: unknown): value is RouteTier {

@@ -491,12 +491,13 @@ test("an Ollama cloud route reports remote inference and fails preflight after s
   assert.equal(route?.model, "glm-5.3:cloud");
   assert.equal(route?.inferenceServer, "ollama");
   assert.equal(route?.inferenceLocation, "remote");
-  assert.deepEqual(route?.billing, { mode: "unknown", evidence: "unverified" });
   if (unavailable.length > 0) {
     assert.equal(route?.readiness, "unavailable");
+    assert.deepEqual(route?.billing, { mode: "unknown", evidence: "unverified" });
     return;
   }
   assert.equal(route?.readiness, "ready");
+  assert.deepEqual(route?.billing, { mode: "metered", evidence: "inferred" });
   assert.ok(route?.capabilities.includes("steering"));
 
   const request = {

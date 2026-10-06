@@ -90,8 +90,9 @@ highest.
 
 `billing.evidence` is `reported` when the mode comes from the harness's own
 authentication status, `inferred` for a ready local route, and `unverified`
-for `unknown`. An Ollama cloud route is `unknown`: its account plan is not
-observed. Claude Code reports a claude.ai subscription login; Codex
+for `unknown`. A ready Ollama cloud route is `metered` with evidence
+`inferred`: Ollama prices every cloud request per token, and Relay does not
+read the account's plan. Claude Code reports a claude.ai subscription login; Codex
 reports a ChatGPT login or an API key. Any other login, and every route that
 is not ready, is `unknown`. The status output is classified during discovery
 and not retained.

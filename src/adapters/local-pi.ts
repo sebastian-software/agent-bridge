@@ -6,6 +6,7 @@ import { join } from "node:path";
 import type {
   JsonValue,
   ResolvedRoute,
+  RouteBilling,
   RouteDescriptor,
   StartInvocationRequest,
 } from "../contract.js";
@@ -29,7 +30,7 @@ import {
   piRuntimeAvailability,
 } from "../local-runtimes.js";
 import { defaultCatalogPath } from "../model-catalog.js";
-import { LOCAL_BILLING, UNKNOWN_BILLING } from "../route-guidance.js";
+import { LOCAL_BILLING, OLLAMA_CLOUD_BILLING, UNKNOWN_BILLING } from "../route-guidance.js";
 import { PiAdapter } from "./pi.js";
 
 const PI_VERSION = "1.0.0";
@@ -214,13 +215,19 @@ function descriptor(
       : { inferenceLocation: model.inferenceLocation }),
     ...(model.digest === undefined ? {} : { modelDigest: model.digest }),
     ...(model.instanceId === undefined ? {} : { runtimeInstanceId: model.instanceId }),
-    // Only a ready local route has established that inference runs on the local server.
-    // A cloud model's plan is not observed, so its billing stays unknown.
-    billing:
-      readiness === "ready" && model.inferenceLocation === "local"
-        ? LOCAL_BILLING
-        : UNKNOWN_BILLING,
+    billing: routeBilling(readiness, model),
   };
+}
+
+function routeBilling(
+  readiness: RouteDescriptor["readiness"],
+  model: LocalRuntimeModel,
+): RouteBilling {
+  // Only a ready route has established where inference runs.
+  if (readiness !== "ready") {
+    return UNKNOWN_BILLING;
+  }
+  return model.inferenceLocation === "remote" ? OLLAMA_CLOUD_BILLING : LOCAL_BILLING;
 }
 
 function piConfiguration(
