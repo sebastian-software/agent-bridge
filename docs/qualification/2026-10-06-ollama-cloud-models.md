@@ -70,13 +70,33 @@ was 0: the Pi model definition Relay writes carries no price, so the actual
 charge shows only in the Ollama account.
 
 GLM 5.3 streamed thinking, which Relay reported as `thinking_delta` activity.
-Both models report the thinking levels `low`, `high`, and `max` with default
-`max`; Kimi K3 also accepts disabling thinking. Relay passes no level, so every
-request used the default.
+These runs passed no effort, so the server default `max` applied.
 
 A reused idempotency key on a continuation was rejected with
 `invocation_conflict` instead of returning the earlier invocation for another
 request. The repeat with a fresh key is the continuation in the table.
+
+## Efforts
+
+A later build offers the thinking levels from `/api/show` as efforts:
+`low`, `high`, `max` for `glm-5.3:cloud` and `none`, `low`, `high`, `max` for
+`kimi-k3:cloud`. The probe task ran once per setting; every run succeeded and
+`probe.txt` passed the assertion independently. The invocation records the
+requested effort and the `reasoningEffort` sent.
+
+| Model           | Effort         | Output tokens | Duration |
+| --------------- | -------------- | ------------- | -------- |
+| `glm-5.3:cloud` | none requested | 443           | 11 s     |
+| `glm-5.3:cloud` | `low`          | 173           | 4 s      |
+| `glm-5.3:cloud` | `max`          | 715           | 7 s      |
+| `kimi-k3:cloud` | `none`         | 337           | 10 s     |
+| `kimi-k3:cloud` | `high`         | 469           | 11 s     |
+| `kimi-k3:cloud` | `max`          | 543           | 12 s     |
+
+Each value is one run, so the durations show the direction, not a benchmark.
+Direct requests to the server showed the same ordering: on a short reasoning
+question Kimi K3 produced 8 completion tokens at `none`, 76 at `low`, 104 at
+`high`, and 401 at `max`.
 
 ## Free-plan evidence
 
@@ -116,5 +136,4 @@ All runs used `gemma4:31b-cloud` except the second probe task.
   test covers the preflight failure.
 - Cloud models other than the four that ran, and the behavior when credits
   run out.
-- Effort levels. The routes advertise none, so every request used the model's
-  default thinking setting.
+- Steering, continuation, cancellation, and timeout with an explicit effort.

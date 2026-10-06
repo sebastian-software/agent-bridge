@@ -31,6 +31,7 @@ import {
 } from "../local-runtimes.js";
 import { defaultCatalogPath } from "../model-catalog.js";
 import { LOCAL_BILLING, OLLAMA_CLOUD_BILLING, UNKNOWN_BILLING } from "../route-guidance.js";
+import { PI_THINKING_LEVELS, type PiThinkingLevel } from "./pi-protocol.js";
 import { PiAdapter } from "./pi.js";
 
 const PI_VERSION = "1.0.0";
@@ -145,6 +146,7 @@ function routeId(
     model.contextWindow,
     model.supportsTools,
     [...capabilities].toSorted(),
+    model.efforts,
     model.readiness,
   ]);
   const identity = createHash("sha256").update(snapshot).digest("hex").slice(0, 16);
@@ -195,7 +197,7 @@ function descriptor(
     provider: model.provider,
     model: model.id,
     modelVendorEvidence: model.providerEvidence,
-    efforts: [],
+    efforts: model.efforts,
     via: "pi",
     adapter: "pi",
     harnessVersion: PI_VERSION,
@@ -230,9 +232,44 @@ function routeBilling(
   return model.inferenceLocation === "remote" ? OLLAMA_CLOUD_BILLING : LOCAL_BILLING;
 }
 
+function piThinkingLevel(effort: string | undefined): PiThinkingLevel {
+  // Without an effort Pi sends no reasoning_effort, so the server default applies.
+  if (effort === undefined || effort === "none") {
+    return "off";
+  }
+  if (!PI_THINKING_LEVELS.some((level) => level === effort)) {
+    throw routeUnavailable(`Pi cannot request the thinking level ${effort}.`);
+  }
+  return effort as PiThinkingLevel;
+}
+
+/**
+ * Translate the route's efforts into Pi's reasoning settings. Every level the
+ * route does not offer maps to null, so Pi refuses it instead of clamping it
+ * to a neighbor. `off` sends `none` only when that effort was requested.
+ */
+function piReasoningModel(
+  efforts: readonly string[],
+  effort: string | undefined,
+): Readonly<Record<string, JsonValue>> {
+  if (efforts.length === 0) {
+    return {};
+  }
+  const levels = PI_THINKING_LEVELS.filter((level) => level !== "off");
+  return {
+    reasoning: true,
+    thinkingLevelMap: {
+      ...(effort === "none" ? { off: "none" } : {}),
+      ...Object.fromEntries(levels.map((level) => [level, efforts.includes(level) ? level : null])),
+    },
+    compat: { supportsReasoningEffort: true, thinkingFormat: "openai" },
+  };
+}
+
 function piConfiguration(
   binding: LocalRouteBinding,
   modelFiles: PiRuntimeConfiguration["modelFiles"],
+  effort: string | undefined,
 ): PiRuntimeConfiguration {
   const provider = `relay-local-${binding.profile.kind}-${binding.profile.revision}-${createHash(
     "sha256",
@@ -241,7 +278,7 @@ function piConfiguration(
     .digest("hex")
     .slice(0, 12)}`;
   return {
-    model: { provider, id: binding.model.id, thinkingLevel: "off" },
+    model: { provider, id: binding.model.id, thinkingLevel: piThinkingLevel(effort) },
     modelFiles,
     tools: PI_TOOLS,
   };
@@ -279,6 +316,7 @@ function policyResolution(
     sandbox: "none",
     extensions: "disabled",
     tools: [...PI_TOOLS],
+    reasoningEffort: request.selector.effort ?? "server-default",
   };
   return { supported: unsupported.length === 0, unsupported, effectiveNativePolicy };
 }
@@ -296,7 +334,8 @@ function sameModelSnapshot(left: LocalRuntimeModel, right: LocalRuntimeModel): b
     left.supportsTools === right.supportsTools &&
     left.readiness === right.readiness &&
     left.canonicalModel === right.canonicalModel &&
-    JSON.stringify(left.capabilities) === JSON.stringify(right.capabilities)
+    JSON.stringify(left.capabilities) === JSON.stringify(right.capabilities) &&
+    JSON.stringify(left.efforts) === JSON.stringify(right.efforts)
   );
 }
 
@@ -370,7 +409,15 @@ export class LocalPiAdapter implements Adapter {
         );
       }
       await this.#verifyCurrentRoute(binding, context.signal);
-      const instance = await this.#instance(binding);
+      const effort = context.route.effort ?? context.request.selector.effort;
+      if (effort !== undefined && !binding.model.efforts.includes(effort)) {
+        throw new BridgeError({
+          code: "unsupported_capability",
+          message: `The selected local model does not offer the effort ${effort}.`,
+          retryable: false,
+        });
+      }
+      const instance = await this.#instance(binding, effort);
       active.resolve(instance.adapter);
       const result = await instance.adapter.run({
         ...context,
@@ -489,8 +536,12 @@ export class LocalPiAdapter implements Adapter {
     }
   }
 
-  async #instance(binding: LocalRouteBinding): Promise<LocalPiInstance> {
-    const key = binding.route.routeId;
+  async #instance(
+    binding: LocalRouteBinding,
+    effort: string | undefined,
+  ): Promise<LocalPiInstance> {
+    // Pi fixes the thinking level per worker configuration, so each effort gets its own.
+    const key = JSON.stringify([binding.route.routeId, effort ?? null]);
     let pending = this.#instances.get(key);
     if (pending === undefined) {
       if (this.#instances.size >= MAX_PI_ROUTE_INSTANCES) {
@@ -498,17 +549,21 @@ export class LocalPiAdapter implements Adapter {
           `This broker has reached its ${MAX_PI_ROUTE_INSTANCES}-route local Pi configuration limit. Restart the broker to clear retained local route state.`,
         );
       }
-      pending = this.#createInstance(binding);
+      pending = this.#createInstance(binding, key, effort);
       this.#instances.set(key, pending);
     }
     return pending;
   }
 
-  async #createInstance(binding: LocalRouteBinding): Promise<LocalPiInstance> {
+  async #createInstance(
+    binding: LocalRouteBinding,
+    key: string,
+    effort: string | undefined,
+  ): Promise<LocalPiInstance> {
     const privateRoot = await this.#ensurePrivateRoot();
     const directory = join(
       privateRoot,
-      createHash("sha256").update(binding.route.routeId).digest("hex").slice(0, 32),
+      createHash("sha256").update(key).digest("hex").slice(0, 32),
     );
     await mkdir(directory, { mode: 0o700 });
     const modelFiles: PiRuntimeConfiguration["modelFiles"] = {
@@ -516,7 +571,7 @@ export class LocalPiAdapter implements Adapter {
       modelsPath: join(directory, "models.json"),
       modelsStorePath: join(directory, "models-store.json"),
     };
-    const configuration = piConfiguration(binding, modelFiles);
+    const configuration = piConfiguration(binding, modelFiles, effort);
     const modelProvider = configuration.model.provider;
     await Promise.all([
       writeFile(modelFiles.authPath, "{}", { encoding: "utf8", mode: 0o600 }),
@@ -536,6 +591,7 @@ export class LocalPiAdapter implements Adapter {
                   contextWindow: binding.model.contextWindow,
                   maxTokens: Math.min(8192, binding.model.contextWindow),
                   supportsTools: binding.model.supportsTools,
+                  ...piReasoningModel(binding.model.efforts, effort),
                 },
               ],
             },

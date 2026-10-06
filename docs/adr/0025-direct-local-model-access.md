@@ -46,6 +46,12 @@ server and loopback endpoint; `selector.runtimeId` distinguishes duplicate model
 IDs across servers. The wrapper keeps model-vendor evidence separate from the
 server, binds exact model snapshots, and does not create a fallback policy.
 
+Ollama routes offer the thinking levels the server reports for a model as
+efforts. A selected effort reaches the server as `reasoning_effort`; without
+one, Relay sends nothing and the server default applies. Only levels Pi can
+request exactly are offered, because Pi otherwise clamps an unsupported level
+to a neighbor, which would be a silent substitution.
+
 Ollama cloud models, which the server forwards to ollama.com, are a separate
 decision: [ADR-0027](0027-ollama-cloud-models-through-the-local-server.md).
 Ollama tool-capable models without native remote-model metadata can execute;

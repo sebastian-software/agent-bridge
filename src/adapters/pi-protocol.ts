@@ -14,7 +14,15 @@ export const MAX_PI_PENDING_STEERING_BYTES = 256 * 1024;
 export const PI_TOOL_NAMES = ["read", "write", "edit", "bash", "grep", "find", "ls"] as const;
 export type PiToolName = (typeof PI_TOOL_NAMES)[number];
 
-export const PI_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
+export const PI_THINKING_LEVELS = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const;
 export type PiThinkingLevel = (typeof PI_THINKING_LEVELS)[number];
 
 export type PiWorkerStart = {

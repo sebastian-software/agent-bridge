@@ -109,6 +109,7 @@ type CodingAgentEndpointOptions = {
   readonly toolCommand?: string;
   readonly finalResponse?: string;
   readonly followupReply?: (response: ServerResponse, request: Record<string, unknown>) => void;
+  readonly thinking?: unknown;
 };
 
 async function codingAgentEndpoint(
@@ -153,6 +154,7 @@ async function codingAgentEndpoint(
           JSON.stringify({
             model_info: { "qwen3.context_length": 8192 },
             capabilities: ["completion", "tools"],
+            ...(options.thinking === undefined ? {} : { thinking: options.thinking }),
           }),
         );
         return;
@@ -637,6 +639,87 @@ test("configured Ollama route dispatches its exact model through Pi and normaliz
     await registry.dispose();
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("Ollama thinking levels become efforts that reach the server as reasoning_effort", async (context) => {
+  const unavailable = await piRuntimeAvailability();
+  if (unavailable.length > 0) {
+    context.skip(unavailable.join(" "));
+    return;
+  }
+  const server = await codingAgentEndpoint(context, "e".repeat(64), {
+    thinking: { values: [false, "low", "high", "max", "turbo"], default: "max" },
+  });
+  const root = await mkdtemp(join(tmpdir(), "harness-relay-local-pi-effort-"));
+  const workingDirectory = join(root, "work");
+  await mkdir(workingDirectory);
+  const configPath = join(root, "config.json");
+  await writeFile(
+    configPath,
+    JSON.stringify({
+      localRuntimes: [{ id: "ollama-test", kind: "ollama", endpoint: server.url }],
+    }),
+    "utf8",
+  );
+  const adapter = new LocalPiAdapter({ configPath });
+  const registry = new AdapterRegistry([adapter], {
+    catalogPath: configPath,
+    connectionsPath: join(root, "connections.json"),
+  });
+  context.after(async () => {
+    await registry.dispose();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const [route] = await registry.discover();
+  assert.deepEqual(route?.efforts, ["none", "low", "high", "max"]);
+
+  const sent: unknown[] = [];
+  for (const effort of [undefined, "high", "max", "none"]) {
+    const base = localRequest(workingDirectory);
+    const request: StartInvocationRequest = {
+      ...base,
+      selector: { ...base.selector, ...(effort === undefined ? {} : { effort }) },
+    };
+    const resolved = await registry.resolve(request);
+    assert.equal(resolved.route.effort, effort);
+    assert.equal(
+      adapter.resolvePolicy(request, route).effectiveNativePolicy.reasoningEffort,
+      effort ?? "server-default",
+    );
+    const before = server.requests.length;
+    await adapter.run({
+      invocationId: `local-pi-effort-${effort ?? "default"}`,
+      request,
+      route: resolved.route,
+      signal: new AbortController().signal,
+      async emit() {},
+    });
+    const bodies = server.requests.slice(before);
+    assert.ok(bodies.length > 0);
+    const efforts = new Set(bodies.map((body) => body.reasoning_effort));
+    assert.equal(efforts.size, 1, "one invocation keeps one effort");
+    sent.push(bodies[0]?.reasoning_effort);
+  }
+  // Without an effort nothing is sent, so the server's own default applies.
+  assert.deepEqual(sent, [undefined, "high", "max", "none"]);
+
+  const unoffered = localRequest(workingDirectory);
+  await assert.rejects(
+    registry.resolve({ ...unoffered, selector: { ...unoffered.selector, effort: "medium" } }),
+    (error: unknown) => error instanceof BridgeError && error.code === "route_unavailable",
+  );
+  const resolved = await registry.resolve(unoffered);
+  await assert.rejects(
+    adapter.run({
+      invocationId: "local-pi-effort-forged",
+      request: { ...unoffered, selector: { ...unoffered.selector, effort: "medium" } },
+      route: { ...resolved.route, effort: "medium" },
+      signal: new AbortController().signal,
+      async emit() {},
+    }),
+    (error: unknown) => error instanceof BridgeError && error.code === "unsupported_capability",
+  );
 });
 
 test("ready Ollama routes steer their captured Pi session after runtime removal", async (context) => {

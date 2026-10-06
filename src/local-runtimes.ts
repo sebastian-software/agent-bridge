@@ -32,6 +32,11 @@ export type LocalRuntimeModel = {
   readonly contextWindow: number;
   readonly supportsTools: boolean;
   readonly capabilities: readonly string[];
+  /**
+   * Thinking levels the server accepts as `reasoning_effort`, lowest first.
+   * `none` turns thinking off; the empty list means only the server default.
+   */
+  readonly efforts: readonly string[];
   readonly readiness: "ready" | "unavailable" | "unqualified";
   readonly diagnostics: readonly string[];
   readonly identityEvidence: EvidenceStatus;
@@ -318,6 +323,34 @@ function positiveInteger(value: unknown): number | undefined {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }
 
+/** Levels Pi can request without clamping them to a neighbor. */
+const PI_EFFORT_LEVELS = new Set(["minimal", "low", "medium", "high", "xhigh", "max"]);
+
+/**
+ * Map Ollama's reported thinking values to efforts. `false` becomes `none`;
+ * `true` only toggles thinking on and adds nothing. A level Pi cannot request
+ * exactly is left out rather than approximated.
+ */
+function ollamaEfforts(show: Record<string, unknown>): readonly string[] {
+  const values = object(show.thinking)?.values;
+  if (!Array.isArray(values)) {
+    return [];
+  }
+  const efforts: string[] = [];
+  for (const value of values) {
+    const effort =
+      value === false
+        ? "none"
+        : typeof value === "string" && PI_EFFORT_LEVELS.has(value)
+          ? value
+          : undefined;
+    if (effort !== undefined && !efforts.includes(effort)) {
+      efforts.push(effort);
+    }
+  }
+  return efforts;
+}
+
 function ollamaContextWindow(show: Record<string, unknown>): number {
   const modelInfo = object(show.model_info);
   for (const [key, value] of Object.entries(modelInfo ?? {})) {
@@ -479,6 +512,7 @@ async function discoverOllama(
           providerEvidence: "unverified" as const,
           digest,
           contextWindow: ollamaContextWindow(show),
+          efforts: ollamaEfforts(show),
           supportsTools: tools,
           capabilities: [
             "core.input.text",
@@ -596,6 +630,7 @@ async function discoverLmStudio(
         ],
         identityEvidence: "reported",
         canonicalModel: entry.key,
+        efforts: [],
       });
       continue;
     }
@@ -628,6 +663,7 @@ async function discoverLmStudio(
         ],
         identityEvidence: "reported",
         canonicalModel: entry.key,
+        efforts: [],
       });
     }
   }
