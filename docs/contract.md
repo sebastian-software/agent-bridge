@@ -141,8 +141,9 @@ queued → running → waiting_for_input → running
 ```
 
 `waiting_for_input` is reachable only through adapters exposing a response
-channel: the fake permission and question fixtures and Claude's orchestrator
-permission route in this release. Permission requests use `invocation.respond`
+channel: Claude's orchestrator permission route in this release, and the
+development-only fake question fixture (registered with
+`HARNESS_RELAY_FAKE_ROUTES=1`). Permission requests use `invocation.respond`
 with only `allow` or `deny`. General delegate questions use `invocation.answer`
 with caller-provided content parts. They are separate request kinds and cannot
 be answered through one another's operation. Deny and unattended routes do not
@@ -188,12 +189,12 @@ at cancellation, terminal completion, or broker restart are recorded as
 `input_delivery_failed` or `input_expired`. Repeating an identical send with
 the same per-invocation idempotency key returns its existing input ID; reusing
 that key for different content is a conflict. Native send is available only
-when both the route capability and adapter handler are implemented. The fake
-fixture exercises this contract. The private Pi 1.0.0 worker implements
-text-only native steering through `AgentSession.steer(text)` and returns its
-delivery ACK only after the SDK accepts the message into its queue. Pinned-SDK
-integration tests cover FIFO delivery across a running shell command and the
-following model requests. This does not establish model consumption or qualify
+when both the route capability and adapter handler are implemented. The
+development-only fake fixture exercises this contract in the test suite. The
+private Pi 1.0.0 worker implements text-only native steering through
+`AgentSession.steer(text)` and returns its delivery ACK only after the SDK
+accepts the message into its queue. Pinned-SDK integration tests cover FIFO
+delivery across a running shell command and the following model requests. This does not establish model consumption or qualify
 a live local model. Configured local Pi routes expose the supported worker
 capabilities through the default registry. Only ready Ollama routes advertise
 text-only `steering`; a combined wrapper/SDK fixture covers early input,

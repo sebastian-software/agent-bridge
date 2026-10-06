@@ -40,6 +40,10 @@ import { BridgeError } from "../src/errors.js";
 import { BrokerServer } from "../src/ipc.js";
 import { McpServer } from "../src/mcp.js";
 
+// The legacy-record test below starts a fake route through the default
+// registry, which registers the fixtures only when this switch is set.
+process.env.HARNESS_RELAY_FAKE_ROUTES = "1";
+
 function deferred(): { readonly promise: Promise<void>; readonly resolve: () => void } {
   let settle: (() => void) | undefined;
   const promise = new Promise<void>((resolve) => {

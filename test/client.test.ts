@@ -12,6 +12,10 @@ import { createClient } from "../src/client.js";
 import { BrokerServer } from "../src/ipc.js";
 import { PACKAGE_VERSION } from "../src/version.js";
 
+// These tests drive the broker through its default registry, which registers
+// the deterministic fake fixtures only when this switch is set.
+process.env.HARNESS_RELAY_FAKE_ROUTES = "1";
+
 function paths(root: string): BrokerPaths {
   return {
     runtimeDirectory: join(root, "run"),
