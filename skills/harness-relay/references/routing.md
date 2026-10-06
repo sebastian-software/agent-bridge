@@ -12,7 +12,7 @@ model from memory.
 ## Procedure
 
 1. Read the facts. Prefer the installed `harness-relay`; otherwise use
-   `npx --yes harness-relay@0.4.0`. Run `describe --json`, then <!-- x-release-please-version -->
+   `npx --yes harness-relay@0.5.0`. Run `describe --json`, then <!-- x-release-please-version -->
    `routes --json`. Consider only routes with `readiness: ready`. For each,
    read:
    - `guidance.tier`: `frontier`, `strong`, `balanced`, or `fast`, from most
