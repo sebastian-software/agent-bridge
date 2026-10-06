@@ -164,8 +164,8 @@ harness-relay run \
 ```
 
 The [cloud qualification record](qualification/2026-10-06-ollama-cloud-models.md)
-covers two free-plan models; GLM, Kimi, DeepSeek, and MiniMax cloud models
-have not run through Relay yet.
+covers `glm-5.3:cloud` and `kimi-k3:cloud` with purchased credits and two
+free-plan models. Other cloud models have not run through Relay.
 
 ## Interpret failures and evidence
 
