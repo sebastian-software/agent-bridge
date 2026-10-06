@@ -65,7 +65,7 @@ harness-relay run --provider anthropic --model opus --via claude-code \
 | Claude Code (`>=2.1.0 <3`)         | Qualified one-shot delegation; continuation from 2.1.282                                        |
 | Codex CLI (`>=0.149.0 <1`)         | Qualified one-shot delegation; continuation from 0.159.2                                        |
 | Grok Build (`>=1.0.44 <2`)         | Qualified one-shot delegation over ACP; live on 1.0.46                                          |
-| Ollama through the embedded Pi SDK | Runs nonremote, tool-capable models with steering and continuation; three models qualified live |
+| Ollama through the embedded Pi SDK | Runs local and signed-in cloud tool-capable models with steering and continuation; three local models qualified live |
 | LM Studio through Pi               | Discovery and diagnostics only; execution unavailable                                           |
 
 Each qualification is backed by a dated record in

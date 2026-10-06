@@ -25,6 +25,10 @@ model from memory.
      use), `subscription` (flat rate that draws on a usage cap), `metered`
      (charged per use), or `unknown`.
    - `capabilities`: what the route can actually do.
+   - `inferenceLocation`: `remote` means a hosted service runs the model and
+     receives the prompt and the files the delegate reads, even though the
+     route runs through a local server such as Ollama. Do not choose it when
+     the user wants the work kept on the machine.
 
    If no route carries `guidance`, the CLI predates route guidance. Ask the
    user which route to use, or report that you could not choose one.

@@ -160,6 +160,138 @@ test("Ollama discovery excludes remote routes from either native response withou
   assert.match(inventory.diagnostics.join(" "), /different model identity/u);
 });
 
+function cloudTag(
+  name: string,
+  remoteModel: string,
+  extra: Readonly<Record<string, unknown>> = {},
+) {
+  return tag(name, { remote_host: "https://ollama.com", remote_model: remoteModel, ...extra });
+}
+
+async function cloudEndpoint(
+  context: TestContext,
+  options: {
+    readonly models: readonly unknown[];
+    readonly me?: number;
+    readonly show?: (model: string) => Readonly<Record<string, unknown>>;
+  },
+): Promise<{ readonly url: string; readonly requests: string[] }> {
+  const requests: string[] = [];
+  const url = await endpoint(context, async (request, response) => {
+    requests.push(`${request.method} ${request.url}`);
+    if (request.url === "/api/version") {
+      json(response, { version: "0.34.4" });
+      return;
+    }
+    if (request.url === "/api/tags") {
+      json(response, { models: options.models });
+      return;
+    }
+    if (request.url === "/api/me") {
+      assert.equal(request.method, "POST");
+      const status = options.me ?? 200;
+      response
+        .writeHead(status, { "content-type": "application/json" })
+        .end(
+          JSON.stringify(
+            status === 401
+              ? { error: "unauthorized", signin_url: "https://ollama.com/connect?key=secret-key" }
+              : { name: "someone", email: "someone@example.com" },
+          ),
+        );
+      return;
+    }
+    assert.equal(request.url, "/api/show");
+    const body = (await requestBody(request)) as { model: string };
+    json(
+      response,
+      options.show?.(body.model) ?? {
+        capabilities: ["completion", "thinking", "tools"],
+        model_info: { "glm_dsa_moe.context_length": 1_048_576 },
+      },
+    );
+  });
+  return { url, requests };
+}
+
+test("Ollama cloud models become remote routes once the server is signed in", async (context) => {
+  const { url, requests } = await cloudEndpoint(context, {
+    models: [tag("qwen3:4b"), cloudTag("glm-5.3:cloud", "glm-5.3")],
+    show: (model) =>
+      model === "qwen3:4b"
+        ? { capabilities: ["tools"], model_info: { "qwen3.context_length": 32_768 } }
+        : {
+            capabilities: ["completion", "thinking", "tools"],
+            model_info: { "glm_dsa_moe.context_length": 1_048_576 },
+          },
+  });
+  const inventory = await discoverLocalRuntime(profile(url));
+  assert.deepEqual(inventory.diagnostics, []);
+  assert.equal(requests.filter((request) => request === "POST /api/me").length, 1);
+  const local = inventory.models.find((model) => model.id === "qwen3:4b");
+  assert.equal(local?.inferenceLocation, "local");
+  assert.equal(local?.remoteModel, undefined);
+  const cloud = inventory.models.find((model) => model.id === "glm-5.3:cloud");
+  assert.equal(cloud?.inferenceLocation, "remote");
+  assert.equal(cloud?.remoteModel, "glm-5.3");
+  assert.equal(cloud?.readiness, "ready");
+  assert.equal(cloud?.contextWindow, 1_048_576);
+  assert.equal(cloud?.provider, "unknown");
+  assert.ok(cloud?.capabilities.includes("core.tools"));
+});
+
+test("Ollama discovery asks for the sign-in only when a cloud model is installed", async (context) => {
+  const { url, requests } = await cloudEndpoint(context, { models: [tag("qwen3:4b")] });
+  const inventory = await discoverLocalRuntime(profile(url));
+  assert.equal(inventory.models[0]?.inferenceLocation, "local");
+  assert.equal(requests.includes("POST /api/me"), false);
+});
+
+test("Ollama cloud models without a sign-in are unavailable and never leak the sign-in link", async (context) => {
+  for (const [status, pattern] of [
+    [401, /not signed in to ollama\.com.*ollama signin/u],
+    [404, /did not confirm a sign-in/u],
+    [500, /did not confirm a sign-in/u],
+  ] as const) {
+    const { url } = await cloudEndpoint(context, {
+      models: [cloudTag("kimi-k3:cloud", "kimi-k3")],
+      me: status,
+    });
+    const inventory = await discoverLocalRuntime(profile(url));
+    const model = inventory.models[0];
+    assert.equal(model?.readiness, "unavailable");
+    assert.equal(model?.inferenceLocation, "remote");
+    assert.match(model?.diagnostics.join(" ") ?? "", pattern);
+    const serialized = JSON.stringify(inventory);
+    assert.equal(serialized.includes("secret-key"), false);
+    assert.equal(serialized.includes("someone"), false);
+  }
+});
+
+test("Ollama keeps excluding remote entries that are not complete ollama.com cloud models", async (context) => {
+  const { url } = await cloudEndpoint(context, {
+    models: [
+      tag("other-host", { remote_host: "https://models.example.com", remote_model: "glm-5.3" }),
+      tag("lookalike", { remote_host: "https://ollama.com.example.net", remote_model: "glm-5.3" }),
+      tag("with-path", { remote_host: "https://ollama.com/proxy", remote_model: "glm-5.3" }),
+      tag("no-model", { remote_host: "https://ollama.com" }),
+      cloudTag("renamed:cloud", "glm-5.3"),
+    ],
+    show: () => ({
+      remote_host: "https://ollama.com",
+      remote_model: "kimi-k3",
+      capabilities: ["tools"],
+    }),
+  });
+  const inventory = await discoverLocalRuntime(profile(url));
+  assert.deepEqual(inventory.models, []);
+  const diagnostics = inventory.diagnostics.join(" ");
+  for (const id of ["other-host", "lookalike", "with-path", "no-model"]) {
+    assert.ok(diagnostics.includes(`${id} forwards to a remote model`), id);
+  }
+  assert.match(diagnostics, /different remote model for renamed:cloud/u);
+});
+
 test("local discovery does not follow an HTTP redirect to another endpoint", async (context) => {
   let redirectedRequests = 0;
   const target = await endpoint(context, (_request, response) => {
@@ -247,6 +379,7 @@ test("LM Studio distinguishes loaded, unloaded, and embedding models without cla
   assert.equal(loaded?.instanceId, "my-loaded-model");
   assert.equal(loaded?.provider, "qwen");
   assert.equal(loaded?.readiness, "unqualified");
+  assert.equal(loaded?.inferenceLocation, undefined);
   assert.match(loaded?.diagnostics.join(" ") ?? "", /remote device/u);
   assert.equal(
     inventory.models.find((model) => model.id === "qwen/unloaded")?.readiness,

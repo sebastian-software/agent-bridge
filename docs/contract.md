@@ -48,7 +48,10 @@ substitutes the requested model, effort, harness, or connection.
 Optional `selector.runtimeId` selects one configured local model server. It is
 independent of the native account selector. Local routes keep `provider` as the
 model vendor (`unknown` when unestablished), `via`/`adapter` as `pi`, and
-`inferenceServer` as `ollama` or `lm-studio`. `modelVendorEvidence` qualifies the
+`inferenceServer` as `ollama` or `lm-studio`. `inferenceLocation` is `local`
+when the server runs the model, `remote` for an Ollama cloud model that the
+server forwards to ollama.com, and absent when the metadata does not establish
+it (ADR-0027). `modelVendorEvidence` qualifies the
 vendor claim. `runtimeId`, `runtimeRevision`, and any `modelDigest` or
 `runtimeInstanceId` remain in the resolved route and persisted invocation
 metadata. Discovery and preflight bind the exact model snapshot; a stale route
@@ -87,7 +90,8 @@ highest.
 
 `billing.evidence` is `reported` when the mode comes from the harness's own
 authentication status, `inferred` for a ready local route, and `unverified`
-for `unknown`. Claude Code reports a claude.ai subscription login; Codex
+for `unknown`. An Ollama cloud route is `unknown`: its account plan is not
+observed. Claude Code reports a claude.ai subscription login; Codex
 reports a ChatGPT login or an API key. Any other login, and every route that
 is not ready, is `unknown`. The status output is classified during discovery
 and not retained.
