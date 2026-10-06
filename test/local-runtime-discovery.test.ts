@@ -240,6 +240,32 @@ test("Ollama cloud models become remote routes once the server is signed in", as
   assert.ok(cloud?.capabilities.includes("core.tools"));
 });
 
+test("Ollama thinking values become efforts without approximating unknown levels", async (context) => {
+  const thinking: Readonly<Record<string, unknown>> = {
+    "kimi-k3:cloud": { values: [false, "low", "high", "max"], default: "max" },
+    "gpt-oss:120b-cloud": { values: ["low", "medium", "high"], default: "medium" },
+    "gemma4:31b-cloud": { values: [false, true], default: false },
+    "odd:cloud": { values: ["turbo", "low", "low", 3], default: "turbo" },
+    "plain:cloud": undefined,
+  };
+  const { url } = await cloudEndpoint(context, {
+    models: Object.keys(thinking).map((name) => cloudTag(name, name.replace(":cloud", ""))),
+    show: (model) => ({
+      capabilities: ["completion", "tools"],
+      ...(thinking[model] === undefined ? {} : { thinking: thinking[model] }),
+    }),
+  });
+  const inventory = await discoverLocalRuntime(profile(url));
+  const efforts = Object.fromEntries(inventory.models.map((model) => [model.id, model.efforts]));
+  assert.deepEqual(efforts, {
+    "kimi-k3:cloud": ["none", "low", "high", "max"],
+    "gpt-oss:120b-cloud": ["low", "medium", "high"],
+    "gemma4:31b-cloud": ["none"],
+    "odd:cloud": ["low"],
+    "plain:cloud": [],
+  });
+});
+
 test("Ollama discovery asks for the sign-in only when a cloud model is installed", async (context) => {
   const { url, requests } = await cloudEndpoint(context, { models: [tag("qwen3:4b")] });
   const inventory = await discoverLocalRuntime(profile(url));
@@ -380,6 +406,7 @@ test("LM Studio distinguishes loaded, unloaded, and embedding models without cla
   assert.equal(loaded?.provider, "qwen");
   assert.equal(loaded?.readiness, "unqualified");
   assert.equal(loaded?.inferenceLocation, undefined);
+  assert.deepEqual(loaded?.efforts, []);
   assert.match(loaded?.diagnostics.join(" ") ?? "", /remote device/u);
   assert.equal(
     inventory.models.find((model) => model.id === "qwen/unloaded")?.readiness,

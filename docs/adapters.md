@@ -20,7 +20,10 @@ Ollama tool-capable nonremote models can execute with assurance `none`; LM
 Studio models remain unqualified for local execution because loaded metadata
 does not establish locality. Ollama cloud models execute through the same path
 when the server is signed in to ollama.com, and their routes report
-`inferenceLocation: "remote"`. See [local model setup](local-models.md).
+`inferenceLocation: "remote"`. Ollama routes take their `efforts` from the
+thinking levels in `/api/show`; Pi sends the selected one as
+`reasoning_effort` and is configured so that it cannot clamp an unlisted level
+to a neighbor. See [local model setup](local-models.md).
 
 Adapters with mutable configuration can implement `discoveryCacheKey()` to
 invalidate the registry's cached route inventory after configuration changes.

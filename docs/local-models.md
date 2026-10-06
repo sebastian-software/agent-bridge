@@ -109,6 +109,26 @@ endpoint, model digest, or other bound identity fails explicitly instead of
 silently switching to another server or model. The caller decides whether to
 refresh discovery and submit another invocation. There is no automatic fallback.
 
+## Choose an effort
+
+An Ollama route lists the thinking levels its server reports in `/api/show`
+as `efforts`, in the server's order, lowest first. Pass one with `--effort`
+(or `selector.effort`); Relay sends it to the server as `reasoning_effort`.
+
+| Ollama reports                   | Route `efforts`               |
+| -------------------------------- | ----------------------------- |
+| `false`, `low`, `high`, `max`    | `none`, `low`, `high`, `max`  |
+| `low`, `medium`, `high`          | `low`, `medium`, `high`       |
+| `false`, `true` (on or off only) | `none`                        |
+| no thinking levels               | none; the server default only |
+
+`none` turns thinking off. Without `--effort`, Relay sends no level and the
+server's default applies; for GLM 5.3 and Kimi K3 that is `max`, the slowest
+and most expensive setting. An effort the route does not list is rejected
+during resolution. A level Pi cannot request exactly is not offered, so Pi
+never moves a request to a neighboring level. A continuation keeps the
+effort of the invocation it continues.
+
 ## Ollama cloud models
 
 Ollama also lists cloud models, such as `glm-5.3:cloud` or `kimi-k3:cloud`.
