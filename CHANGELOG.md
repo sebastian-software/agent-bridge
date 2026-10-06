@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.5.0](https://github.com/sebastian-software/harness-relay/compare/v0.4.0...v0.5.0) (2026-10-06)
+
+
+### Features
+
+* **pi:** report Ollama cloud routes as metered and record live qualification ([2bf7e9e](https://github.com/sebastian-software/harness-relay/commit/2bf7e9e8f7aeaf7acf6f72605fd6f619af3703cf))
+* **pi:** route Ollama cloud models through the local server ([4a2641d](https://github.com/sebastian-software/harness-relay/commit/4a2641d743e28f67324c2101e5a122477b11fefa))
+
+
+### Bug Fixes
+
+* **deps:** update dependency jdx/mise to v2026.10.3 ([37363ed](https://github.com/sebastian-software/harness-relay/commit/37363edc5d292377e23d15d13c641ea950f30389))
+
 ## [0.4.0](https://github.com/sebastian-software/harness-relay/compare/v0.3.1...v0.4.0) (2026-10-02)
 
 
