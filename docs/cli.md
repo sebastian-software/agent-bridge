@@ -41,7 +41,7 @@ these ways: a positional argument (especially for `run`), `--text <text>`,
 for a complete content-part array. `--cwd` defaults to the current directory.
 
 ```sh
-harness-relay start --provider harness-relay --model fake-echo --via fake \
+harness-relay start --provider openai --model gpt-6.1-sol --via codex \
   --cwd "$PWD" --text "hello" --json
 harness-relay run --provider anthropic --model opus --interaction deny \
   "Summarize this workspace"
@@ -173,6 +173,13 @@ private platform-temporary directory otherwise; state lives in
 `HARNESS_RELAY_STATE_DIR`, or `HARNESS_RELAY_SOCKET_PATH`. Unix sockets limit
 the path to 104 bytes on macOS and 107 on Linux; a longer path fails with a
 diagnostic instead of starting.
+
+By default `routes` lists only real adapters: installed harnesses and
+configured local runtimes. The deterministic `fake` and `fake-process` fixtures
+used by the test suite are registered when the broker starts with
+`HARNESS_RELAY_FAKE_ROUTES=1`; without the switch, a selector that names them
+fails with `route_unavailable` like any other unknown route. The contributor
+guide in the repository describes them.
 
 Stable process exit codes are: `0` success, `1` execution/internal failure,
 `2` invalid request, `3` broker unavailable, `4` invocation unavailable or not

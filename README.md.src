@@ -199,8 +199,10 @@ pnpm check
 and the tests; `pnpm check` adds coverage and the package dry-run and is what
 CI runs. Conventions live in [`AGENTS.md`](AGENTS.md), terminology in
 [`CONTEXT.md`](CONTEXT.md), and decisions in [`docs/adr/`](docs/adr/). The
-deterministic fake routes (`--via fake`) exercise the full contract without a
-real harness. Work is tracked in GitHub issues.
+deterministic fake routes (`--via fake`, registered only when the broker starts
+with `HARNESS_RELAY_FAKE_ROUTES=1`) exercise the full contract without a real
+harness; [`CONTRIBUTING.md`](CONTRIBUTING.md) shows how to run them. Work is
+tracked in GitHub issues.
 
 ## From the same workshop
 

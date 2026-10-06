@@ -27,6 +27,7 @@ function testEnvironment(root: string): NodeJS.ProcessEnv {
     HARNESS_RELAY_RUNTIME_DIR: join(root, "run"),
     HARNESS_RELAY_STATE_DIR: join(root, "state"),
     HARNESS_RELAY_SOCKET_PATH: join(tmpdir(), `${basename(root)}.sock`),
+    HARNESS_RELAY_FAKE_ROUTES: "1",
   };
 }
 
@@ -235,6 +236,65 @@ test("CLI discovers, starts, follows, and inspects through the Unix socket", asy
     ) as { readonly version?: unknown };
     const version = await execFile(process.execPath, [cliPath, "--version"], { env });
     assert.equal(version.stdout.trim(), packageManifest.version);
+  } finally {
+    try {
+      await execFile(process.execPath, [cliPath, "broker", "stop", "--json"], { env });
+    } catch {
+      broker.kill("SIGTERM");
+    }
+    await childExit(broker);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a broker started without the fake-routes switch lists only real harness routes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "harness-relay-cli-no-fixtures-"));
+  const env = testEnvironment(root);
+  delete env.HARNESS_RELAY_FAKE_ROUTES;
+  const broker = spawn(process.execPath, [cliPath, "broker", "serve"], { env, stdio: "ignore" });
+  try {
+    await waitForBroker(new IpcClient(env.HARNESS_RELAY_SOCKET_PATH ?? ""));
+    const listed = await execFile(process.execPath, [cliPath, "routes", "--json"], { env });
+    const discovered = JSON.parse(listed.stdout) as {
+      routes?: ReadonlyArray<{ routeId?: string; adapter?: string }>;
+    };
+    assert.ok(discovered.routes && discovered.routes.length > 0);
+    assert.deepEqual(
+      discovered.routes.filter(
+        (route) => route.adapter === "fake" || route.adapter === "fake-process",
+      ),
+      [],
+    );
+    assert.ok(discovered.routes.every((route) => !route.routeId?.startsWith("fake")));
+
+    try {
+      await execFile(
+        process.execPath,
+        [
+          cliPath,
+          "start",
+          "--provider",
+          "harness-relay",
+          "--model",
+          "fake-echo",
+          "--via",
+          "fake",
+          "--cwd",
+          root,
+          "--text",
+          "fixtures are opt-in",
+          "--json",
+        ],
+        { env },
+      );
+      assert.fail("The fake route must not resolve without the switch.");
+    } catch (error) {
+      if (!(error instanceof Error) || !("stderr" in error) || typeof error.stderr !== "string") {
+        assert.fail("Expected a process error with captured stderr.");
+      }
+      const failure = JSON.parse(error.stderr) as { error?: { code?: unknown } };
+      assert.equal(failure.error?.code, "route_unavailable");
+    }
   } finally {
     try {
       await execFile(process.execPath, [cliPath, "broker", "stop", "--json"], { env });

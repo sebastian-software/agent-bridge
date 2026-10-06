@@ -144,6 +144,7 @@ test("MCP serves the broker contract to the official stdio client", async () => 
     HARNESS_RELAY_STATE_DIR: join(root, "state"),
     HARNESS_RELAY_SOCKET_PATH: join(root, "run", "broker.sock"),
     HARNESS_RELAY_FAKE_HARNESS_PATH: join(process.cwd(), "scripts", "fake-harness.mjs"),
+    HARNESS_RELAY_FAKE_ROUTES: "1",
   });
   const transport = new StdioClientTransport({
     command: process.execPath,

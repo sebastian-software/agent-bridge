@@ -55,11 +55,24 @@ managed file such as `.oxfmtrc.json`; run `pnpm exec standards apply` instead.
 ## Running against the fake harnesses
 
 Two deterministic fixtures let you exercise the broker without an installed
-harness or a model call.
+harness or a model call. They are development routes: the broker registers
+them only when it starts with `HARNESS_RELAY_FAKE_ROUTES=1` in its environment,
+so a published install lists real harness routes only. Export the switch before
+the first command autostarts a broker, and restart a broker that is already
+running, because the broker environment is fixed at startup:
+
+```sh
+export HARNESS_RELAY_FAKE_ROUTES=1
+harness-relay broker restart
+harness-relay routes
+```
+
+The test suite sets the switch itself where a test drives the default registry,
+so `pnpm test` needs no shell export.
 
 `--via fake` is an in-process adapter with the routes `fake-echo`, `fake-slow`,
-and `fake-fail`. It qualifies every interaction strategy, so the default
-`orchestrator` works:
+`fake-fail`, and `fake-question`. It qualifies every interaction strategy, so
+the default `orchestrator` works:
 
 ```sh
 harness-relay run --provider harness-relay --model fake-echo --via fake \
@@ -69,9 +82,10 @@ harness-relay run --provider harness-relay --model fake-echo --via fake \
 `--via fake-process` runs `scripts/fake-harness.mjs` as a real child process, so
 it covers process supervision: stdin, stderr bounds, cancellation of the process
 group, timeout grace, and JSONL parsing. Its model name selects the scenario —
-`success`, `failure`, `timeout`, `malformed`, `truncated`, `effects`, `cancel`,
-`identity-absent`, `slow`, or `exit-before-read`. These routes qualify `deny`
-and `unattended` only, so pass `--interaction`; the CLI otherwise defaults to
+`success`, `failure`, `timeout`, `malformed`, `malformed-after-output`,
+`truncated`, `final-no-newline`, `effects`, `cancel`, `identity-absent`, `slow`,
+`exit-before-read`, or `leader-exit-descendant`. These routes qualify `deny` and
+`unattended` only, so pass `--interaction`; the CLI otherwise defaults to
 `orchestrator` and resolution fails with `route_unavailable`:
 
 ```sh
@@ -86,9 +100,12 @@ it emits:
 pnpm fake-harness -- --scenario effects --text "hello" --cwd "$(mktemp -d)"
 ```
 
-`HARNESS_RELAY_FAKE_HARNESS_PATH` overrides the path to the script; the compiled
-tests set it because they run from `dist`. The `effects` scenario writes into
-the directory you pass with `--cwd`, so point it at a scratch directory.
+The `fake-process` adapter looks for the script under the broker's working
+directory, so start the broker from the repository root, or set
+`HARNESS_RELAY_FAKE_HARNESS_PATH` to its absolute path; the compiled MCP test
+sets it because its broker runs from a temporary directory. The script is not
+part of the published package. The `effects` scenario writes into the directory
+you pass with `--cwd`, so point it at a scratch directory.
 
 ## Adapters
 

@@ -46,6 +46,29 @@ const EVIDENCE_RANK: Readonly<Record<EvidenceStatus, number>> = {
 
 const DISCOVERY_TTL_MS = 60_000;
 
+/**
+ * Opt-in switch for the deterministic `fake` and `fake-process` fixtures. They
+ * are development and test routes: `fake-process` runs `scripts/fake-harness.mjs`
+ * from the repository checkout, which the published package does not ship, so a
+ * default broker registers only the real harness adapters.
+ */
+export const FAKE_ROUTES_ENVIRONMENT_VARIABLE = "HARNESS_RELAY_FAKE_ROUTES";
+
+export function fakeRoutesEnabled(environment: NodeJS.ProcessEnv = process.env): boolean {
+  const value = environment[FAKE_ROUTES_ENVIRONMENT_VARIABLE]?.trim();
+  return value === "1" || value === "true";
+}
+
+function defaultAdapters(catalogPath: string): readonly Adapter[] {
+  return [
+    ...(fakeRoutesEnabled() ? [new FakeAdapter(), new FakeProcessAdapter()] : []),
+    new ClaudeAdapter(),
+    new CodexAdapter(),
+    new LocalPiAdapter({ configPath: catalogPath }),
+    new GrokAdapter(),
+  ];
+}
+
 type DiscoveryOptions = {
   readonly refresh?: boolean;
   readonly connectionId?: string;
@@ -79,16 +102,7 @@ export class AdapterRegistry {
     this.#catalogPath = options?.catalogPath ?? defaultCatalogPath();
     this.#connectionsPath = options?.connectionsPath ?? defaultConnectionsPath();
     this.#adapters = new Map(
-      (
-        adapters ?? [
-          new FakeAdapter(),
-          new FakeProcessAdapter(),
-          new ClaudeAdapter(),
-          new CodexAdapter(),
-          new LocalPiAdapter({ configPath: this.#catalogPath }),
-          new GrokAdapter(),
-        ]
-      ).map((adapter) => [adapter.id, adapter]),
+      (adapters ?? defaultAdapters(this.#catalogPath)).map((adapter) => [adapter.id, adapter]),
     );
   }
 
