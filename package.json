@@ -1,6 +1,6 @@
 {
   "name": "harness-relay",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Local harness-to-harness delegation gateway",
   "keywords": [
     "agent",
