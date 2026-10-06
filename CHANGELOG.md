@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/sebastian-software/harness-relay/compare/v0.5.0...v0.5.1) (2026-10-06)
+
+
+### Bug Fixes
+
+* **adapters:** register the fake routes only when HARNESS_RELAY_FAKE_ROUTES is set ([52ea063](https://github.com/sebastian-software/harness-relay/commit/52ea063d8ae35a5a1f15d4ee8c15bae27021559b))
+
 ## [0.5.0](https://github.com/sebastian-software/harness-relay/compare/v0.4.0...v0.5.0) (2026-10-06)
 
 

@@ -1,1 +1,1 @@
-export const PACKAGE_VERSION = "0.5.0" as const; // x-release-please-version
+export const PACKAGE_VERSION = "0.5.1" as const; // x-release-please-version
