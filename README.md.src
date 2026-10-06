@@ -65,11 +65,12 @@ harness-relay run --provider anthropic --model opus --via claude-code \
 | Claude Code (`>=2.1.0 <3`)         | Qualified one-shot delegation; continuation from 2.1.282                                        |
 | Codex CLI (`>=0.149.0 <1`)         | Qualified one-shot delegation; continuation from 0.159.2                                        |
 | Grok Build (`>=1.0.44 <2`)         | Qualified one-shot delegation over ACP; live on 1.0.46                                          |
-| Ollama through the embedded Pi SDK | Runs local and signed-in cloud tool-capable models with steering and continuation; three local and four cloud models qualified live |
+| Ollama through the embedded Pi SDK | Runs local and signed-in cloud tool-capable models with steering and continuation; three local and four cloud models fully qualified live |
 | LM Studio through Pi               | Discovery and diagnostics only; execution unavailable                                           |
 
 Each qualification is backed by a dated record in
-[`docs/qualification/`](docs/qualification/). Setup for local models is in
+[`docs/qualification/`](docs/qualification/). Setup for local and cloud models, with the
+[list of qualified models](docs/local-models.md#qualified-models), is in
 [`docs/local-models.md`](docs/local-models.md); what each route supports for
 steering and continuation is in
 [`docs/native-dialogue.md`](docs/native-dialogue.md).

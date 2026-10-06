@@ -1,6 +1,6 @@
 # ADR-0027: Route Ollama cloud models through the local Ollama server
 
-- **Status:** Accepted; live-qualified with GLM 5.3, Kimi K3, and two free-plan models
+- **Status:** Accepted; live-qualified with GLM 5.3, Kimi K3, DeepSeek V4.1 Flash, and two free-plan models
 - **Date:** 2026-10-02
 
 ## Context
@@ -67,7 +67,8 @@ metadata does not establish where inference runs.
 - Discovery adds one request per server that lists a cloud model. It stays
   within the existing request and inventory deadlines.
 - The [qualification record](../qualification/2026-10-06-ollama-cloud-models.md)
-  covers `glm-5.3:cloud` and `kimi-k3:cloud` with purchased credits,
+  covers `glm-5.3:cloud`, `kimi-k3:cloud`, and `deepseek-v4.1-flash:cloud`
+  with purchased credits,
   `gemma4:31b-cloud` and `gpt-oss:120b-cloud` on the free plan, and the 402
   failure for a model outside the plan. The fixture tests cover tag
   classification, the sign-in check, preflight after sign-out, and that no

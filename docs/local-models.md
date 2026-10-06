@@ -12,16 +12,31 @@ but execution remains unavailable: a loopback LM Studio server can use LM Link
 to route inference to another device, and the current adapter cannot establish
 that the model runs locally. Loaded-model metadata alone is insufficient.
 
-Three Ollama configurations are live-qualified, each only as tested:
-[qwen3:8b](qualification/2026-09-30-ollama-qwen3-8b.md),
-[gemma4:26b-a4b](qualification/2026-09-30-ollama-gemma4-26b-a4b.md), and
-[gemma4:e4b](qualification/2026-10-01-ollama-gemma4-e4b.md). The records cover
-locality evidence, tool use, steering, continuation, cancellation, timeout,
-failure cases, and the model behavior observed. Both Gemma models kept tool
-calls sequential and reported accurately without ordering hints; qwen3:8b
-needed them. Those records used Pi SDK 0.87.1; the
-[Pi SDK 1.0.0 record](qualification/2026-10-01-pi-sdk-1.0.0.md) repeats the
-procedure with gemma4:e4b on the current SDK.
+## Qualified models
+
+These Ollama models have run through Relay on real hardware. Each record
+qualifies only the tested model tag, runtime, and Pi SDK version, not the model
+family. The full procedure covers the tool task, steering, continuation,
+cancellation during a tool call, and timeout (see
+[opt-in live qualification](#opt-in-live-qualification)). Every report needs
+independent checking; the column on behavior lists what the records saw.
+
+| Model                       | Inference | Covered                                       | Behavior observed                                                           | Record                                                                                                                |
+| --------------------------- | --------- | --------------------------------------------- | --------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `glm-5.3:cloud`             | Cloud     | Full procedure; efforts `low`, `max`          | Sequential tool calls, accurate reports                                     | [2026-10-06](qualification/2026-10-06-ollama-cloud-models.md)                                                         |
+| `kimi-k3:cloud`             | Cloud     | Full procedure; efforts `none`, `high`, `max` | Sequential tool calls, accurate reports                                     | [2026-10-06](qualification/2026-10-06-ollama-cloud-models.md)                                                         |
+| `deepseek-v4.1-flash:cloud` | Cloud     | Full procedure; all four efforts              | One parallel `write`/`read` race, recovered and reported                    | [2026-10-06](qualification/2026-10-06-ollama-cloud-models.md)                                                         |
+| `gemma4:31b-cloud`          | Cloud     | Full procedure                                | Repeated a command and raced a `read` after steering, then recovered        | [2026-10-06](qualification/2026-10-06-ollama-cloud-models.md)                                                         |
+| `gpt-oss:120b-cloud`        | Cloud     | Tool task only                                | Sequential tool calls, accurate report                                      | [2026-10-06](qualification/2026-10-06-ollama-cloud-models.md)                                                         |
+| `gemma4:e4b`                | Local     | Full procedure, Pi SDK 0.87.1 and 1.0.0       | Sequential tool calls, accurate reports                                     | [2026-10-01](qualification/2026-10-01-ollama-gemma4-e4b.md), [Pi SDK 1.0.0](qualification/2026-10-01-pi-sdk-1.0.0.md) |
+| `gemma4:26b-a4b`            | Local     | Full procedure, Pi SDK 0.87.1                 | Sequential tool calls, accurate reports                                     | [2026-09-30](qualification/2026-09-30-ollama-gemma4-26b-a4b.md)                                                       |
+| `qwen3:8b`                  | Local     | Full procedure, Pi SDK 0.87.1                 | Needs one-tool-per-step hints; claimed a check that failed; `/think` suffix | [2026-09-30](qualification/2026-09-30-ollama-qwen3-8b.md)                                                             |
+
+Cloud models need a signed-in Ollama whose plan includes the model; on the
+free plan only starter models such as `gemma4:31b-cloud` and
+`gpt-oss:120b-cloud` run. The local models ran on Ollama 0.34.4, the cloud
+models on Ollama 0.35.1. Any other model can still be selected when discovery
+reports it ready; it is simply not covered by a record.
 
 ## Configure an existing runtime
 
@@ -184,8 +199,8 @@ harness-relay run \
 ```
 
 The [cloud qualification record](qualification/2026-10-06-ollama-cloud-models.md)
-covers `glm-5.3:cloud` and `kimi-k3:cloud` with purchased credits and two
-free-plan models. Other cloud models have not run through Relay.
+and the [qualified models](#qualified-models) table list the cloud models that
+have run through Relay.
 
 ## Interpret failures and evidence
 
