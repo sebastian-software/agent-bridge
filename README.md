@@ -26,47 +26,115 @@ agent that asked.
 - **Keep the conversation going.** Continue a finished Claude Code or Codex
   session, or add instructions while a local model is still working.
 
-## Quick start
+## Install
 
-Harness Relay needs Node.js 22 or newer on macOS or Linux, and at least one
-harness that is installed and logged in.
+You need **Node.js 22 or newer** on macOS or Linux, and at least one harness
+that is installed and signed in. The agent you are talking to counts: if you
+are reading this inside Claude Code or Codex, you already have one.
+
+### Let your agent do it
+
+Paste this into Claude Code, Codex, or any agent that can run shell commands:
+
+```text
+Set up Harness Relay on this machine. Install the CLI with
+`npm install --global harness-relay`, then install its skill with
+`npx skills add sebastian-software/harness-relay --skill harness-relay --agent claude-code codex --global --yes`.
+Run `harness-relay routes` and tell me which routes are ready and which
+harnesses are missing or not signed in. Do not install harnesses or sign in
+for me.
+```
+
+Start a new session afterwards so the agent picks up the skill.
+
+### Or do it yourself
 
 ```sh
 npm install --global harness-relay
+npx skills add sebastian-software/harness-relay --skill harness-relay --agent claude-code codex --global
+```
+
+The first command installs the `harness-relay` executable. The second installs
+the skill that teaches Claude Code and Codex when and how to use it; drop the
+agent you do not use. Then check what Relay can reach:
+
+```sh
 harness-relay routes
 ```
 
-`routes` lists what is usable on this machine, with each model's capability
-tier and whether it runs locally, on a subscription, or is billed per use. To
-use Relay from your agent, install the skill for Claude Code and Codex:
+Every `ready` row is a model you can delegate to, with its capability tier and
+whether it runs locally, on a subscription, or is billed per use. Rows that
+start with `fake` are built-in test routes; ignore them. If a harness you
+expected is missing or `unavailable`, install it and sign in:
 
-```sh
-npx skills add https://github.com/sebastian-software/harness-relay \
-  --skill harness-relay --agent claude-code codex --global
-```
+| Harness     | Install                                          | Sign in                                                                   |
+| ----------- | ------------------------------------------------ | ------------------------------------------------------------------------- |
+| Claude Code | `npm install --global @anthropic-ai/claude-code` | Run `claude` once and complete the login                                  |
+| Codex CLI   | `npm install --global @openai/codex`             | `codex login`                                                             |
+| Grok Build  | Install Grok Build from xAI                      | `grok login`                                                              |
+| Ollama      | Install Ollama and pull a tool-capable model     | Add the server to Relay's config, see [local models](docs/local-models.md) |
 
-Then ask your agent, for example: _"Get a second opinion from Codex on this
-plan"_ or _"Have Claude, Codex, and Grok review this diff."_ When you name no
-model, the skill picks one from the routes' tier and billing. The
-[skill guide](docs/skills.md) covers version-pinned installs and Dalo. Agents
-that prefer tools can use the [MCP server](docs/mcp.md) instead.
+Relay never installs a harness, never signs in for you, and never sees your
+credentials. After adding a harness, run `harness-relay broker restart` so the
+running broker notices it. Prefer not to install globally? `npx harness-relay`
+works for every command below.
 
-You can also delegate straight from the shell:
+## Use it
+
+### From your agent
+
+With the skill installed, just ask. For example:
+
+- _"Get a second opinion from Codex on this plan."_
+- _"Have Claude, Codex, and Grok review this diff."_
+- _"Hand the rename in `src/util` to a local model and show me what it
+  changed."_
+
+When you name no model, the skill picks a ready route from the tier and billing
+that `routes` reports. It tells you which route did the work, what changed, and
+what failed, and the agent you are talking to stays in charge of the result.
+
+### From the shell
 
 ```sh
 harness-relay run --provider anthropic --model opus --via claude-code \
   --interaction deny "Review the changes in this directory and list risks."
 ```
 
+`run` prints progress, then the result, and exits with zero only when the
+delegate succeeded. `--interaction deny` rejects any permission request the
+delegate makes; `unattended` grants them.
+
+### From MCP
+
+Agents that prefer tools over a skill can register the MCP server instead:
+
+```sh
+claude mcp add harness-relay -- harness-relay mcp serve
+```
+
+The Codex configuration and the recommended tool flow are in the
+[MCP guide](docs/mcp.md).
+
+### Stay current
+
+```sh
+npm update --global harness-relay
+npx skills update --global
+```
+
+Each release pins its skill to the CLI of the same version, so update both. The
+[skill guide](docs/skills.md) covers version-pinned installs and Dalo.
+
 ## Supported harnesses
 
-| Harness                            | Status                                                                                          |
-| ---------------------------------- | ----------------------------------------------------------------------------------------------- |
-| Claude Code (`>=2.1.0 <3`)         | Qualified one-shot delegation; continuation from 2.1.282                                        |
-| Codex CLI (`>=0.149.0 <1`)         | Qualified one-shot delegation; continuation from 0.159.2                                        |
-| Grok Build (`>=1.0.44 <2`)         | Qualified one-shot delegation over ACP; live on 1.0.46                                          |
+| Harness                            | Status                                                                                                                              |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Claude Code (`>=2.1.0 <3`)         | Qualified one-shot delegation; continuation from 2.1.282                                                                            |
+| Codex CLI (`>=0.149.0 <1`)         | Qualified one-shot delegation; continuation from 0.159.2                                                                            |
+| Grok Build (`>=1.0.44 <2`)         | Qualified one-shot delegation over ACP; live on 1.0.46                                                                              |
 | Ollama through the embedded Pi SDK | Runs local and signed-in cloud tool-capable models with steering and continuation; three local and four cloud models qualified live |
-| LM Studio through Pi               | Discovery and diagnostics only; execution unavailable                                           |
+| LM Studio through Pi               | Discovery and diagnostics only; execution unavailable                                                                               |
 
 Each qualification is backed by a dated record in
 [`docs/qualification/`](docs/qualification/). Setup for local models is in
@@ -83,8 +151,7 @@ steering and continuation is in
   available, you get an explicit error, never a different model.
 - **Not a sandbox.** A delegate works in the directory you give it, with its
   harness's own permissions. Relay reports the changes it observes but does not
-  isolate or roll them back, so commit or use a worktree first. `--interaction
-  deny` rejects the harness's permission requests; `unattended` allows them.
+  isolate or roll them back, so commit or use a worktree first.
 - **Your logins, not Relay's.** Relay never handles credentials. To use a
   second account for a harness, register a
   [named connection](docs/cli.md#managing-native-connections) and pick it per
