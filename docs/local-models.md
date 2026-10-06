@@ -6,7 +6,8 @@ The optional Pi SDK dependency must be installed, and the worker requires Node.j
 22.19 or later on macOS or Linux.
 
 Ollama routes can execute when their native metadata identifies an installed,
-nonremote model with tool support. LM Studio discovery reports loaded models,
+nonremote model with tool support. Ollama cloud models can execute too; see
+[Ollama cloud models](#ollama-cloud-models). LM Studio discovery reports loaded models,
 but execution remains unavailable: a loopback LM Studio server can use LM Link
 to route inference to another device, and the current adapter cannot establish
 that the model runs locally. Loaded-model metadata alone is insufficient.
@@ -108,11 +109,60 @@ endpoint, model digest, or other bound identity fails explicitly instead of
 silently switching to another server or model. The caller decides whether to
 refresh discovery and submit another invocation. There is no automatic fallback.
 
+## Ollama cloud models
+
+Ollama also lists cloud models, such as `glm-5.3:cloud` or `kimi-k3:cloud`.
+The local server forwards their requests to ollama.com under the account it is
+signed in to. Relay routes them through the same Ollama profile and Pi
+harness ([ADR-0027](adr/0027-ollama-cloud-models-through-the-local-server.md)):
+
+```sh
+ollama signin
+ollama pull glm-5.3:cloud
+harness-relay routes --refresh --json
+```
+
+`ollama pull` for a cloud model stores only a small reference, not weights.
+The route reports `inferenceLocation: "remote"`. The prompt, and every file or
+command output the delegate reads, goes to ollama.com; the tools still run on
+this machine with assurance `none`. Do not use a cloud route for work that has
+to stay on the machine.
+
+A cloud route is ready only while the server confirms a sign-in, which
+discovery and preflight check with `POST /api/me`. Relay reads only the status
+code and keeps no account detail. Without a sign-in the route is unavailable
+and asks for `ollama signin`; Relay never signs in for you and never falls back
+to a local model. Only entries whose `remote_host` is exactly
+`https://ollama.com` qualify; Ollama models forwarding anywhere else stay
+excluded. Billing is `unknown`, because the plan behind the account is not
+observed. Usage limits of that plan surface as a failed invocation.
+
+Run a cloud model like any other Ollama route, with the exact model from
+discovery:
+
+```sh
+harness-relay run \
+  --provider unknown \
+  --model glm-5.3:cloud \
+  --via pi \
+  --runtime ollama-mac \
+  --cwd /absolute/path/to/worktree \
+  --text 'Inspect the project and summarize the next useful change.' \
+  --interaction unattended \
+  --minimum-assurance none \
+  --filesystem inherit \
+  --commands allow \
+  --network allow
+```
+
+No cloud model has been qualified live yet; the fixture tests cover
+classification, the sign-in check, and preflight after a sign-out.
+
 ## Interpret failures and evidence
 
 - A stopped server, missing optional Pi SDK, empty inventory, or model without
   reported tool support produces an unavailable route or diagnostic.
-- Ollama entries with native remote-model metadata are excluded. Tool support
+- Ollama entries that forward to a host other than ollama.com are excluded. Tool support
   and model identity are reported by the server; they are not proof that every
   task or model family will succeed.
 - LM Studio loaded models remain unqualified for local execution until locality

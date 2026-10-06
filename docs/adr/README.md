@@ -31,6 +31,7 @@ how a decision changed; the current text is normative.
 | 0024 | [User-scoped multiple accounts without automatic fallback](0024-user-scoped-multiple-accounts-without-fallback.md) |
 | 0025 | [Reuse an existing harness for local model execution](0025-direct-local-model-access.md)                           |
 | 0026 | [Publish advisory route guidance and ship a routing skill](0026-advisory-route-guidance-and-routing-skill.md)      |
+| 0027 | [Route Ollama cloud models through the local Ollama server](0027-ollama-cloud-models-through-the-local-server.md)  |
 
 Open questions are maintained in [`CONTEXT.md`](../../CONTEXT.md) and the
 GitHub issue tracker rather than in stale ADR lists.

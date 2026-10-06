@@ -133,6 +133,12 @@ export type RouteDescriptor = {
   readonly runtimeId?: string;
   readonly runtimeRevision?: string;
   readonly inferenceServer?: "lm-studio" | "ollama";
+  /**
+   * Where the inference server reports that the model runs. `remote` means it
+   * forwards requests, and with them the prompt and workspace content, to a
+   * hosted service. Absent when the server's metadata does not establish it.
+   */
+  readonly inferenceLocation?: "local" | "remote";
   readonly modelDigest?: string;
   readonly runtimeInstanceId?: string;
   readonly policySupport?: Readonly<Record<string, readonly string[]>>;

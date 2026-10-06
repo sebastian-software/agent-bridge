@@ -18,7 +18,9 @@ the pinned full Pi SDK worker; Ollama and LM Studio are inference servers, not
 replacement harnesses. Discovery reports exact model identity and readiness.
 Ollama tool-capable nonremote models can execute with assurance `none`; LM
 Studio models remain unqualified for local execution because loaded metadata
-does not establish locality. See [local model setup](local-models.md).
+does not establish locality. Ollama cloud models execute through the same path
+when the server is signed in to ollama.com, and their routes report
+`inferenceLocation: "remote"`. See [local model setup](local-models.md).
 
 Adapters with mutable configuration can implement `discoveryCacheKey()` to
 invalidate the registry's cached route inventory after configuration changes.

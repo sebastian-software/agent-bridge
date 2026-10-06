@@ -135,6 +135,8 @@ function routeId(
   const snapshot = JSON.stringify([
     model.id,
     model.canonicalModel,
+    model.inferenceLocation ?? null,
+    model.remoteModel ?? null,
     model.digest ?? null,
     model.instanceId ?? null,
     model.provider,
@@ -207,10 +209,17 @@ function descriptor(
     runtimeId: inventory.profile.id,
     runtimeRevision: inventory.profile.revision,
     inferenceServer: inventory.profile.kind,
+    ...(model.inferenceLocation === undefined
+      ? {}
+      : { inferenceLocation: model.inferenceLocation }),
     ...(model.digest === undefined ? {} : { modelDigest: model.digest }),
     ...(model.instanceId === undefined ? {} : { runtimeInstanceId: model.instanceId }),
-    // Only a ready route has established that inference runs on the local server.
-    billing: readiness === "ready" ? LOCAL_BILLING : UNKNOWN_BILLING,
+    // Only a ready local route has established that inference runs on the local server.
+    // A cloud model's plan is not observed, so its billing stays unknown.
+    billing:
+      readiness === "ready" && model.inferenceLocation === "local"
+        ? LOCAL_BILLING
+        : UNKNOWN_BILLING,
   };
 }
 
@@ -270,6 +279,8 @@ function policyResolution(
 function sameModelSnapshot(left: LocalRuntimeModel, right: LocalRuntimeModel): boolean {
   return (
     left.id === right.id &&
+    left.inferenceLocation === right.inferenceLocation &&
+    left.remoteModel === right.remoteModel &&
     left.provider === right.provider &&
     left.providerEvidence === right.providerEvidence &&
     left.digest === right.digest &&
@@ -458,14 +469,15 @@ export class LocalPiAdapter implements Adapter {
         model.digest === binding.model.digest &&
         model.instanceId === binding.model.instanceId,
     );
+    if (currentModel !== undefined && currentModel.readiness !== "ready") {
+      // A lost cloud sign-in, for example, explains itself better than a changed snapshot.
+      throw routeUnavailable(
+        currentModel.diagnostics.join(" ") || "The selected local model is no longer ready.",
+      );
+    }
     if (currentModel === undefined || !sameModelSnapshot(binding.model, currentModel)) {
       throw routeUnavailable(
         "The selected local model, digest, or loaded instance changed after route discovery. Refresh routes and select the current model explicitly.",
-      );
-    }
-    if (currentModel.readiness !== "ready") {
-      throw routeUnavailable(
-        currentModel.diagnostics.join(" ") || "The selected local model is no longer ready.",
       );
     }
   }

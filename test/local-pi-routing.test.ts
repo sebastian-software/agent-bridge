@@ -426,6 +426,108 @@ test("local Pi aliases preserve runtime identity and runtimeId disambiguates dup
   );
 });
 
+test("an Ollama cloud route reports remote inference and fails preflight after sign-out", async (context) => {
+  const state = { signedIn: true };
+  const server = createServer((request, response) => {
+    if (request.url === "/api/version") {
+      jsonResponse(response, { version: "0.34.4" });
+      return;
+    }
+    if (request.url === "/api/tags") {
+      jsonResponse(response, {
+        models: [
+          {
+            name: "glm-5.3:cloud",
+            model: "glm-5.3:cloud",
+            remote_model: "glm-5.3",
+            remote_host: "https://ollama.com",
+            digest: "c".repeat(64),
+          },
+        ],
+      });
+      return;
+    }
+    if (request.url === "/api/me") {
+      response.writeHead(state.signedIn ? 200 : 401).end("{}");
+      return;
+    }
+    jsonResponse(response, {
+      capabilities: ["completion", "thinking", "tools"],
+      model_info: { "glm_dsa_moe.context_length": 1_048_576 },
+    });
+  });
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  context.after(async () => {
+    server.closeAllConnections();
+    await new Promise((resolve) => {
+      server.close(resolve);
+    });
+  });
+  const address = server.address();
+  assert.ok(address !== null && typeof address !== "string");
+  const root = await mkdtemp(join(tmpdir(), "harness-relay-local-pi-cloud-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const configPath = join(root, "config.json");
+  await writeFile(
+    configPath,
+    JSON.stringify({
+      localRuntimes: [
+        { id: "ollama", kind: "ollama", endpoint: `http://127.0.0.1:${address.port}` },
+      ],
+    }),
+    "utf8",
+  );
+  const adapter = new LocalPiAdapter({ configPath });
+  const registry = new AdapterRegistry([adapter], {
+    catalogPath: configPath,
+    connectionsPath: join(root, "connections.json"),
+  });
+  context.after(async () => registry.dispose());
+
+  const unavailable = await piRuntimeAvailability();
+  const [route] = await registry.discover();
+  assert.equal(route?.model, "glm-5.3:cloud");
+  assert.equal(route?.inferenceServer, "ollama");
+  assert.equal(route?.inferenceLocation, "remote");
+  assert.deepEqual(route?.billing, { mode: "unknown", evidence: "unverified" });
+  if (unavailable.length > 0) {
+    assert.equal(route?.readiness, "unavailable");
+    return;
+  }
+  assert.equal(route?.readiness, "ready");
+  assert.ok(route?.capabilities.includes("steering"));
+
+  const request = {
+    selector: {
+      provider: "unknown",
+      model: "glm-5.3:cloud",
+      via: "pi",
+      requiredCapabilities: ["core.tools"],
+    },
+    input: [{ type: "text" as const, text: "hello" }],
+    workingDirectory: root,
+    interactionStrategy: "unattended" as const,
+    requestedPolicy: { minimumAssurance: "none" as const },
+  };
+  const resolved = await registry.resolve(request);
+  state.signedIn = false;
+  await assert.rejects(
+    adapter.run({
+      invocationId: "cloud-signed-out",
+      request,
+      route: resolved.route,
+      signal: new AbortController().signal,
+      async emit() {},
+    }),
+    (error: unknown) =>
+      error instanceof BridgeError &&
+      error.code === "route_unavailable" &&
+      error.message.includes("ollama signin"),
+  );
+});
+
 test("configured Ollama route dispatches its exact model through Pi and normalizes identity", async (context) => {
   const unavailable = await piRuntimeAvailability();
   if (unavailable.length > 0) {

@@ -46,6 +46,8 @@ server and loopback endpoint; `selector.runtimeId` distinguishes duplicate model
 IDs across servers. The wrapper keeps model-vendor evidence separate from the
 server, binds exact model snapshots, and does not create a fallback policy.
 
+Ollama cloud models, which the server forwards to ollama.com, are a separate
+decision: [ADR-0027](0027-ollama-cloud-models-through-the-local-server.md).
 Ollama tool-capable models without native remote-model metadata can execute;
 this is server-reported evidence, not a claim that every model is qualified.
 LM Studio discovery alone cannot establish locality because LM Link can route

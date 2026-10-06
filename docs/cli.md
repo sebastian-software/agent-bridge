@@ -76,7 +76,8 @@ provider. The runtime selector disambiguates servers exposing the same model.
 No match or multiple matches produce an explicit error without fallback.
 
 Ollama models with reported local tool support can execute through the embedded
-Pi worker. LM Studio currently provides discovery and diagnostics; its local
+Pi worker. Ollama cloud models can too once Ollama is signed in to ollama.com;
+their routes report `inferenceLocation: "remote"`. LM Studio currently provides discovery and diagnostics; its local
 execution remains unqualified. See [local model setup](local-models.md) for
 configuration, prerequisites, policy limits, and a complete command.
 

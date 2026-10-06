@@ -16,8 +16,15 @@ export type LocalRuntimeProfile = {
   readonly revision: string;
 };
 
+/** Where a model runtime reports that inference for a model takes place. */
+export type InferenceLocation = "local" | "remote";
+
 export type LocalRuntimeModel = {
   readonly id: string;
+  /** Absent when the runtime's metadata does not establish where inference runs. */
+  readonly inferenceLocation?: InferenceLocation;
+  /** The model name on the remote host, for a model the runtime forwards there. */
+  readonly remoteModel?: string;
   readonly provider: string;
   readonly providerEvidence: EvidenceStatus;
   readonly digest?: string;
@@ -44,6 +51,8 @@ const INVENTORY_TIMEOUT_MS = 10_000;
 const MAX_RUNTIME_PROFILES = 16;
 const MAX_OLLAMA_MODELS = 64;
 const MODEL_SHOW_CONCURRENCY = 4;
+/** The only remote host whose Ollama models become routes: Ollama's own cloud. */
+const OLLAMA_CLOUD_HOST = "https://ollama.com";
 
 function invalidConfig(message: string): never {
   throw new BridgeError({
@@ -188,6 +197,57 @@ export async function loadLocalRuntimeProfiles(
 
 function hasRemoteOllamaFields(value: Record<string, unknown>): boolean {
   return Object.hasOwn(value, "remote_host") || Object.hasOwn(value, "remote_model");
+}
+
+/** The cloud model name when an entry names exactly Ollama's cloud host and one remote model. */
+function ollamaCloudModel(value: Record<string, unknown>): string | undefined {
+  const host = value.remote_host;
+  const model = value.remote_model;
+  if (typeof host !== "string" || typeof model !== "string" || model === "") {
+    return undefined;
+  }
+  try {
+    const url = new URL(host);
+    const plain =
+      url.username === "" &&
+      url.password === "" &&
+      url.search === "" &&
+      url.hash === "" &&
+      (url.pathname === "" || url.pathname === "/");
+    return plain && url.origin === OLLAMA_CLOUD_HOST ? model : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+type OllamaSignIn = "signed-in" | "signed-out" | "unknown";
+
+/**
+ * Ask the local Ollama server whether it is signed in to ollama.com. Only the
+ * status code is used: the response body carries account details or a sign-in
+ * link, and neither belongs in a route.
+ */
+async function ollamaSignIn(
+  profile: LocalRuntimeProfile,
+  signal: AbortSignal,
+): Promise<OllamaSignIn> {
+  const requestSignal = AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]);
+  try {
+    const response = await fetch(new URL("/api/me", `${profile.endpoint}/`), {
+      method: "POST",
+      body: "{}",
+      headers: { "content-type": "application/json" },
+      redirect: "error",
+      signal: requestSignal,
+    });
+    await response.body?.cancel().catch((error: unknown) => error);
+    if (response.ok) {
+      return "signed-in";
+    }
+    return response.status === 401 ? "signed-out" : "unknown";
+  } catch {
+    return "unknown";
+  }
 }
 
 async function boundedJsonRequest(
@@ -335,16 +395,17 @@ async function discoverOllama(
     };
   }
   const diagnostics: string[] = [];
-  const localTags = tags.flatMap((value) => {
+  const entries = tags.flatMap((value) => {
     const tag = object(value);
     if (tag === undefined) {
       diagnostics.push("Ollama returned a malformed model entry; that entry was skipped.");
       return [];
     }
-    if (hasRemoteOllamaFields(tag)) {
+    const remoteModel = hasRemoteOllamaFields(tag) ? ollamaCloudModel(tag) : undefined;
+    if (hasRemoteOllamaFields(tag) && remoteModel === undefined) {
       const id = typeof tag.name === "string" ? tag.name : "an unnamed model";
       diagnostics.push(
-        `Ollama model ${id} exposed remote_host or remote_model and was excluded from local routes.`,
+        `Ollama model ${id} forwards to a remote model that is not a complete ${OLLAMA_CLOUD_HOST} cloud entry and was excluded from routes.`,
       );
       return [];
     }
@@ -356,66 +417,99 @@ async function discoverOllama(
       );
       return [];
     }
-    return [{ id, digest }];
+    return [{ id, digest, remoteModel }];
   });
-  const models = await mapConcurrent(localTags, MODEL_SHOW_CONCURRENCY, async ({ id, digest }) => {
-    if (signal.aborted) {
-      return;
-    }
-    try {
-      const showPayload = await boundedJsonRequest(profile, "/api/show", signal, { model: id });
-      const show = object(showPayload);
-      if (show === undefined) {
-        throw new TypeError("/api/show did not return an object");
-      }
-      if (hasRemoteOllamaFields(show)) {
-        diagnostics.push(
-          `Ollama model ${id} exposed remote_host or remote_model in /api/show and was excluded from local routes.`,
-        );
+  // Cloud models run only for a server signed in to ollama.com; local models never need it.
+  const signIn = entries.some((entry) => entry.remoteModel !== undefined)
+    ? await ollamaSignIn(profile, signal)
+    : undefined;
+  const models = await mapConcurrent(
+    entries,
+    MODEL_SHOW_CONCURRENCY,
+    async ({ id, digest, remoteModel }) => {
+      if (signal.aborted) {
         return;
       }
-      if (
-        (typeof show.name === "string" && show.name !== id) ||
-        (typeof show.model === "string" && show.model !== id)
-      ) {
+      try {
+        const showPayload = await boundedJsonRequest(profile, "/api/show", signal, { model: id });
+        const show = object(showPayload);
+        if (show === undefined) {
+          throw new TypeError("/api/show did not return an object");
+        }
+        if (remoteModel === undefined && hasRemoteOllamaFields(show)) {
+          diagnostics.push(
+            `Ollama model ${id} exposed remote_host or remote_model in /api/show and was excluded from local routes.`,
+          );
+          return;
+        }
+        if (
+          remoteModel !== undefined &&
+          hasRemoteOllamaFields(show) &&
+          ollamaCloudModel(show) !== remoteModel
+        ) {
+          diagnostics.push(
+            `Ollama /api/show named a different remote model for ${id}; that entry was skipped.`,
+          );
+          return;
+        }
+        if (
+          (typeof show.name === "string" && show.name !== id) ||
+          (typeof show.model === "string" && show.model !== id)
+        ) {
+          diagnostics.push(
+            `Ollama /api/show returned a different model identity for ${id}; that entry was skipped.`,
+          );
+          return;
+        }
+        const capabilities = Array.isArray(show.capabilities)
+          ? show.capabilities.filter((entry): entry is string => typeof entry === "string")
+          : [];
+        const tools = capabilities.includes("tools");
+        const signInProblem =
+          remoteModel === undefined || signIn === "signed-in"
+            ? undefined
+            : signIn === "signed-out"
+              ? `Ollama is not signed in to ollama.com, which cloud model ${id} requires. Run ollama signin, then refresh route discovery.`
+              : `Ollama did not confirm a sign-in to ollama.com for cloud model ${id}. Check that this Ollama version supports cloud models and that it is signed in.`;
+        return {
+          id,
+          inferenceLocation: remoteModel === undefined ? ("local" as const) : ("remote" as const),
+          ...(remoteModel === undefined ? {} : { remoteModel }),
+          provider: "unknown",
+          providerEvidence: "unverified" as const,
+          digest,
+          contextWindow: ollamaContextWindow(show),
+          supportsTools: tools,
+          capabilities: [
+            "core.input.text",
+            "core.output.text",
+            "core.streaming.events",
+            "continuation",
+            ...(tools ? ["core.tools"] : []),
+          ],
+          readiness: !tools
+            ? ("unqualified" as const)
+            : signInProblem === undefined
+              ? ("ready" as const)
+              : ("unavailable" as const),
+          diagnostics: [
+            ...(tools
+              ? []
+              : [
+                  "Ollama /api/show did not report the tools capability; this model is not selectable for coding-agent execution.",
+                ]),
+            ...(signInProblem === undefined ? [] : [signInProblem]),
+          ],
+          identityEvidence: "reported" as const,
+          canonicalModel: id,
+        } satisfies LocalRuntimeModel;
+      } catch (error) {
         diagnostics.push(
-          `Ollama /api/show returned a different model identity for ${id}; that entry was skipped.`,
+          `Ollama model ${id} could not be verified with /api/show: ${error instanceof Error ? error.message : "request failed"}.`,
         );
-        return;
       }
-      const capabilities = Array.isArray(show.capabilities)
-        ? show.capabilities.filter((entry): entry is string => typeof entry === "string")
-        : [];
-      const tools = capabilities.includes("tools");
-      return {
-        id,
-        provider: "unknown",
-        providerEvidence: "unverified" as const,
-        digest,
-        contextWindow: ollamaContextWindow(show),
-        supportsTools: tools,
-        capabilities: [
-          "core.input.text",
-          "core.output.text",
-          "core.streaming.events",
-          "continuation",
-          ...(tools ? ["core.tools"] : []),
-        ],
-        readiness: tools ? ("ready" as const) : ("unqualified" as const),
-        diagnostics: tools
-          ? []
-          : [
-              "Ollama /api/show did not report the tools capability; this model is not selectable for coding-agent execution.",
-            ],
-        identityEvidence: "reported" as const,
-        canonicalModel: id,
-      } satisfies LocalRuntimeModel;
-    } catch (error) {
-      diagnostics.push(
-        `Ollama model ${id} could not be verified with /api/show: ${error instanceof Error ? error.message : "request failed"}.`,
-      );
-    }
-  });
+    },
+  );
   const discovered = models.flatMap((model) => (model === undefined ? [] : [model]));
   if (signal.aborted) {
     diagnostics.push(

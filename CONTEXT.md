@@ -48,6 +48,10 @@ outcome. It does not become the caller's workflow orchestrator.
 - **Delegate:** The execution route chosen for one invocation, through a harness
   or capability provider.
 - **Local delegate:** A tool-using delegate whose model inference runs locally.
+- **Inference location:** Where a model runtime reports that inference takes
+  place: `local`, or `remote` when the runtime forwards requests to a hosted
+  service such as Ollama's cloud. A route omits it when the runtime's metadata
+  does not establish it. Tools still run where the harness runs.
 - **Resolved route:** The concrete adapter, executable, harness version,
   authenticated native context, and model selection chosen for one invocation.
 - **Route guidance:** Editorial advice attached to a route about the model
